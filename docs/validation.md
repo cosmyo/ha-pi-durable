@@ -1,6 +1,6 @@
 # Validation and release gates
 
-Initial local validation date: **2026-10-03**. Version **0.1.0** is experimental source, not a published or deployed release. No external security audit is claimed.
+Initial local and CI validation date: **2026-10-03**. Version **0.1.0** is a public experimental source preview, not a production or Supervisor-validated release. No external security audit is claimed.
 
 ## Reproduce local checks
 
@@ -33,7 +33,7 @@ Test names and current counts come from the test runner, not this document. A gr
 
 ## Container gate — not executed locally
 
-The local Docker daemon was unavailable. The following is a reproducible **future isolated gate**, not a reported result:
+The local Docker daemon was unavailable and was not started. The isolated gate **passed on native GitHub Actions Linux amd64 and aarch64 runners** for commit `f5a9793`: [run and job evidence](https://github.com/cosmyo/ha-pi-durable/actions/runs/37142875226). Both jobs ran the full checks, production dependency audit, and container smoke. Reproduce with:
 
 ```sh
 # From repository root on a machine with Docker already authorized/running:
@@ -41,7 +41,7 @@ sh scripts/container-smoke.sh amd64
 sh scripts/container-smoke.sh aarch64
 ```
 
-The script builds the complete `hearth_pi/` context, uses an offline provider and a temporary synthetic `/data`, disables networking, checks private data ownership/UID drop and forged Ingress rejection, and checks restart/graceful stop. It publishes no ports, performs no registry push and makes no HA calls. Cross-architecture execution needs suitable Docker emulation or a native runner. CI is configured for separate native Linux amd64/ARM64 runners; CI execution/passes have not been established.
+The script builds the complete `hearth_pi/` context, uses an offline provider and a temporary synthetic `/data`, disables networking, checks private data ownership/UID drop and forged Ingress rejection, and checks restart/graceful stop. It publishes no ports, performs no registry push and makes no HA calls. Cross-architecture execution needs suitable Docker emulation or a native runner. The successful CI jobs used separate native Linux amd64/ARM64 runners. This is container smoke evidence, not a real Home Assistant installation.
 
 Container/source inspection is not the same as an isolated Supervisor installation. Source uses a pinned official multi-platform Node image, exact dependency lockfile, a narrow root bootstrap and a privilege drop before harness/network/model work. Whether actual AppArmor, options ownership, UID/data permissions and lifecycle behave as intended must be tested in the target Supervisor environment.
 
@@ -62,6 +62,6 @@ Follow [App installation/options](../hearth_pi/DOCS.md) only on an authorized te
 
 ## Explicit limitations
 
-Not yet established: actual Docker image execution, Linux container bootstrap, Supervisor installation/Ingress/AppArmor, real mobile iframe behavior, backup restore, paid inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, configuration editing, provider OAuth or custom/local inference endpoint support.
+Not yet established: Supervisor installation/Ingress/AppArmor, real mobile iframe behavior, backup restore, paid inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, configuration editing, provider OAuth or custom/local inference endpoint support.
 
 The local secret scanner detects selected patterns and excludes deliberate synthetic fixtures. It is a preflight aid, not comprehensive secret discovery. Review the actual public diff, dependency licenses/advisories and install documentation before publishing. Publishing and production deployment require a separate decision.

@@ -8,9 +8,11 @@
 
 A thoughtful chat surface for understanding your home—with a reliable boundary between **a suggestion** and **an action**.
 
-![Hearth Pi offline demonstration](docs/images/offline-demo.png)
+[![Checks and native container smoke](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml/badge.svg)](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml)
 
-_Real browser capture using synthetic offline data. No model inference or Home Assistant action was performed._
+![Hearth Pi offline demonstration and reload](docs/images/offline-demo.gif)
+
+_Ten-second real UI capture using synthetic offline data, including page reload and committed-history hydration. No model inference or Home Assistant action was performed._
 
 - **Continuity, not just saved chats.** Real version-pinned `@earendil-works/pi-durable` commits admitted inputs, task checkpoints, transcripts and application documents to SQLite with `synchronous=FULL`. Interrupted model/read work resumes after reopening. One SQLite connection owns the store exclusively.
 - **Your sessions, your view.** Persistent ownership-checked sessions, reconnecting full SSE snapshots, committed partial answers, tool visibility, reported token usage and mobile-friendly text rendering.
