@@ -1,0 +1,26 @@
+name: Local checks and isolated App build
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24.21.0
+      - run: npm ci && npm --prefix hearth_pi ci
+      - run: npm run check
+      - run: npm --prefix hearth_pi audit --omit=dev
+      - run: sh scripts/container-smoke.sh ${{ matrix.arch }}

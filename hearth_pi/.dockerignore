@@ -1,0 +1,9 @@
+node_modules
+dist
+test
+.local
+runtime
+*.sqlite*
+*.log
+.env*
+!*.example

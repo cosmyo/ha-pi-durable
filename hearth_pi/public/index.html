@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Hearth Pi — a durable AI agent for Home Assistant</title>
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./app.css" />
+    <script type="module" src="./app.js"></script>
+  </head>
+  <body>
+    <header>
+      <img src="./icon.svg" width="44" height="44" alt="" />
+      <div>
+        <h1>Hearth Pi</h1>
+        <p>A durable AI agent for Home Assistant</p>
+      </div>
+      <span class="pill" id="connection" role="status">Connecting</span>
+    </header>
+    <main>
+      <aside aria-label="Sessions">
+        <div class="section-head">
+          <h2>Your sessions</h2>
+          <button id="new-session" type="button">＋ New</button>
+        </div>
+        <nav id="sessions" aria-label="Select a session"></nav>
+        <div class="aside-note">
+          <strong>Continuity, not just history.</strong>
+          <p>
+            Admitted work is saved before acknowledgment. Reconnect to committed
+            state.
+          </p>
+          <p>Independent community app.<br />Pi Durable is experimental.</p>
+          <span class="pill" id="provider">Offline</span>
+        </div>
+      </aside>
+      <section class="conversation" aria-label="Chat">
+        <div class="conversation-head">
+          <div>
+            <h2 id="title">A little warmth. A little more certainty.</h2>
+            <p id="safety" class="safety">Read-only by default</p>
+          </div>
+          <button id="stop" type="button" disabled>Stop task</button>
+        </div>
+        <div class="scroll-area" id="scroll-area">
+          <div
+            id="messages"
+            role="log"
+            aria-label="Conversation"
+            aria-live="polite"
+          >
+            <div class="welcome">
+              <h3>Your home, thoughtfully assisted.</h3>
+              <p>
+                Ask about an explicitly scoped entity, explore live services, or
+                review a proposed light or switch action. Nothing executes from
+                model prose.
+              </p>
+              <p>Create a session to begin.</p>
+            </div>
+          </div>
+          <section id="approvals" aria-label="Exact action reviews"></section>
+        </div>
+        <p id="feedback" role="status"></p>
+        <form id="composer">
+          <label class="sr-only" for="message">Your message</label
+          ><textarea
+            id="message"
+            placeholder="What would you like to understand?"
+            maxlength="4000"
+            rows="2"
+            required
+            disabled
+          ></textarea
+          ><button id="send" type="submit" disabled>
+            Send <span aria-hidden="true">↗</span></button
+          ><button id="retry" type="button" hidden>Retry saved input</button>
+        </form>
+        <footer>
+          <span id="task-status">Choose a session</span
+          ><span id="usage">No model usage yet</span>
+        </footer>
+      </section>
+    </main>
+  </body>
+</html>

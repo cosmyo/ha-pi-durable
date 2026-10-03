@@ -1,0 +1,13 @@
+{
+  "name": "ha-pi-durable",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "npm --prefix hearth_pi run typecheck",
+    "test": "npm --prefix hearth_pi test",
+    "build": "npm --prefix hearth_pi run build",
+    "format": "node hearth_pi/node_modules/prettier/bin/prettier.cjs --write .",
+    "format:check": "node hearth_pi/node_modules/prettier/bin/prettier.cjs --check .",
+    "check": "npm run format:check && npm run typecheck && npm test && npm run build && node scripts/validate-package.mjs && node scripts/secret-scan.mjs"
+  }
+}
