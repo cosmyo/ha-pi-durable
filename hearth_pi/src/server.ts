@@ -7,6 +7,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { Proposals } from "./documents.js";
+import { HomeCanvas } from "./canvas.js";
 import { Boundary } from "./auth.js";
 import type { Config } from "./config.js";
 import type { Runtime } from "./runtime.js";
@@ -173,7 +174,11 @@ export function appServer(
         const operation = route[2];
         const conversation = await runtime.session(owner, id);
         if (req.method === "GET" && operation === "snapshot")
-          return json(res, 200, await runtime.snapshot(owner, id));
+          return json(
+            res,
+            200,
+            await runtime.snapshot(owner, id, config.policy.entities),
+          );
         if (req.method === "GET" && operation === "events") {
           insist(
             streams.size < 20 && (perOwner.get(owner) ?? 0) < 2,
@@ -186,10 +191,21 @@ export function appServer(
             conversation.id,
             ctx,
           );
-          insist(proposals, "session_not_found", 404);
+          const canvas = await runtime.harness.watchDoc(
+            HomeCanvas,
+            conversation.id,
+            ctx,
+          );
+          if (!proposals || !canvas) {
+            await watch.stop();
+            await proposals?.stop();
+            await canvas?.stop();
+            throw new Fault(404, "session_not_found");
+          }
           if (res.destroyed) {
             await watch.stop();
             await proposals.stop();
+            await canvas.stop();
             return;
           }
           streams.add(res);
@@ -205,6 +221,7 @@ export function appServer(
             clearInterval(heartbeat);
             void watch.stop();
             void proposals.stop();
+            void canvas.stop();
           };
           // One asynchronous snapshot at a time; coalesce change notifications.
           const send = async () => {
@@ -217,7 +234,9 @@ export function appServer(
             try {
               do {
                 dirty = false;
-                const payload = stringify(await runtime.snapshot(owner, id));
+                const payload = stringify(
+                  await runtime.snapshot(owner, id, config.policy.entities),
+                );
                 if (ended) break;
                 if (
                   Buffer.byteLength(payload) > 4194304 ||
@@ -251,6 +270,7 @@ export function appServer(
           await send();
           watch.start(send);
           proposals.start(send);
+          canvas.start(send);
           return;
         }
         if (req.method === "POST" && operation === "inputs") {

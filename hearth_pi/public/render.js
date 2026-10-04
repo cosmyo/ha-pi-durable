@@ -65,6 +65,74 @@ export function renderMessages(container, snapshot) {
   }
   container.replaceChildren(fragment);
 }
+export function renderCanvas(container, canvas, ask) {
+  const fragment = document.createDocumentFragment();
+  if (!canvas) {
+    const welcome = node("div", "", "canvas-empty");
+    welcome.append(
+      node("h3", "Let Hearth build your home view."),
+      node(
+        "p",
+        "Ask for a useful status view. Hearth chooses a layout; the controller reads exact approved HA entities and saves the result through Pi Durable. No fixtures or device actions.",
+      ),
+    );
+    fragment.append(welcome);
+  } else {
+    const heading = node("div", "", "canvas-heading");
+    const summary = node("div");
+    summary.append(
+      node("h3", canvas.title),
+      node(
+        "p",
+        `Saved ${new Date(canvas.committedAt).toLocaleString()} · HA observations, not continuously live`,
+        "muted",
+      ),
+    );
+    const refresh = node("button", "Ask Hearth to refresh", "canvas-question");
+    refresh.type = "button";
+    refresh.addEventListener("click", () =>
+      ask(
+        "Refresh the saved Home canvas using ha_build_view and the same exact entity IDs. Read fresh states; do not call services. If an ID is no longer allowed, explain that instead of guessing.",
+      ),
+    );
+    heading.append(summary, refresh);
+    fragment.append(heading);
+    for (const section of canvas.sections.slice(0, 4)) {
+      const area = node("section", "", "canvas-section");
+      area.append(node("h4", section.title));
+      const cards = node("div", "", "canvas-grid");
+      for (const reading of section.readings.slice(0, 8)) {
+        const card = node("article", "", "canvas-card");
+        card.append(
+          node("h5", reading.attributes.friendly_name ?? reading.entityId),
+          node(
+            "strong",
+            `${reading.state}${reading.attributes.unit_of_measurement ? ` ${reading.attributes.unit_of_measurement}` : ""}`,
+            "canvas-value",
+          ),
+          node("code", reading.entityId),
+          node(
+            "p",
+            `HA read ${new Date(reading.observedAt).toLocaleString()} · saved observation`,
+            "muted",
+          ),
+        );
+        const explain = node("button", "Ask about this", "canvas-question");
+        explain.type = "button";
+        explain.addEventListener("click", () =>
+          ask(
+            `Read ${reading.entityId} now and explain its state. Compare only with observed earlier evidence in this session; do not infer physical effects or call services.`,
+          ),
+        );
+        card.append(explain);
+        cards.append(card);
+      }
+      area.append(cards);
+      fragment.append(area);
+    }
+  }
+  container.replaceChildren(fragment);
+}
 export function renderProposals(container, proposals, decide) {
   const fragment = document.createDocumentFragment();
   for (const proposal of Object.values(proposals).sort(

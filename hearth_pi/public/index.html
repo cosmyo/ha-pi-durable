@@ -14,7 +14,7 @@
       <img src="./icon.svg" width="44" height="44" alt="" />
       <div>
         <h1>Hearth Pi</h1>
-        <p>A durable AI agent for Home Assistant</p>
+        <p>Your home companion · powered by Pi Durable</p>
       </div>
       <span class="pill" id="connection" role="status">Connecting</span>
       <button id="account" type="button">ChatGPT login</button>
@@ -86,9 +86,39 @@
             <h2 id="title">A little warmth. A little more certainty.</h2>
             <p id="safety" class="safety">Read-only by default</p>
           </div>
-          <button id="stop" type="button" disabled>Stop task</button>
+          <div class="actions">
+            <button
+              id="canvas-toggle"
+              type="button"
+              aria-controls="home-canvas"
+              aria-expanded="true"
+            >
+              Home view
+            </button>
+            <button id="stop" type="button" disabled>Stop task</button>
+          </div>
         </div>
         <div class="scroll-area" id="scroll-area">
+          <section id="home-surface" aria-label="Hearth home companion">
+            <div class="home-starters">
+              <button id="build-view" type="button" disabled>
+                Build me a home view
+              </button>
+              <button id="home-briefing" type="button" disabled>
+                Give me a grounded briefing
+              </button>
+            </div>
+            <div
+              id="home-canvas"
+              aria-label="Saved Home canvas"
+              aria-live="polite"
+            ></div>
+            <p class="canvas-disclosure">
+              Model-selected layout · controller-read HA values · saved,
+              timestamped evidence. Questions are drafted for you to send;
+              nothing here approves an action.
+            </p>
+          </section>
           <div
             id="messages"
             role="log"
@@ -98,9 +128,10 @@
             <div class="welcome">
               <h3>Your home, thoughtfully assisted.</h3>
               <p>
-                Ask about an explicitly scoped entity, explore live services, or
-                review a proposed light or switch action. Nothing executes from
-                model prose.
+                Ask Hearth to understand your home, build a useful status view,
+                or carry a scoped task through with evidence. Conversation and
+                canvas state are committed by Pi Durable. Device actions still
+                require exact human review; nothing executes from model prose.
               </p>
               <p>Create a session to begin.</p>
             </div>

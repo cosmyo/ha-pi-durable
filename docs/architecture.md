@@ -6,9 +6,17 @@ Browser → authenticated Node controller → genuine Pi Durable 1.0.1 harness/S
 
 ## Capability groups
 
-**Home:** `ha_search_states`, `ha_state_detail`, `ha_discover_services`, `ha_propose_service`. No arbitrary shell/filesystem/admin/API tool. The broad HA token is narrowed by fixed routes/output scope. Proposals bind immutable action/session/task/hash, policy and five-minute expiry. Human approval rechecks live service/entity/policy and commits `dispatching` before one POST. HTTP success means `accepted`, not verified device effect; interruption/error leaves unknown. Human resolution is a note, not an automatic retry.
+**Home:** `ha_search_states`, `ha_state_detail`, `ha_discover_services`, `ha_propose_service`, plus the **unreleased branch** `ha_build_view`. No arbitrary shell/filesystem/admin/API tool. The broad HA token is narrowed by fixed routes/output scope. Proposals bind immutable action/session/task/hash, policy and five-minute expiry. Human approval rechecks live service/entity/policy and commits `dispatching` before one POST. HTTP success means `accepted`, not verified device effect; interruption/error leaves unknown. Human resolution is a note, not an automatic retry.
 
 **Code:** Pi coding-agent's genuine `read`, `bash`, `edit`, `write` factories. Controller constructs metadata but NEVER executes their host implementations. A bounded HMAC-authenticated Unix-socket adapter invokes them in the [separate confined worker](workspace.md). Code sessions select only that extension; older/Home sessions are explicitly kept HA-only. One trusted coding operator shares the worker's own workspace. Every coding tool is unsafe to replay. Unknown outcomes block further calls for that input; startup guards all interrupted Code turns against fresh model-driven reissue. A new human input—not duplicate admission retry—releases the guard.
+
+## Native companion canvas (unreleased source)
+
+Hearth is its own companion on genuine Pi Durable, not a Muse integration or a replacement chat-history wrapper. `ha_build_view` accepts only a bounded title, 1-4 named sections and at most8distinct exact configured entity IDs. The controller obtains selected HA state/attributes itself; model-provided values, HTML, URLs and actions are not accepted. All IDs are validated before any GET, and scope is rechecked before publication. A failed/partial read does not replace the previous view. Labels and readings are sanitized with the live secret collection at commit.
+
+A latest-only conversation `HomeCanvas` and a task-scoped `CanvasReceipt` are written together through the real tool's `api.commit`. An interrupted pre-commit read may repeat safe GETs; post-commit recovery returns the receipt without rereading/reapplying an old canvas. Conversation creation/boot initializes absent documents for older sessions. The existing owner-bound snapshot/SSE projects the canvas through current exact scope; Code suppresses it and never selects the Home tool. A separate `watchDoc` publishes canvas-only commits. Old transcript history remains history: pruning the current canvas is not erasure of previously disclosed context.
+
+The UI renders safe text nodes, source IDs and HA-read/commit times. Readings are **saved observations**, not sensor subscriptions or physical proof. Refresh/explain controls only draft an ordinary input for the human to send through the existing durable admission path. No new privileges, service dispatch, background polling, arbitrary model-generated DOM or external SDK/account. [Direction, demo and deferred capabilities](hearth-companion.md).
 
 ## Inference and authentication
 

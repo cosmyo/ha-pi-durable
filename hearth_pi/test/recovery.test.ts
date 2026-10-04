@@ -19,6 +19,82 @@ import {
 } from "../src/workspace.js";
 import { fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 
+for (const mode of ["canvas-before", "canvas-after"])
+  test(`SIGKILL ${mode}: genuine Home canvas recovery repeats only uncommitted safe reads`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), `hearth-kill-${mode}-`));
+    await dieAt(
+      dir,
+      mode,
+      mode === "canvas-before" ? "canvas-reading" : "canvas-committed",
+      "./canvas-crash-child.ts",
+    );
+    const { faux, models, model } = offline();
+    faux.setResponses([
+      fauxAssistantMessage(
+        "Recovered the saved Home view; readings are observations.",
+      ),
+    ]);
+    let reads = 0;
+    const ha = new HAClient(
+      "synthetic-recovery-token",
+      { enabled: false, services: [], entities: ["light.example"] },
+      (async (_url, init) => {
+        assert.equal(init?.method, "GET");
+        reads++;
+        return Response.json({
+          entity_id: "light.example",
+          state: "off",
+          attributes: {},
+        });
+      }) as typeof fetch,
+    );
+    const runtime = await Runtime.open(dir, models, model, [haExtension(ha)]);
+    try {
+      const id = (await runtime.list("owner"))[0]!.id;
+      const input = (await runtime.harness.snapshot(
+        Inputs,
+        id as ConversationId,
+        ctx,
+      ))!.requests["canvas-crash-request"]!;
+      assert.equal(
+        (
+          await (await runtime.harness.submission(
+            input.submissionId as SubmissionId,
+            ctx,
+          ))!.wait(ctx)
+        ).status,
+        "done",
+      );
+      assert.equal(reads, mode === "canvas-before" ? 1 : 0);
+      const canvas = (await runtime.snapshot("owner", id, ha.policy.entities))
+        .homeCanvas!;
+      assert.equal(canvas.title, "Saved view");
+      assert.equal(canvas.sections[0]!.readings[0]!.state, "off");
+      assert(canvas.committedAt > 0);
+      assert.equal(
+        await runtime.submit(
+          "owner",
+          id,
+          "canvas-crash-request",
+          "Synthetic canvas input",
+        ),
+        input.submissionId,
+      );
+      assert.equal(faux.state.callCount, 1);
+      assert.equal(
+        (
+          JSON.stringify(await runtime.snapshot("owner", id)).match(
+            /"kind":"pi.user"/g,
+          ) ?? []
+        ).length,
+        1,
+      );
+    } finally {
+      await runtime.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
 async function dieAt(
   dir: string,
   mode: string,

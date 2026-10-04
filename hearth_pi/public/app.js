@@ -1,4 +1,9 @@
-import { node, renderMessages, renderProposals } from "./render.js";
+import {
+  node,
+  renderMessages,
+  renderProposals,
+  renderCanvas,
+} from "./render.js";
 const $ = (id) => document.getElementById(id);
 const base = new URL("./", window.location.href);
 let csrf = "",
@@ -6,6 +11,8 @@ let csrf = "",
   stream = null,
   busy = false,
   actionSignature = "",
+  canvasSignature = "",
+  canvasOpen = true,
   sending = false,
   inferenceReady = true,
   selectedKind = "home",
@@ -70,11 +77,47 @@ function controls() {
     !selected || busy || !!saved || sending || !inferenceReady;
   $("send").disabled = $("message").disabled;
   $("stop").disabled = !selected || !busy;
+  $("home-surface").hidden = selectedKind === "workspace";
+  $("canvas-toggle").hidden = selectedKind === "workspace";
+  $("home-canvas").hidden = !canvasOpen;
+  $("canvas-toggle").setAttribute("aria-expanded", String(canvasOpen));
+  for (const button of document.querySelectorAll(
+    ".canvas-question, .home-starters button",
+  ))
+    button.disabled = $("message").disabled || selectedKind !== "home";
 }
+function draftQuestion(content) {
+  if ($("message").disabled || selectedKind !== "home") return;
+  $("message").value = content;
+  $("message").focus();
+  feedback(
+    "Question drafted. Review and press Send; no request has been admitted yet.",
+  );
+}
+$("build-view").addEventListener("click", () =>
+  draftQuestion(
+    "Discover the exact HA entities you are allowed to read, then use ha_build_view to build a useful status canvas with sensible named sections. Use controller-read facts; do not invent entities/rooms or call services. If the scope is empty, explain that.",
+  ),
+);
+$("home-briefing").addEventListener("click", () =>
+  draftQuestion(
+    "Give me a concise home briefing from fresh reads of exact approved HA entities. Separate observations, uncertainties and a useful next step. Do not call services or start background monitoring.",
+  ),
+);
+$("canvas-toggle").addEventListener("click", () => {
+  canvasOpen = !canvasOpen;
+  controls();
+});
 function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
   renderMessages($("messages"), value);
+  const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
+  const nextCanvasSignature = JSON.stringify(canvas);
+  if (nextCanvasSignature !== canvasSignature) {
+    canvasSignature = nextCanvasSignature;
+    renderCanvas($("home-canvas"), canvas, draftQuestion);
+  }
   const signature = JSON.stringify(value.proposals);
   if (signature !== actionSignature) {
     actionSignature = signature;
@@ -118,6 +161,8 @@ async function select(session) {
   selected = session.id;
   selectedKind = session.kind ?? "home";
   actionSignature = "";
+  canvasSignature = "";
+  renderCanvas($("home-canvas"), null, draftQuestion);
   $("title").textContent = session.title;
   feedback("");
   controls();
@@ -330,6 +375,7 @@ $("login-logout").addEventListener("click", async () => {
     $("account-status").textContent = e.message;
   }
 });
+renderCanvas($("home-canvas"), null, draftQuestion);
 try {
   await bootstrap();
   const sessions = await listSessions();

@@ -12,6 +12,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { Catalog, Inputs, Proposals } from "./documents.js";
+import { HomeCanvas, scopedCanvas } from "./canvas.js";
 import { WorkspaceGuard } from "./workspace.js";
 import {
   Serial,
@@ -70,6 +71,7 @@ export class Runtime {
           conversationCreated: async (tx, record) => {
             await tx.doc(Inputs, record.id);
             await tx.doc(Proposals, record.id);
+            await tx.doc(HomeCanvas, record.id);
           },
           onReport: () => {},
         },
@@ -98,6 +100,8 @@ export class Runtime {
               await tx.doc(WorkspaceGuard, session.id as ConversationId)
             ).blockedEpoch = epoch;
           }
+          // Initialize the new latest-only document for pre-canvas sessions too.
+          await tx.doc(HomeCanvas, session.id as ConversationId);
           const proposals = await tx.doc(
             Proposals,
             session.id as ConversationId,
@@ -278,7 +282,11 @@ export class Runtime {
     }, ctx);
     return submission.id;
   }
-  async snapshot(owner: string, id: number) {
+  async snapshot(
+    owner: string,
+    id: number,
+    visibleEntities: readonly string[] = [],
+  ) {
     const conversation = await this.session(owner, id);
     const view = await conversation.viewState(ctx);
     try {
@@ -297,6 +305,15 @@ export class Runtime {
         : undefined;
       return {
         view: view.value,
+        homeCanvas:
+          (await this.list(owner)).find((s) => s.id === id)?.kind ===
+          "workspace"
+            ? null
+            : scopedCanvas(
+                (await this.harness.snapshot(HomeCanvas, conversation.id, ctx))
+                  ?.current ?? null,
+                visibleEntities,
+              ),
         proposals:
           (await this.harness.snapshot(Proposals, conversation.id, ctx))
             ?.items ?? {},

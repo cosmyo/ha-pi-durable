@@ -461,6 +461,78 @@ dialog .actions {
   color: var(--warm);
   font-size: 1.3rem;
 }
+#home-surface {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: #182a27;
+  padding: 18px;
+  margin-bottom: 24px;
+}
+.home-starters,
+.canvas-heading {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+}
+.home-starters {
+  justify-content: flex-start;
+  margin-bottom: 18px;
+}
+.home-starters button,
+.canvas-question {
+  font-size: 0.78rem;
+}
+.canvas-heading h3,
+.canvas-empty h3 {
+  margin: 0;
+  color: var(--warm);
+}
+.canvas-heading p,
+.canvas-empty p,
+.canvas-disclosure {
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.canvas-section h4 {
+  font-size: 0.85rem;
+  margin: 18px 0 10px;
+}
+.canvas-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  gap: 10px;
+}
+.canvas-card {
+  background: #22352f;
+  border: 1px solid #3a5047;
+  border-radius: 12px;
+  padding: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.canvas-card h5 {
+  font-size: 0.86rem;
+  margin: 0 0 10px;
+}
+.canvas-value {
+  display: block;
+  font-size: 1.7rem;
+  font-weight: 500;
+  color: var(--warm);
+}
+.canvas-card code {
+  font-size: 0.7rem;
+}
+.canvas-card p {
+  font-size: 0.7rem;
+  line-height: 1.6;
+}
+.canvas-disclosure {
+  margin-bottom: 0;
+}
 @media (prefers-reduced-motion: no-preference) {
   button {
     transition:

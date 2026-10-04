@@ -6,6 +6,10 @@
 
 **Current validation:** scoped real Supervisor installation/desktop HTTPS Ingress/catalog/SSE and worker OS/mount/route/genuine-tool gates passed on one authorized aarch64 target. Human subscription login and a privacy-safe model-driven demo are next. Native container CI is distinct from live deployment. Physical power loss, restoration, mobile iframe behavior and performance benchmarks remain separate.
 
+**Native companion direction (unreleased local source):** Muse is inspiration only; no Muse SDK/cloud/account/bridge. Keep genuine Pi Durable as the runtime for agent turns, tools, committed state and recovery. First functional slice is `ha_build_view`: assistant-selected bounded structure, controller-read scoped HA facts, atomic durable canvas/receipt, timestamped safe rendering and explicit refresh via existing Home inputs. It is not fake UI intelligence, a separate chat agent or a currently deployed all-home feature. [Companion plan](hearth-companion.md).
+
+Next native milestones, requiring their own implementation/consent/testing: inspectable owner-approved preferences; bounded opt-in Pi Durable monitoring/reminder tasks with cancellation/budget/expiry; richer structured interactive views; voice/ambient presentation; explicit artifact handoff to the existing confined Code worker. None grants host/admin tools or automatic physical action approval.
+
 **Future proposals requiring design/review:** easier Supervisor-managed worker provisioning with equivalent confinement, per-user workspaces/credentials, finer HA data privacy, retention/export, practical cost/context benchmarks, reviewed custom/local endpoints with SSRF/origin controls, and optional Assist/voice integration. Pi extension/MCP loading, HA configuration editing and privileged administrative agents are not enabled by this roadmap.
 
 Don't market faux offline mode as local inference, claim token savings without benchmarks, claim exactly-once physical effects or conceal unsupported deployment paths.

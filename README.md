@@ -18,6 +18,8 @@ _The original 0.1.0 GIF is a real browser capture with synthetic offline data an
 - **ChatGPT subscription support.** Official Pi `openai-codex` OAuth, with headless device-code login and a state-checked browser redirect fallback. Tokens stay in private controller storage. OpenAI API-key mode is separate; a ChatGPT subscription does **not** make API-key calls free.
 - **Uncertain effects stay uncertain.** Interrupted coding calls are not replayed; an interrupted workspace turn requires a fresh human input before more tool execution. HA dispatches persist intent before one attempt; interrupted dispatch is unknown and never automatically retried. A service receipt is not physical-device verification.
 
+**Unreleased native companion slice on this branch:** ask Hearth to build a status view. `ha_build_view` selects exact approved entity references, obtains values through the controller, and atomically saves a timestamped canvas with a recovery receipt in Pi Durable. The authenticated UI hydrates it beside chat; refresh/follow-up controls draft ordinary Home inputs, not actions. No Muse SDK/account/integration. This is source implementation with offline integration/recovery tests—not a deployed all-home, proactive-memory or voice feature. [Companion direction and current limits](docs/hearth-companion.md).
+
 For ordinary voice control, consider [official Assist](https://www.home-assistant.io/voice_control/) first. Hearth Pi explores durable execution and explicit boundaries, not administrative autonomy. We do not promise exactly-once physical effects, local inference or power-loss proof.
 
 ## Try without AI credentials
