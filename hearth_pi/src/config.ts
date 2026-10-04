@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { resolve } from "node:path";
 import { insist, object, text, entityPattern } from "./safety.js";
 
@@ -25,6 +26,7 @@ export type Config = {
   dataDir: string;
   provider: "offline" | "openai" | "openai-codex";
   model: string;
+  thinkingLevel?: ModelThinkingLevel;
   workspaceEnabled?: boolean;
   policy: Policy;
   haToken: string;
@@ -113,6 +115,10 @@ export async function loadConfig(): Promise<Config> {
     0,
   );
   if (provider === "openai") insist(apiKey.length > 0, "provider_key_required");
+  // OpenAI Codex's requested new-session default; explicit operator options
+  // still own model choice. Existing pi.agent documents are never rewritten.
+  const thinkingLevel: ModelThinkingLevel =
+    provider === "openai-codex" ? "medium" : "off";
   return {
     mode,
     host: mode === "local" ? "127.0.0.1" : "0.0.0.0",
@@ -131,10 +137,11 @@ export async function loadConfig(): Promise<Config> {
         (provider === "offline"
           ? "faux"
           : provider === "openai-codex"
-            ? "gpt-5.5"
+            ? "gpt-6.1-sol"
             : "gpt-4.1-mini"),
       100,
     ),
+    thinkingLevel,
     workspaceEnabled,
     policy: { enabled, services, entities },
     haToken: process.env.SUPERVISOR_TOKEN ?? "",

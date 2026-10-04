@@ -104,6 +104,7 @@ button:disabled {
   cursor: not-allowed;
 }
 button:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 summary:focus-visible {
   outline: 3px solid var(--warm);
@@ -156,6 +157,29 @@ nav {
 }
 .safety:before {
   content: "◈ ";
+}
+.model-picker {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.8rem;
+}
+.model-picker select {
+  font: inherit;
+  min-height: 44px;
+  max-width: 100%;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.model-picker p {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
 }
 .scroll-area {
   overflow: auto;

@@ -5,13 +5,24 @@ import {
   Harness,
   createRegistry,
   configure,
+  AgentDoc,
+  InboxDoc,
+  LiveDoc,
   type Extension,
   type ConversationId,
 } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai/models";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { supportsThinking } from "./models.js";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { Catalog, Inputs, Proposals, HomePermissions } from "./documents.js";
+import {
+  Catalog,
+  Inputs,
+  Proposals,
+  HomePermissions,
+  ModelSelection,
+} from "./documents.js";
 import type { HomeActions } from "./home-actions.js";
 import { HomeCanvas, scopedCanvas } from "./canvas.js";
 import { WorkspaceGuard } from "./workspace.js";
@@ -31,6 +42,8 @@ export class Runtime {
   private constructor(
     readonly harness: Harness,
     readonly model: { provider: string; modelId: string },
+    readonly models: Models,
+    readonly defaultThinkingLevel: ModelThinkingLevel,
     readonly redact: (value: string) => string,
     readonly groups: { home: Extension[]; workspace: Extension[] },
   ) {}
@@ -45,7 +58,17 @@ export class Runtime {
       workspace: [],
     },
     homeActions?: HomeActions,
+    defaultThinkingLevel: ModelThinkingLevel = "off",
   ): Promise<Runtime> {
+    insist(
+      supportsThinking(
+        models,
+        model.provider,
+        model.modelId,
+        defaultThinkingLevel,
+      ),
+      "unsupported_default_thinking",
+    );
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const db = await openNodeSqliteDatabase(join(dataDir, "hearth.sqlite"), {
       busyTimeoutMs: 0,
@@ -75,12 +98,20 @@ export class Runtime {
             await tx.doc(Inputs, record.id);
             await tx.doc(Proposals, record.id);
             await tx.doc(HomeCanvas, record.id);
+            await tx.doc(ModelSelection, record.id);
           },
           onReport: () => {},
         },
         ctx,
       );
-      const runtime = new Runtime(harness, model, redactor(secrets), groups);
+      const runtime = new Runtime(
+        harness,
+        model,
+        models,
+        defaultThinkingLevel,
+        redactor(secrets),
+        groups,
+      );
       homeActions?.attach(runtime);
       await homeActions?.initialize();
       const unfinished = await harness.inspect(ctx);
@@ -107,6 +138,7 @@ export class Runtime {
           }
           // Initialize the new latest-only document for pre-canvas sessions too.
           await tx.doc(HomeCanvas, session.id as ConversationId);
+          await tx.doc(ModelSelection, session.id as ConversationId);
           const proposals = await tx.doc(
             Proposals,
             session.id as ConversationId,
@@ -200,6 +232,7 @@ export class Runtime {
         });
         await configure(tx, conversation.id, {
           model: this.model,
+          thinkingLevel: this.defaultThinkingLevel,
           extensions: this.groups[kind],
         });
         catalog.items.push({
@@ -211,6 +244,129 @@ export class Runtime {
           kind,
         });
         return conversation.id;
+      }, ctx);
+    });
+  }
+  // Only the configured provider's in-process chat registry is exposed. These
+  // fields are projected explicitly: never serialize a provider/model object.
+  modelChoices() {
+    return this.models
+      .getModels(this.model.provider)
+      .filter(
+        (m) =>
+          m.provider === this.model.provider &&
+          /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,119}$/.test(m.id) &&
+          !/^(sk-|bearer|eyJ)/i.test(m.id),
+      )
+      .slice(0, 200)
+      .map((m) => ({
+        id: m.id,
+        name: m.name.slice(0, 120),
+        provider: this.model.provider,
+      }));
+  }
+  async selectModel(
+    owner: string,
+    id: number,
+    modelId: unknown,
+    thinkingLevel: unknown,
+    revision: unknown,
+  ) {
+    const desired = text(modelId, 120);
+    insist(
+      Number.isSafeInteger(revision) && (revision as number) >= 0,
+      "invalid_revision",
+    );
+    insist(
+      this.modelChoices().some((m) => m.id === desired),
+      "unsupported_model",
+      400,
+    );
+    insist(
+      typeof thinkingLevel === "string" &&
+        ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
+          thinkingLevel,
+        ),
+      "invalid_thinking_level",
+    );
+    insist(
+      supportsThinking(
+        this.models,
+        this.model.provider,
+        desired,
+        thinkingLevel as ModelThinkingLevel,
+      ),
+      "unsupported_thinking",
+      400,
+    );
+    return this.admission.run(async () => {
+      insist(!this.closing, "closing", 503);
+      const conversation = await this.session(owner, id);
+      const inspection = await this.harness.inspect(ctx);
+      insist(
+        !inspection.tasks.some((t) => t.record.conversationId === id),
+        "session_busy",
+        409,
+      );
+      return conversation.commit(async (tx) => {
+        const selection = await tx.doc(ModelSelection, conversation.id);
+        insist(selection.revision === revision, "stale_model_selection", 409);
+        const live = await tx.doc(LiveDoc, conversation.id);
+        const inbox = await tx.doc(InboxDoc, conversation.id);
+        insist(
+          !live.run && !live.compactions?.length && !inbox.items.length,
+          "session_busy",
+          409,
+        );
+        const inputs = await tx.doc(Inputs, conversation.id);
+        insist(
+          Object.values(inputs.requests).every(
+            (input) => input.submissionId > 0,
+          ),
+          "session_busy",
+          409,
+        );
+        const kind = (await tx.doc(Catalog)).items.find(
+          (s) => s.id === id,
+        )?.kind;
+        if (kind === "workspace") {
+          const guard = await tx.doc(WorkspaceGuard, conversation.id);
+          insist(
+            guard.blockedEpoch !== Object.keys(inputs.requests).length ||
+              guard.blockedEpoch === 0,
+            "workspace_continuation_blocked",
+            409,
+          );
+        }
+        const proposals = await tx.doc(Proposals, conversation.id);
+        insist(
+          Object.values(proposals.items).every(
+            (p) => !["pending", "dispatching", "unknown"].includes(p.status),
+          ),
+          "action_unresolved",
+          409,
+        );
+        const stored = await tx.doc(AgentDoc, conversation.id);
+        insist(
+          stored.model?.provider === this.model.provider,
+          "unsupported_model",
+          409,
+        );
+        if (
+          stored.model.modelId !== desired ||
+          (stored.thinkingLevel ?? "off") !== thinkingLevel
+        ) {
+          await configure(tx, conversation.id, {
+            model: { provider: this.model.provider, modelId: desired },
+            thinkingLevel: thinkingLevel as ModelThinkingLevel,
+          });
+          selection.revision++;
+        }
+        return {
+          model: { provider: this.model.provider, modelId: desired },
+          thinkingLevel,
+          revision: selection.revision,
+        };
       }, ctx);
     });
   }
@@ -314,7 +470,32 @@ export class Runtime {
             )
           )?.status(ctx)
         : undefined;
+      // Read the agent and CAS revision on one durable writer line. The
+      // structural view doesn't expose arbitrary latest-only host documents.
+      const committed = await conversation.commit(async (tx) => {
+        const agent = await tx.doc(AgentDoc, conversation.id);
+        const selection = await tx.doc(ModelSelection, conversation.id);
+        return {
+          model: agent.model
+            ? { provider: agent.model.provider, modelId: agent.model.modelId }
+            : undefined,
+          thinkingLevel: agent.thinkingLevel ?? "off",
+          revision: selection.revision,
+        };
+      }, ctx);
+      const committedModel = committed.model;
       return {
+        modelSelection: {
+          model:
+            committedModel?.provider === this.model.provider
+              ? {
+                  provider: this.model.provider,
+                  modelId: committedModel.modelId,
+                }
+              : null,
+          thinkingLevel: committed.thinkingLevel,
+          revision: committed.revision,
+        },
         view: view.value,
         homePermissions: this.homeActions
           ? await this.homeActions.settings(owner)

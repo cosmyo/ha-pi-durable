@@ -18,6 +18,17 @@ export const Catalog = defineDoc<{ items: SessionItem[] }>({
   initial: () => ({ items: [] }),
   checkpointWhen,
 });
+// Revision lives with the conversation so a model choice and its compare-and-swap
+// advance in the same durable commit as pi.agent.
+export const ModelSelection = defineDoc<{ revision: number }>({
+  kind: "hearth.model-selection",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ revision: 0 }),
+  checkpointWhen,
+});
 export type Input = {
   hash: string;
   content: string;

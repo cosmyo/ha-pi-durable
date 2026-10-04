@@ -1,5 +1,6 @@
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
   fauxProvider,
   fauxAssistantMessage,
@@ -10,6 +11,22 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Config } from "./config.js";
 import { redactor } from "./safety.js";
+
+export function supportsThinking(
+  models: Models,
+  provider: string,
+  id: string,
+  level: ModelThinkingLevel,
+): boolean {
+  const model = models.getModel(provider, id);
+  if (!model || model.provider !== provider) return false;
+  if (level === "off") return model.thinkingLevelMap?.off !== null;
+  if (!model.reasoning || model.thinkingLevelMap?.[level] === null)
+    return false;
+  return level === "xhigh" || level === "max"
+    ? typeof model.thinkingLevelMap?.[level] === "string"
+    : true;
+}
 
 // Filter before Pi commits provider events, including error/partial fields.
 export function safeModels(models: Models, secrets: string[]): Models {

@@ -115,6 +115,7 @@ export function appServer(
         return json(res, 200, {
           csrf: boundary.bootstrap(req, res, owner),
           provider: config.provider,
+          defaultThinkingLevel: runtime.defaultThinkingLevel,
           model:
             config.provider === "offline"
               ? "Offline demonstration"
@@ -172,6 +173,8 @@ export function appServer(
         }
         throw new Fault(404, "not_found");
       }
+      if (req.method === "GET" && path === "/api/models")
+        return json(res, 200, { items: runtime.modelChoices() });
       if (req.method === "GET" && path === "/api/sessions")
         return json(res, 200, { items: await runtime.list(owner) });
       if (req.method === "POST" && path === "/api/sessions") {
@@ -187,7 +190,7 @@ export function appServer(
         });
       }
       const route =
-        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions))?$/.exec(
+        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model))?$/.exec(
           path,
         );
       if (route) {
@@ -302,6 +305,24 @@ export function appServer(
           canvas.start(send);
           permissions.start(send);
           return;
+        }
+        if (req.method === "POST" && operation === "model") {
+          const v = object(await body(req), [
+            "modelId",
+            "thinkingLevel",
+            "revision",
+          ]);
+          return json(
+            res,
+            200,
+            await runtime.selectModel(
+              owner,
+              id,
+              v.modelId,
+              v.thinkingLevel,
+              v.revision,
+            ),
+          );
         }
         if (req.method === "POST" && operation === "inputs") {
           insist(

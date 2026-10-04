@@ -95,7 +95,7 @@
             state.
           </p>
           <p>Independent community app.<br />Pi Durable is experimental.</p>
-          <span class="pill" id="provider">Offline</span>
+          <span class="pill" id="provider">Provider loading</span>
         </div>
       </aside>
       <section class="conversation" aria-label="Chat">
@@ -115,6 +115,30 @@
             </button>
             <button id="stop" type="button" disabled>Stop task</button>
           </div>
+        </div>
+        <div class="model-picker" aria-label="Session model">
+          <label for="model-choice">Model for next input</label>
+          <select id="model-choice" disabled></select>
+          <label for="thinking-choice">Thinking</label>
+          <select id="thinking-choice" disabled>
+            <option value="off">Off</option>
+            <option value="minimal">Minimal</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="xhigh">Extra high</option>
+            <option value="max">Max</option>
+          </select>
+          <button id="apply-model" type="button" disabled>
+            Apply model and thinking
+          </button>
+          <span id="active-model" role="status">Choose a session</span>
+          <p>
+            Models listed by this provider's local catalog; provider account
+            limits apply. New sessions use the configured default model and
+            thinking; existing sessions retain their choices. Selecting does not
+            switch until you press Apply.
+          </p>
         </div>
         <div class="scroll-area" id="scroll-area">
           <section id="home-surface" aria-label="Hearth home companion">

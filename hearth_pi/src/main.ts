@@ -49,6 +49,7 @@ try {
     secrets,
     { home, workspace },
     ha.actions,
+    config.thinkingLevel,
   );
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscription,

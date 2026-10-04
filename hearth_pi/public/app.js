@@ -19,7 +19,12 @@ let csrf = "",
   homeSafety = "Read-only · actions disabled",
   permissions = null,
   loginId = "",
-  accountTimer = null;
+  accountTimer = null,
+  modelChoices = [],
+  defaultThinkingLevel = "off",
+  modelSelection = null,
+  modelDraftDirty = false,
+  applyingModel = false;
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
@@ -52,9 +57,10 @@ async function api(path, payload) {
 async function bootstrap() {
   const status = await api("bootstrap");
   csrf = status.csrf;
-  $("provider").textContent = `${status.provider} · ${status.model}`;
+  $("provider").textContent = status.provider;
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
+  defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
   $("new-workspace").hidden = !status.workspaceEnabled;
   controls();
 }
@@ -127,6 +133,19 @@ function controls() {
     !selected || busy || !!saved || sending || !inferenceReady;
   $("send").disabled = $("message").disabled;
   $("stop").disabled = !selected || !busy;
+  $("model-choice").disabled =
+    !selected ||
+    !modelSelection ||
+    busy ||
+    applyingModel ||
+    !!saved ||
+    sending ||
+    !modelChoices.length;
+  $("thinking-choice").disabled = $("model-choice").disabled;
+  $("apply-model").disabled =
+    $("model-choice").disabled ||
+    ($("model-choice").value === modelSelection?.model?.modelId &&
+      $("thinking-choice").value === modelSelection?.thinkingLevel);
   $("home-surface").hidden = selectedKind === "workspace";
   $("canvas-toggle").hidden = selectedKind === "workspace";
   $("home-canvas").hidden = !canvasOpen;
@@ -162,6 +181,21 @@ function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
   updatePermissions(value.homePermissions);
+  if (value.modelSelection) {
+    modelSelection = value.modelSelection;
+    const active = modelSelection.model;
+    $("active-model").textContent = active
+      ? `Active: ${active.provider} / ${active.modelId} · thinking ${modelSelection.thinkingLevel}`
+      : "Active model unavailable; ask the administrator";
+    if (
+      !modelDraftDirty ||
+      !modelChoices.some((m) => m.id === $("model-choice").value)
+    ) {
+      $("model-choice").value = active?.modelId ?? "";
+      $("thinking-choice").value = modelSelection.thinkingLevel ?? "off";
+      modelDraftDirty = false;
+    }
+  }
   renderMessages($("messages"), value);
   const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
   const nextCanvasSignature = JSON.stringify(canvas);
@@ -220,6 +254,11 @@ async function select(session) {
   stream?.close();
   selected = session.id;
   selectedKind = session.kind ?? "home";
+  modelSelection = null;
+  modelDraftDirty = false;
+  $("active-model").textContent = "Loading session model…";
+  $("model-choice").value = "";
+  $("thinking-choice").value = "off";
   actionSignature = "";
   canvasSignature = "";
   renderCanvas($("home-canvas"), null, draftQuestion);
@@ -435,9 +474,71 @@ $("login-logout").addEventListener("click", async () => {
     $("account-status").textContent = e.message;
   }
 });
+$("model-choice").addEventListener("change", () => {
+  modelDraftDirty = true;
+  // A newly chosen model starts at the configured thinking default. The server
+  // checks its actual registry support; choosing does not apply either field.
+  $("thinking-choice").value = defaultThinkingLevel;
+  controls();
+});
+$("thinking-choice").addEventListener("change", () => {
+  modelDraftDirty = true;
+  controls();
+});
+$("apply-model").addEventListener("click", async () => {
+  if (!selected || !modelSelection || $("apply-model").disabled) return;
+  const id = selected;
+  const revision = modelSelection.revision;
+  const modelId = $("model-choice").value;
+  const thinkingLevel = $("thinking-choice").value;
+  applyingModel = true;
+  controls();
+  try {
+    await api(`sessions/${id}/model`, { modelId, thinkingLevel, revision });
+    if (selected === id) {
+      const updated = await api(`sessions/${id}/snapshot`);
+      if (selected !== id) return;
+      modelDraftDirty = false;
+      snapshot(updated);
+      feedback("Model and thinking applied to this session's next input.");
+    }
+  } catch (error) {
+    if (selected === id) {
+      feedback(
+        `Model not confirmed: ${error.message}. Review the active model before applying again.`,
+      );
+      try {
+        const updated = await api(`sessions/${id}/snapshot`);
+        if (selected === id) {
+          modelDraftDirty = false;
+          snapshot(updated);
+        }
+      } catch {
+        if (selected === id) {
+          modelSelection = null;
+          $("active-model").textContent =
+            "Active model unconfirmed; reconnect this session";
+        }
+        /* Reconnect explicitly; never retry a mutation. */
+      }
+    }
+  } finally {
+    applyingModel = false;
+    controls();
+  }
+});
 renderCanvas($("home-canvas"), null, draftQuestion);
 try {
   await bootstrap();
+  modelChoices = (await api("models")).items;
+  const choices = document.createDocumentFragment();
+  for (const model of modelChoices) {
+    const option = document.createElement("option");
+    option.value = model.id;
+    option.textContent = `${model.name} (${model.id})`;
+    choices.append(option);
+  }
+  $("model-choice").replaceChildren(choices);
   const sessions = await listSessions();
   $("connection").textContent = "Connected";
   if (sessions.length) {
