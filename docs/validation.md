@@ -39,7 +39,20 @@ Synthetic tests exercise official Pi device-code OAuth through fake HTTP, protec
 
 Genuine Pi read/write/edit/bash are exercised through bounded authenticated IPC. Explicit Home/Code capability groups, unknown-outcome blocking and a real subprocess SIGKILL prevent both durable replay and fresh model-driven coding reissue before human input. These local tests do not establish OS isolation.
 
-The separate `scripts/workspace-smoke.sh` gate builds the worker on native Linux, checks zero capabilities/no-new-privs/seccomp/enforcing AppArmor/read-only rootfs/no routes, missing HA/Docker resources and real tools. See the CI run for the tested commit before claiming a pass. Real Supervisor installation and a human subscription login remain distinct gates.
+The native amd64/aarch64 **0.2.0 gates passed** for `6fbad7c`: [CI run](https://github.com/cosmyo/ha-pi-durable/actions/runs/37165250386). Both jobs ran all checks/audit plus controller and worker Docker smoke. The worker gate now uses an actual private named volume with `volume-nocopy`, verifies ownership/writability, all five zero capability sets, no-new-privs/seccomp/enforcing AppArmor/read-only rootfs/no routes, missing HA/Docker resources and genuine tools.
+
+### Scoped live HA evidence — 2026-10-04
+
+On an authorized Raspberry Pi5/aarch64 target, Core **2026.9.4**, Supervisor **2026.09.3**:
+
+- Hearth **0.2.0** installed and started alongside existing services; no public ports. Controller runs as UID/GID1000 with zero effective capabilities and enforcing AppArmor.
+- Real external HTTPS Ingress owner/CSRF-bound Home and Code creation returned201, protected snapshots/catalog and SSE returned200. Direct loopback with forged identity/forwarded headers returned403. Desktop auth dialog rendered. This does not establish mobile or all proxy topologies.
+- Actual scoped read of virtual `sun.sun` passed and an unconfigured entity was rejected. Service actions remained disabled; no physical device was switched.
+- Separate worker passed the live confinement/mount/route/credential-denial gate. Controller-to-worker genuine Pi write/edit/read/bash passed on a synthetic Python calculation. This was **operator-driven tool smoke, not LLM inference**.
+- App-only restart preserved/hydrated both empty synthetic session catalogues; worker remained independent. Core API answered and Core and the other running services retained their pre-install start timestamps.
+- Live validation caught Docker empty-volume copy-up resetting ownership: the new empty volume was explicitly inspected/repaired, `volume-nocopy` added, startup strengthened and named-volume CI repeated. No broad/changing ownership of existing user files, Core configuration or host permissions.
+
+Controller source was `11e7567`; worker/installer correction `6fbad7c`. No personal credentials were copied. Human ChatGPT login and a model-driven demo remain unverified.
 
 ## Baseline container gate — not executed locally
 
@@ -72,6 +85,6 @@ Follow [App installation/options](../hearth_pi/DOCS.md) only on an authorized te
 
 ## Explicit limitations
 
-Not yet established: Supervisor installation/Ingress/AppArmor, real mobile iframe behavior, backup restore, paid inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, HA configuration editing or custom/local inference endpoints. OAuth and isolated coding are now implemented, but a mock login/source test is not evidence of live subscription success or target-OS confinement.
+Not yet established: Supervisor compatibility beyond the scoped target above, real mobile iframe behavior, backup restore, live account authentication/inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, HA configuration editing or custom/local inference endpoints. OAuth and isolated coding are now implemented, but a mock login/source test is not evidence of live subscription success or target-OS confinement.
 
 The local secret scanner detects selected patterns and excludes deliberate synthetic fixtures. It is a preflight aid, not comprehensive secret discovery. Review the actual public diff, dependency licenses/advisories and install documentation before publishing. Publishing and production deployment require a separate decision.
