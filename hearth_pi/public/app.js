@@ -182,6 +182,17 @@ function snapshot(value) {
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
   updatePermissions(value.homePermissions);
   if (value.modelSelection) {
+    if (
+      modelDraftDirty &&
+      modelSelection &&
+      value.modelSelection.revision !== modelSelection.revision
+    ) {
+      modelDraftDirty = false;
+      if (!applyingModel)
+        feedback(
+          "Model settings changed elsewhere. Your draft was discarded; review the active model before choosing again.",
+        );
+    }
     modelSelection = value.modelSelection;
     const active = modelSelection.model;
     $("active-model").textContent = active

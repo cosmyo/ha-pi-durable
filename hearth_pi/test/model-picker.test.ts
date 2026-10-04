@@ -452,12 +452,14 @@ test("model dropdown is text-only, drafts do not apply, failures refresh authori
     revision: number;
   }[] = [];
   let active = "first",
+    activeThinking = "off",
     revision = 0,
     fail = false;
+  let emitSnapshot!: (value: ReturnType<typeof snapshot>) => void;
   const snapshot = () => ({
     modelSelection: {
       model: { provider: "faux", modelId: active },
-      thinkingLevel: "off",
+      thinkingLevel: activeThinking,
       revision,
     },
     view: { entries: [], docs: { "pi.live": {}, "pi.usage": { models: {} } } },
@@ -477,7 +479,13 @@ test("model dropdown is text-only, drafts do not apply, failures refresh authori
       },
       EventSource: class {
         close() {}
-        addEventListener() {}
+        addEventListener(
+          type: string,
+          listener: (event: { data: string }) => void,
+        ) {
+          if (type === "snapshot")
+            emitSnapshot = (value) => listener({ data: JSON.stringify(value) });
+        }
       },
       fetch: async (url: URL, options?: RequestInit) => {
         const path = new URL(String(url)).pathname;
@@ -490,6 +498,7 @@ test("model dropdown is text-only, drafts do not apply, failures refresh authori
               { status: 409 },
             );
           active = body.modelId;
+          activeThinking = body.thinkingLevel;
           revision++;
           return Response.json({
             model: { provider: "faux", modelId: active },
@@ -579,6 +588,42 @@ test("model dropdown is text-only, drafts do not apply, failures refresh authori
     assert.equal(picker.value, "second");
     assert.equal(apply.disabled, true);
     assert.equal(requests.length, 2); // no automatic retry
+
+    // Another tab applies different settings while this tab has a draft.
+    // Receiving its SSE must not rebase our old draft onto its new CAS revision.
+    fail = false;
+    picker.value = "first";
+    picker.dispatchEvent(new window.Event("change"));
+    assert.equal(apply.disabled, false);
+    activeThinking = "medium";
+    revision++;
+    emitSnapshot(snapshot());
+    assert.equal(picker.value, "second");
+    assert.equal(
+      (document.getElementById("thinking-choice") as HTMLSelectElement).value,
+      "medium",
+    );
+    assert.equal(apply.disabled, true);
+    assert.match(
+      document.getElementById("feedback")!.textContent!,
+      /changed elsewhere.*draft was discarded/,
+    );
+    apply.dispatchEvent(new window.Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(requests.length, 2);
+
+    // A fresh explicit choice may deliberately supersede the other tab.
+    picker.value = "first";
+    picker.dispatchEvent(new window.Event("change"));
+    apply.dispatchEvent(new window.Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(requests[2], {
+      modelId: "first",
+      thinkingLevel: "off",
+      revision: 2,
+    });
+    assert.equal(picker.value, "first");
+    assert.equal(apply.disabled, true);
   } finally {
     Object.assign(globalThis, previous);
   }
