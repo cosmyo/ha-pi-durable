@@ -27,7 +27,8 @@ export class HAClient {
     private transport: typeof fetch = fetch,
     secrets: string[] = [],
   ) {
-    this.redact = redactor([token, ...secrets]);
+    // Keep the live collection: OAuth refresh/login adds secrets after startup.
+    this.redact = (value) => redactor([token, ...secrets])(value);
   }
   private async request(
     path: string,

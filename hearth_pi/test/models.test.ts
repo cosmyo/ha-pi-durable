@@ -7,6 +7,11 @@ import {
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
 import { offline } from "./fixtures.js";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { PrivateCredentials } from "../src/subscription.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 const apiKey = "sk-synthetic-fixture-key-not-a-credential";
 test("real pinned OpenAI API-key Responses adapter: fake HTTP, official origin, no store, secret-free output/errors", async () => {
@@ -18,8 +23,18 @@ test("real pinned OpenAI API-key Responses adapter: fake HTTP, official origin, 
     haToken: "synthetic-supervisor-token",
     password: "synthetic-browser-password",
   } as Config;
+  const dir = await mkdtemp(join(tmpdir(), "hearth-models-"));
   try {
-    const { models, provider, modelId } = configuredModels(config);
+    const native = await ModelRuntime.create({
+      modelsPath: null,
+      refreshOnCreate: false,
+      credentials: new PrivateCredentials(join(dir, "auth.json")),
+    });
+    const { models, provider, modelId } = await configuredModels(
+      config,
+      native,
+      [apiKey, config.haToken, config.password],
+    );
     const model = models.getModel(provider, modelId)!;
     assert(model);
     const item = {
@@ -131,15 +146,19 @@ test("real pinned OpenAI API-key Responses adapter: fake HTTP, official origin, 
       .result();
     assert.equal(errorReply.stopReason, "error");
     assert.doesNotMatch(JSON.stringify(errorReply), /sk-synthetic/);
-    assert.throws(
-      () =>
-        configuredModels({
+    await assert.rejects(
+      configuredModels(
+        {
           ...config,
           apiKey: "subscription-token-not-supported",
-        }),
+        },
+        native,
+        [],
+      ),
       /api_key_auth_required/,
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
     if (previous === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previous;
   }

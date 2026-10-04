@@ -6,7 +6,12 @@ let csrf = "",
   stream = null,
   busy = false,
   actionSignature = "",
-  sending = false;
+  sending = false,
+  inferenceReady = true,
+  selectedKind = "home",
+  homeSafety = "Read-only · actions disabled",
+  loginId = "",
+  accountTimer = null;
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
@@ -40,7 +45,10 @@ async function bootstrap() {
   const status = await api("bootstrap");
   csrf = status.csrf;
   $("provider").textContent = `${status.provider} · ${status.model}`;
-  $("safety").textContent = status.safety;
+  homeSafety = status.safety;
+  inferenceReady = status.inferenceReady;
+  $("new-workspace").hidden = !status.workspaceEnabled;
+  controls();
 }
 function pending() {
   try {
@@ -54,7 +62,12 @@ function pending() {
 function controls() {
   const saved = pending();
   $("retry").hidden = !saved;
-  $("message").disabled = !selected || busy || !!saved || sending;
+  $("safety").textContent =
+    selectedKind === "workspace"
+      ? "Isolated coding workspace · no HA or network access"
+      : homeSafety;
+  $("message").disabled =
+    !selected || busy || !!saved || sending || !inferenceReady;
   $("send").disabled = $("message").disabled;
   $("stop").disabled = !selected || !busy;
 }
@@ -87,7 +100,11 @@ async function listSessions() {
   const { items } = await api("sessions");
   const fragment = document.createDocumentFragment();
   for (const session of items.slice().reverse()) {
-    const button = node("button", session.title, "session");
+    const button = node(
+      "button",
+      `${session.kind === "workspace" ? "⌘ " : "◈ "}${session.title}`,
+      "session",
+    );
     button.type = "button";
     button.setAttribute("aria-current", String(session.id === selected));
     button.addEventListener("click", () => select(session));
@@ -99,6 +116,7 @@ async function listSessions() {
 async function select(session) {
   stream?.close();
   selected = session.id;
+  selectedKind = session.kind ?? "home";
   actionSignature = "";
   $("title").textContent = session.title;
   feedback("");
@@ -169,20 +187,30 @@ $("composer").addEventListener("submit", (event) => {
 $("retry").addEventListener("click", () => {
   void sendSaved();
 });
-$("new-session").addEventListener("click", async () => {
-  const title = window.prompt("Session title", "A thoughtful home");
+async function newSession(kind) {
+  const title = window.prompt(
+    "Session title",
+    kind === "workspace" ? "A private coding workspace" : "A thoughtful home",
+  );
   if (!title) return;
   try {
     const result = await api("sessions", {
       title,
+      kind,
       requestId: crypto.randomUUID(),
     });
     await listSessions();
-    await select({ id: result.id, title });
+    await select({ id: result.id, title, kind });
     await listSessions();
   } catch (error) {
     feedback(error.message);
   }
+}
+$("new-session").addEventListener("click", () => {
+  void newSession("home");
+});
+$("new-workspace").addEventListener("click", () => {
+  void newSession("workspace");
 });
 $("stop").addEventListener("click", async () => {
   try {
@@ -221,6 +249,87 @@ async function decide(proposal, decision) {
     feedback(error.message);
   }
 }
+async function refreshAccount() {
+  try {
+    const status = await api("auth/status"),
+      login = status.login;
+    loginId = login?.id ?? "";
+    const pending = !!login && ["starting", "waiting"].includes(login.state);
+    $("account-status").textContent = status.configured
+      ? "Subscription connected."
+      : login?.state === "failed"
+        ? "Login failed. Retry or use browser login; device-code access may need enabling in your OpenAI account."
+        : pending
+          ? "Waiting for you to finish at OpenAI. Do not share the code or redirect URL."
+          : "Not signed in.";
+    $("login-start").disabled = pending;
+    $("login-url").hidden = !login?.url;
+    if (login?.url) $("login-url").href = login.url;
+    else $("login-url").removeAttribute("href");
+    $("login-code").textContent = login?.userCode ?? "";
+    $("login-answer").hidden = !login?.manual;
+    $("login-cancel").hidden = !pending;
+    $("login-logout").hidden = !status.configured;
+    await bootstrap();
+  } catch {
+    $("account-status").textContent =
+      "Account service unavailable. No login credentials were displayed.";
+  }
+}
+$("account").addEventListener("click", () => {
+  $("account-dialog").showModal();
+  void refreshAccount();
+  clearInterval(accountTimer);
+  accountTimer = setInterval(() => {
+    void refreshAccount();
+  }, 2000);
+});
+$("account-dialog").addEventListener("close", () => {
+  clearInterval(accountTimer);
+  $("login-redirect").value = "";
+});
+$("account-close").addEventListener("click", () => $("account-dialog").close());
+$("login-start").addEventListener("click", async () => {
+  try {
+    await api("auth/login", { method: $("login-method").value });
+    await refreshAccount();
+  } catch (e) {
+    $("account-status").textContent = e.message;
+  }
+});
+$("login-answer").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const value = $("login-redirect").value;
+  $("login-redirect").value = "";
+  try {
+    await api("auth/answer", { id: loginId, value });
+    await refreshAccount();
+  } catch (error) {
+    $("account-status").textContent = error.message;
+  }
+});
+$("login-cancel").addEventListener("click", async () => {
+  try {
+    await api("auth/cancel", { id: loginId });
+    await refreshAccount();
+  } catch (e) {
+    $("account-status").textContent = e.message;
+  }
+});
+$("login-logout").addEventListener("click", async () => {
+  if (
+    !window.confirm(
+      "Remove this App's local ChatGPT credential? This does not revoke your OpenAI account.",
+    )
+  )
+    return;
+  try {
+    await api("auth/logout", {});
+    await refreshAccount();
+  } catch (e) {
+    $("account-status").textContent = e.message;
+  }
+});
 try {
   await bootstrap();
   const sessions = await listSessions();
@@ -235,4 +344,7 @@ try {
     "Authentication or server unavailable. Local mode uses username hearth and the configured password. Reload to reconnect.",
   );
 }
-window.addEventListener("pagehide", () => stream?.close());
+window.addEventListener("pagehide", () => {
+  stream?.close();
+  clearInterval(accountTimer);
+});

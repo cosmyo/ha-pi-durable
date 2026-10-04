@@ -12,6 +12,7 @@ import type { Models } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { Catalog, Inputs, Proposals } from "./documents.js";
+import { WorkspaceGuard } from "./workspace.js";
 import {
   Serial,
   insist,
@@ -28,6 +29,7 @@ export class Runtime {
     readonly harness: Harness,
     readonly model: { provider: string; modelId: string },
     readonly redact: (value: string) => string,
+    readonly groups: { home: Extension[]; workspace: Extension[] },
   ) {}
   static async open(
     dataDir: string,
@@ -35,6 +37,10 @@ export class Runtime {
     model: { provider: string; modelId: string },
     extensions: Extension[] = [],
     secrets: readonly string[] = [],
+    groups: { home: Extension[]; workspace: Extension[] } = {
+      home: extensions,
+      workspace: [],
+    },
   ): Promise<Runtime> {
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const db = await openNodeSqliteDatabase(join(dataDir, "hearth.sqlite"), {
@@ -69,11 +75,29 @@ export class Runtime {
         },
         ctx,
       );
-      const runtime = new Runtime(harness, model, redactor(secrets));
+      const runtime = new Runtime(harness, model, redactor(secrets), groups);
+      const unfinished = await harness.inspect(ctx);
       // Pending approvals do not survive a boot: this also fails closed on backup rollback.
       await harness.commit(async (tx) => {
         const catalog = await tx.doc(Catalog);
         for (const session of catalog.items) {
+          // Adding the coding registry must never silently widen an older Home session.
+          await configure(tx, session.id as ConversationId, {
+            extensions: groups[session.kind ?? "home"],
+          });
+          if (
+            session.kind === "workspace" &&
+            unfinished.tasks.some(
+              (task) => task.record.conversationId === session.id,
+            )
+          ) {
+            const epoch = Object.keys(
+              (await tx.doc(Inputs, session.id as ConversationId)).requests,
+            ).length;
+            (
+              await tx.doc(WorkspaceGuard, session.id as ConversationId)
+            ).blockedEpoch = epoch;
+          }
           const proposals = await tx.doc(
             Proposals,
             session.id as ConversationId,
@@ -127,7 +151,14 @@ export class Runtime {
     owner: string,
     title: unknown,
     creationId: unknown,
+    kind: "home" | "workspace" = "home",
   ): Promise<number> {
+    insist(
+      kind === "home" ||
+        (kind === "workspace" && this.groups.workspace.length > 0),
+      "workspace_not_enabled",
+      403,
+    );
     const name = this.redact(text(title, 80));
     const key = text(creationId, 80);
     insist(requestPattern.test(key));
@@ -140,7 +171,11 @@ export class Runtime {
           (s) => s.owner === owner && s.creationId === key,
         );
         if (old) {
-          insist(old.title === name, "idempotency_conflict", 409);
+          insist(
+            old.title === name && (old.kind ?? "home") === kind,
+            "idempotency_conflict",
+            409,
+          );
           return old.id;
         }
         insist(
@@ -152,13 +187,17 @@ export class Runtime {
         const conversation = await tx.createConversation({
           ownership: { kind: "ownerless" },
         });
-        await configure(tx, conversation.id, { model: this.model });
+        await configure(tx, conversation.id, {
+          model: this.model,
+          extensions: this.groups[kind],
+        });
         catalog.items.push({
           id: conversation.id,
           owner,
           title: name,
           created: Date.now(),
           creationId: key,
+          kind,
         });
         return conversation.id;
       }, ctx);

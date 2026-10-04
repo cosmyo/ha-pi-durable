@@ -12,6 +12,7 @@ import type { Config } from "./config.js";
 import type { Runtime } from "./runtime.js";
 import type { Actions } from "./ha.js";
 import { Fault, insist, object, text, redactor } from "./safety.js";
+import type { Subscription } from "./subscription.js";
 
 async function body(req: IncomingMessage): Promise<unknown> {
   insist(
@@ -54,9 +55,16 @@ async function body(req: IncomingMessage): Promise<unknown> {
     });
   });
 }
-export function appServer(config: Config, runtime: Runtime, actions: Actions) {
+export function appServer(
+  config: Config,
+  runtime: Runtime,
+  actions: Actions,
+  options: { subscription?: Subscription; secrets?: string[] } = {},
+) {
   const boundary = new Boundary(config),
-    redact = redactor([config.apiKey, config.haToken, config.password]);
+    redact = redactor(
+      options.secrets ?? [config.apiKey, config.haToken, config.password],
+    );
   const streams = new Set<ServerResponse>();
   const perOwner = new Map<string, number>();
   const rates = new Map<string, { count: number; until: number }>();
@@ -114,13 +122,46 @@ export function appServer(config: Config, runtime: Runtime, actions: Actions) {
             ? "Explicit reviewed actions only"
             : "Read-only · actions disabled",
           experimental: true,
+          workspaceEnabled: config.workspaceEnabled ?? false,
+          inferenceReady:
+            config.provider !== "openai-codex" ||
+            !!options.subscription?.status(owner).configured,
         });
+      if (path.startsWith("/api/auth/")) {
+        const subscription = options.subscription;
+        insist(subscription, "subscription_unavailable", 503);
+        if (req.method === "GET" && path === "/api/auth/status")
+          return json(res, 200, subscription.status(owner));
+        if (req.method === "POST" && path === "/api/auth/login") {
+          const v = object(await body(req), ["method"]);
+          return json(res, 202, await subscription.start(owner, v.method));
+        }
+        if (req.method === "POST" && path === "/api/auth/answer") {
+          const v = object(await body(req), ["id", "value"]);
+          return json(res, 200, subscription.answer(owner, v.id, v.value));
+        }
+        if (req.method === "POST" && path === "/api/auth/cancel") {
+          const v = object(await body(req), ["id"]);
+          return json(res, 200, await subscription.cancel(owner, v.id));
+        }
+        if (req.method === "POST" && path === "/api/auth/logout") {
+          object(await body(req), []);
+          return json(res, 200, await subscription.logout(owner));
+        }
+        throw new Fault(404, "not_found");
+      }
       if (req.method === "GET" && path === "/api/sessions")
         return json(res, 200, { items: await runtime.list(owner) });
       if (req.method === "POST" && path === "/api/sessions") {
-        const v = object(await body(req), ["title", "requestId"]);
+        const v = object(await body(req), ["title", "requestId", "kind"]);
+        const kind = v.kind ?? "home";
+        insist(
+          kind === "home" || (kind === "workspace" && config.workspaceEnabled),
+          "workspace_not_enabled",
+          403,
+        );
         return json(res, 201, {
-          id: await runtime.create(owner, v.title, v.requestId),
+          id: await runtime.create(owner, v.title, v.requestId, kind),
         });
       }
       const route =
@@ -213,6 +254,12 @@ export function appServer(config: Config, runtime: Runtime, actions: Actions) {
           return;
         }
         if (req.method === "POST" && operation === "inputs") {
+          insist(
+            config.provider !== "openai-codex" ||
+              options.subscription?.status(owner).configured,
+            "subscription_login_required",
+            403,
+          );
           const v = object(await body(req), ["requestId", "content"]);
           return json(res, 202, {
             submissionId: await runtime.submit(
@@ -284,6 +331,7 @@ export function appServer(config: Config, runtime: Runtime, actions: Actions) {
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
       );
+      await options.subscription?.close();
       await actions.close();
       await runtime.close();
       server.closeAllConnections();

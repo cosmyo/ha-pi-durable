@@ -422,6 +422,45 @@ footer {
     font-size: 1.85rem;
   }
 }
+dialog {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  max-width: min(620px, 94vw);
+  padding: 26px;
+  line-height: 1.65;
+}
+dialog::backdrop {
+  background: #000a;
+}
+dialog label,
+dialog a,
+dialog code {
+  display: block;
+  margin: 12px 0;
+}
+dialog a {
+  color: var(--teal);
+}
+dialog input,
+dialog select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  font: inherit;
+  min-width: 0;
+  width: 100%;
+}
+dialog .actions {
+  margin-top: 18px;
+}
+#login-code {
+  color: var(--warm);
+  font-size: 1.3rem;
+}
 @media (prefers-reduced-motion: no-preference) {
   button {
     transition:

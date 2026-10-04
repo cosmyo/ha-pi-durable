@@ -12,10 +12,21 @@ import { Runtime } from "../src/runtime.js";
 import { HAClient, haExtension, Actions } from "../src/ha.js";
 import { Inputs, Proposals } from "../src/documents.js";
 import { offline } from "./fixtures.js";
+import {
+  WorkspaceClient,
+  workspaceExtension,
+  WorkspaceGuard,
+} from "../src/workspace.js";
+import { fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 
-async function dieAt(dir: string, mode: string, stage: string) {
+async function dieAt(
+  dir: string,
+  mode: string,
+  stage: string,
+  fixture = "./crash-child.ts",
+) {
   const child = fork(
-    fileURLToPath(new URL("./crash-child.ts", import.meta.url)),
+    fileURLToPath(new URL(fixture, import.meta.url)),
     [mode, dir],
     {
       execArgv: ["--import", "tsx"],
@@ -52,6 +63,68 @@ async function dieAt(dir: string, mode: string, stage: string) {
     await exit;
   }
 }
+test("SIGKILL during coding: no worker replay and no model-driven reissue without new human input", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-kill-code-"));
+  await dieAt(
+    dir,
+    "workspace",
+    "workspace-writing",
+    "./workspace-crash-child.ts",
+  );
+  const { models, model, faux } = offline();
+  let calls = 0;
+  const client = new WorkspaceClient("/synthetic-unconnected", "a".repeat(64));
+  client.call = async () => {
+    calls++;
+    return { id: "synthetic", content: [], isError: false, unknown: false };
+  };
+  const extension = workspaceExtension(client);
+  faux.setResponses([
+    fauxAssistantMessage(
+      fauxToolCall("write", { path: "synthetic.txt", content: "synthetic" }),
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("Await fresh human instruction; no repeat."),
+  ]);
+  const runtime = await Runtime.open(dir, models, model, [extension], [], {
+    home: [],
+    workspace: [extension],
+  });
+  try {
+    const id = (await runtime.list("owner"))[0]!.id;
+    const input = (await runtime.harness.snapshot(
+      Inputs,
+      id as ConversationId,
+      ctx,
+    ))!.requests["workspace-input-1"]!;
+    await (await runtime.harness.submission(
+      input.submissionId as SubmissionId,
+      ctx,
+    ))!.wait(ctx);
+    assert.equal(calls, 0);
+    assert.equal(
+      await readFile(join(dir, "workspace-attempts.txt"), "utf8"),
+      "write attempted\n",
+    );
+    assert.equal(
+      (
+        await runtime.harness.snapshot(
+          WorkspaceGuard,
+          id as ConversationId,
+          ctx,
+        )
+      )?.blockedEpoch,
+      1,
+    );
+    assert.match(
+      JSON.stringify(await runtime.snapshot("owner", id)),
+      /interrupted|fresh HUMAN/,
+    );
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 for (const mode of ["model", "read"])
   test(`SIGKILL: unfinished ${mode} task really resumes with admitted input deduplication`, async () => {
     const dir = await mkdtemp(join(tmpdir(), `hearth-kill-${mode}-`));

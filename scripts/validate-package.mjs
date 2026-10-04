@@ -19,7 +19,6 @@ for (const field of [
   "ports",
   "webui",
   "image",
-  "map",
   "hassio_api",
   "hassio_role",
   "auth_api",
@@ -32,6 +31,10 @@ for (const field of [
   "devices",
 ])
   assert(!Object.hasOwn(config, field), `Unexpected permission ${field}`);
+assert.deepEqual(config.map, [
+  { type: "addon_config", read_only: false, path: "/workspace_link" },
+]);
+assert.equal(config.options.workspace_enabled, false);
 assert.deepEqual(config.options.authorized_user_ids, []);
 assert.deepEqual(config.options.allowed_entities, []);
 assert.deepEqual(config.options.allowed_services, []);
@@ -44,8 +47,9 @@ for (const name of [
   "@earendil-works/pi-durable",
   "@earendil-works/pi-ai",
   "@earendil-works/chord",
+  "@earendil-works/pi-coding-agent",
 ])
-  assert.equal(pkg.dependencies[name], "1.0.0");
+  assert.equal(pkg.dependencies[name], "1.0.1");
 const lock = JSON.parse(await read("hearth_pi/package-lock.json"));
 for (const [name, version] of Object.entries({
   ...pkg.dependencies,
@@ -76,7 +80,7 @@ for (const file of ["app.js", "render.js"]) {
   assert.equal(result.status, 0, result.stderr.toString());
 }
 const readme = await read("README.md");
-assert(readme.includes("0.1.0"));
+assert(readme.includes(config.version));
 console.log(
   "App packaging: manifest defaults/permissions, versions, exact pins/lockfile, complete local build context and browser syntax verified. Container execution is a separate gate.",
 );

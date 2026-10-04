@@ -21,8 +21,9 @@ export type Config = {
   password: string;
   authorizedUsers: string[];
   dataDir: string;
-  provider: "offline" | "openai";
+  provider: "offline" | "openai" | "openai-codex";
   model: string;
+  workspaceEnabled?: boolean;
   policy: Policy;
   haToken: string;
   apiKey: string;
@@ -49,6 +50,7 @@ export async function loadConfig(): Promise<Config> {
           "provider",
           "model",
           "openai_api_key",
+          "workspace_enabled",
         ])
       : {};
   const port =
@@ -91,7 +93,18 @@ export async function loadConfig(): Promise<Config> {
     options.service_actions_enabled ?? process.env.HEARTH_ACTIONS === "true";
   insist(typeof enabled === "boolean");
   const provider = options.provider ?? process.env.HEARTH_PROVIDER ?? "offline";
-  insist(provider === "offline" || provider === "openai");
+  insist(
+    provider === "offline" ||
+      provider === "openai" ||
+      provider === "openai-codex",
+  );
+  const workspaceEnabled = options.workspace_enabled ?? false;
+  insist(typeof workspaceEnabled === "boolean");
+  if (workspaceEnabled)
+    insist(
+      mode === "ingress" && authorizedUsers.length === 1,
+      "workspace_requires_one_trusted_owner",
+    );
   const apiKey = text(
     options.openai_api_key ?? process.env.OPENAI_API_KEY ?? "",
     500,
@@ -111,11 +124,16 @@ export async function loadConfig(): Promise<Config> {
         : resolve(process.env.HEARTH_DATA_DIR ?? ".local"),
     provider,
     model: text(
-      options.model ??
-        process.env.HEARTH_MODEL ??
-        (provider === "offline" ? "faux" : "gpt-4.1-mini"),
+      options.model ||
+        process.env.HEARTH_MODEL ||
+        (provider === "offline"
+          ? "faux"
+          : provider === "openai-codex"
+            ? "gpt-5.5"
+            : "gpt-4.1-mini"),
       100,
     ),
+    workspaceEnabled,
     policy: { enabled, services, entities },
     haToken: process.env.SUPERVISOR_TOKEN ?? "",
     apiKey,

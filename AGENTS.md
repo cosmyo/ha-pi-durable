@@ -17,7 +17,7 @@ Hearth Pi is an independent, experimental Home Assistant App built on Pi Durable
 - Read-only HA tools are the default. Service mutations require explicit configuration and human approval bound to the exact immutable action.
 - Never automatically retry an interrupted external mutation. An unknown outcome must remain unknown until a human resolves it.
 - Ingress authentication must be enforced at the server boundary, not merely trusted because an identity header is present. Local development must require explicit authentication and bind to loopback.
-- Do not offer arbitrary shell, filesystem, configuration-write, Supervisor-admin, or Docker control tools in the first release.
+- Never offer shell/filesystem/configuration-write/Supervisor-admin/Docker tools in the HA controller or Home conversations. Optional regular Pi coding tools require a separate verified offline non-root confined worker, no controller/HA/credential mounts or network, explicit Code sessions and the unknown-outcome/no-reissue guard. No same-UID/process shortcut.
 - Provider credentials and Supervisor tokens must not enter prompts, transcripts, API responses, browser bundles, or logs.
 - Treat entity attributes, tool output and model output as untrusted data. Render text safely and validate all HTTP and tool arguments.
 

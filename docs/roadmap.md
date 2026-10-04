@@ -1,7 +1,11 @@
 # Roadmap (non-commitments)
 
-**0.1.0 implemented locally:** real Pi Durable/SQLite sessions and restart recovery; authenticated Ingress/local server; bounded, explicitly scoped HA reads; disabled-by-default exact light/switch approval ledger; offline demonstration and OpenAI API-key adapter. See [validation](validation.md) before testing in isolation.
+**0.1.0 baseline:** genuine durable SQLite sessions/recovery, authenticated Ingress/local server, scoped HA reads, disabled-by-default exact light/switch approval ledger, offline demo and API-key provider.
 
-**Next validation gate:** run both architecture container smokes and actual isolated Supervisor install/Ingress, mobile iframe/origin behavior, startup UID/data permissions, cold backup/restore, graceful shutdown and provider-paid inference under an approved test account. Neither deployment nor physical power loss has been tested here.
+**0.2.0 implementation:** official ChatGPT/Codex OAuth with protected storage/headless login; explicit Home/Code capability groups; genuine regular-Pi coding tools in a separate offline constrained worker; no automatic coding replay/reissue after uncertain outcome. These are implementations with separate [validation gates](validation.md), not a production guarantee.
 
-**Future proposals requiring design/review:** admin-configured OpenAI-compatible/local endpoint with SSRF and credential-origin controls; provider OAuth UX/secret storage; finer entity privacy, retention/export and practical token benchmarks. Later separate milestones could explore Assist/voice, planning-only config diffs followed by tested backups/rollback, or isolated external tools. None are current capabilities. Do not market “fully local” from the offline faux mode, claim token savings without a benchmark, or treat voice/config writes as enabled by this roadmap.
+**Current validation:** real Supervisor install/Ingress on an authorized test host, external HTTPS/cookie/CSP/SSE, worker OS/mount/route denial and human subscription login, then a privacy-safe real demo. Native container CI is distinct from live deployment. Physical power loss, restoration, mobile iframe behavior and performance benchmarks remain separate.
+
+**Future proposals requiring design/review:** easier Supervisor-managed worker provisioning with equivalent confinement, per-user workspaces/credentials, finer HA data privacy, retention/export, practical cost/context benchmarks, reviewed custom/local endpoints with SSRF/origin controls, and optional Assist/voice integration. Pi extension/MCP loading, HA configuration editing and privileged administrative agents are not enabled by this roadmap.
+
+Don't market faux offline mode as local inference, claim token savings without benchmarks, claim exactly-once physical effects or conceal unsupported deployment paths.

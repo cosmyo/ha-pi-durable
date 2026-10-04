@@ -1,5 +1,5 @@
 import { createModels, type Models } from "@earendil-works/pi-ai/models";
-import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import {
   fauxProvider,
   fauxAssistantMessage,
@@ -32,6 +32,7 @@ export function safeModels(models: Models, secrets: string[]): Models {
         const source = models.streamSimple(model, transcript, {
           ...options,
           maxTokens: 2048,
+          transport: "sse",
           signal: options?.signal
             ? AbortSignal.any([options.signal, abort.signal])
             : abort.signal,
@@ -87,42 +88,43 @@ export function safeModels(models: Models, secrets: string[]): Models {
     },
   });
 }
-export function configuredModels(config: Config): {
+export async function configuredModels(
+  config: Config,
+  native: ModelRuntime,
+  secrets: string[],
+): Promise<{
   models: Models;
   provider: string;
   modelId: string;
-} {
-  const models = createModels();
-  if (config.provider === "openai") {
-    if (!config.apiKey.startsWith("sk-"))
-      throw new Error("api_key_auth_required");
-    process.env.OPENAI_API_KEY = config.apiKey;
-    models.setProvider(openaiProvider());
-    if (!models.getModel("openai", config.model))
+}> {
+  if (config.provider !== "offline") {
+    if (config.provider === "openai") {
+      if (!config.apiKey.startsWith("sk-"))
+        throw new Error("api_key_auth_required");
+      await native.setRuntimeApiKey("openai", config.apiKey);
+    }
+    if (!native.getModel(config.provider, config.model))
       throw new Error("unsupported_model");
     return {
-      models: safeModels(models, [
-        config.apiKey,
-        config.haToken,
-        config.password,
-      ]),
-      provider: "openai",
+      models: safeModels(native, secrets),
+      provider: config.provider,
       modelId: config.model,
     };
   }
+  const models = createModels();
   const faux = fauxProvider({
     models: [{ id: "faux", name: "Offline demonstration" }],
   });
   const respond = () => {
     faux.appendResponses([respond]);
     return fauxAssistantMessage(
-      "Offline mode is ready. No inference or HA action was performed. Configure an OpenAI API key and exact entity scope in server options to use the assistant.",
+      "Offline mode is ready. No inference or HA action was performed. Select ChatGPT/Codex subscription OAuth or an OpenAI API key, and exact entity scope in server options to use the assistant.",
     );
   };
   faux.setResponses([respond]);
   models.setProvider(faux.provider);
   return {
-    models: safeModels(models, [config.haToken, config.password]),
+    models: safeModels(models, secrets),
     provider: faux.getModel().provider,
     modelId: faux.getModel().id,
   };

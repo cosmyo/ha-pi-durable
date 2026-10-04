@@ -15,6 +15,26 @@ import { Proposals } from "../src/documents.js";
 import { safeModels } from "../src/models.js";
 import { offline } from "./fixtures.js";
 
+test("HA output redacts refreshed OAuth canaries added after client construction", async () => {
+  const secrets: string[] = [];
+  const refreshed = "synthetic-refreshed-oauth-access-canary";
+  const ha = new HAClient(
+    "synthetic-ha-token",
+    { enabled: false, entities: ["light.example"], services: [] },
+    (async () =>
+      Response.json({
+        entity_id: "light.example",
+        state: "off",
+        attributes: { friendly_name: refreshed },
+      })) as typeof fetch,
+    secrets,
+  );
+  secrets.push(refreshed);
+  const result = JSON.stringify(await ha.state("light.example"));
+  assert.doesNotMatch(result, /synthetic-refreshed-oauth/);
+  assert.match(result, /REDACTED/);
+});
+
 export function fakeHA(
   post: () => Promise<Response> = async () => Response.json([]),
 ): typeof fetch {

@@ -12,7 +12,7 @@ cleanup() { docker rm -f "$name" >/dev/null 2>&1 || true; docker run --rm --user
 trap cleanup EXIT INT TERM
 printf '%s\n' '{"authorized_user_ids":["synthetic-admin"],"service_actions_enabled":false,"allowed_services":[],"allowed_entities":[],"public_origin":"https://home.example","provider":"offline","model":"faux","openai_api_key":""}' > "$data/options.json"
 chmod 600 "$data/options.json"
-docker build --platform "$platform" --build-arg "BUILD_ARCH=$arch" --build-arg BUILD_VERSION=0.1.0 -t "$image" hearth_pi
+docker build --platform "$platform" --build-arg "BUILD_ARCH=$arch" --build-arg BUILD_VERSION=0.2.0 -t "$image" hearth_pi
 docker run -d --name "$name" --init --network none -v "$data:/data" "$image" >/dev/null
 for attempt in 1 2 3 4 5 6 7 8 9 10; do
   if docker logs "$name" 2>&1 | grep -q 'Hearth Pi ready'; then break; fi

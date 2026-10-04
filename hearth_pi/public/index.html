@@ -17,12 +17,57 @@
         <p>A durable AI agent for Home Assistant</p>
       </div>
       <span class="pill" id="connection" role="status">Connecting</span>
+      <button id="account" type="button">ChatGPT login</button>
     </header>
+    <dialog id="account-dialog" aria-labelledby="account-title">
+      <h2 id="account-title">ChatGPT / Codex subscription</h2>
+      <p>
+        Official Pi OAuth. Credentials stay in the controller, never in the
+        coding workspace. Your subscription's limits apply. API-key billing is
+        separate.
+      </p>
+      <p class="muted">
+        Select provider <code>openai-codex</code> in the App configuration to
+        use this login. Signing out here removes the local credential; it does
+        not revoke your account.
+      </p>
+      <p id="account-status" role="status"></p>
+      <label for="login-method">Login method</label>
+      <select id="login-method">
+        <option value="device_code">Device code (recommended for HA)</option>
+        <option value="browser">Browser / pasted redirect URL</option>
+      </select>
+      <button id="login-start" type="button">Sign in with ChatGPT</button>
+      <a id="login-url" target="_blank" rel="noopener noreferrer" hidden
+        >Continue at OpenAI</a
+      >
+      <code id="login-code"></code>
+      <form id="login-answer" autocomplete="off" hidden>
+        <label class="sr-only" for="login-redirect"
+          >Final localhost redirect URL</label
+        >
+        <input
+          id="login-redirect"
+          type="password"
+          autocomplete="off"
+          placeholder="Paste final localhost:1455 redirect URL"
+          maxlength="4096"
+          required
+        />
+        <button type="submit">Complete login</button>
+      </form>
+      <div class="actions">
+        <button id="login-cancel" type="button" hidden>Cancel login</button>
+        <button id="login-logout" type="button" hidden>Sign out locally</button>
+        <button id="account-close" type="button">Close</button>
+      </div>
+    </dialog>
     <main>
       <aside aria-label="Sessions">
         <div class="section-head">
           <h2>Your sessions</h2>
-          <button id="new-session" type="button">＋ New</button>
+          <button id="new-session" type="button">＋ Home</button>
+          <button id="new-workspace" type="button" hidden>＋ Code</button>
         </div>
         <nav id="sessions" aria-label="Select a session"></nav>
         <div class="aside-note">

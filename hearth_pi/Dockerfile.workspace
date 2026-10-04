@@ -1,0 +1,19 @@
+# Worker build context is hearth_pi/, same pinned public SDK/lockfile.
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json tsconfig.build.json ./
+COPY src ./src
+RUN npm run build && npm prune --omit=dev
+
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
+RUN apt-get update && apt-get install -y --no-install-recommends bash python3 git && rm -rf /var/lib/apt/lists/*
+COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/dist /app/dist
+COPY --from=build /app/package.json /app/package.json
+ENV NODE_ENV=production HOME=/tmp LANG=C.UTF-8
+USER 1001:1000
+WORKDIR /workspace
+# Mandatory runtime gate rejects root/network/capability/unconfined deployments.
+CMD ["node", "/app/dist/worker.js"]

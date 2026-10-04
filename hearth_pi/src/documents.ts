@@ -9,6 +9,7 @@ export type SessionItem = {
   title: string;
   created: number;
   creationId: string;
+  kind?: "home" | "workspace";
 };
 export const Catalog = defineDoc<{ items: SessionItem[] }>({
   kind: "hearth.catalog",

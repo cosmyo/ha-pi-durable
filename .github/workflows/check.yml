@@ -24,3 +24,4 @@ jobs:
       - run: npm run check
       - run: npm --prefix hearth_pi audit --omit=dev
       - run: sh scripts/container-smoke.sh ${{ matrix.arch }}
+      - run: sh scripts/workspace-smoke.sh ${{ matrix.arch }}

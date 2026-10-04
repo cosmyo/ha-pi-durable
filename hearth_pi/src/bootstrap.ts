@@ -1,4 +1,12 @@
-import { mkdir, chmod, chown, lstat } from "node:fs/promises";
+import {
+  mkdir,
+  chmod,
+  chown,
+  lstat,
+  writeFile,
+  readFile,
+} from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { insist } from "./safety.js";
 import type { Config } from "./config.js";
@@ -24,6 +32,7 @@ export async function dropAppPrivileges(config: Config): Promise<void> {
     "hearth.sqlite",
     "hearth.sqlite-wal",
     "hearth.sqlite-shm",
+    "chatgpt-oauth.json",
   ]) {
     const path = join("/data", name);
     const stat = await lstat(path).catch((error) => {
@@ -35,6 +44,34 @@ export async function dropAppPrivileges(config: Config): Promise<void> {
       await chown(path, 1000, 1000);
       await chmod(path, 0o600);
     }
+  }
+  if (config.workspaceEnabled) {
+    // ONLY this App's addon_config mapping, not Home Assistant's /config.
+    const bridge = "/workspace_link/bridge";
+    await mkdir(bridge, { recursive: true, mode: 0o750 });
+    const directory = await lstat(bridge);
+    insist(
+      directory.isDirectory() && !directory.isSymbolicLink(),
+      "unsafe_workspace_bridge",
+    );
+    const key = join(bridge, "key");
+    await writeFile(key, randomBytes(32).toString("hex"), {
+      flag: "wx",
+      mode: 0o440,
+    }).catch((e) => {
+      if (e.code !== "EEXIST") throw e;
+    });
+    const stat = await lstat(key);
+    insist(
+      stat.isFile() &&
+        !stat.isSymbolicLink() &&
+        /^[a-f0-9]{64}$/.test(await readFile(key, "utf8")),
+      "unsafe_workspace_key",
+    );
+    await chown(bridge, 1001, 1000);
+    await chmod(bridge, 0o750);
+    await chown(key, 1001, 1000);
+    await chmod(key, 0o440);
   }
   process.setgroups?.([]);
   process.setgid?.(1000);

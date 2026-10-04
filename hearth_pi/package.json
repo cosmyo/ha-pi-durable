@@ -1,6 +1,6 @@
 {
   "name": "hearth-pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,9 +14,10 @@
     "dev": "tsx src/main.ts"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.0.0",
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-durable": "1.0.0"
+    "@earendil-works/chord": "1.0.1",
+    "@earendil-works/pi-ai": "1.0.1",
+    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@earendil-works/pi-durable": "1.0.1"
   },
   "devDependencies": {
     "@types/node": "24.10.1",
@@ -25,5 +26,8 @@
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "yaml": "2.8.3"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.12"
   }
 }

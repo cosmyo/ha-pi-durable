@@ -1,5 +1,5 @@
 name: Hearth Pi
-version: "0.1.0"
+version: "0.2.0"
 slug: hearth_pi
 url: https://github.com/cosmyo/ha-pi-durable
 description: Independent experimental durable AI assistant with read-only tools by default
@@ -18,6 +18,13 @@ panel_title: Hearth Pi
 panel_admin: true
 homeassistant_api: true
 backup: cold
+breaking_versions:
+  - "0.2.0"
+# Only this App's own bridge directory, never HA Core configuration.
+map:
+  - type: addon_config
+    read_only: false
+    path: /workspace_link
 options:
   authorized_user_ids: []
   service_actions_enabled: false
@@ -25,8 +32,9 @@ options:
   allowed_entities: []
   public_origin: "https://home.example"
   provider: offline
-  model: "gpt-4.1-mini"
+  model: ""
   openai_api_key: ""
+  workspace_enabled: false
 schema:
   authorized_user_ids:
     - str
@@ -36,6 +44,7 @@ schema:
   allowed_entities:
     - str
   public_origin: str
-  provider: list(offline|openai)
+  provider: list(offline|openai|openai-codex)
   model: str
   openai_api_key: password
+  workspace_enabled: bool

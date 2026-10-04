@@ -8,7 +8,7 @@ COPY src ./src
 RUN npm run build && npm prune --omit=dev
 
 FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
-ARG BUILD_VERSION=0.1.0
+ARG BUILD_VERSION=0.2.0
 ARG BUILD_ARCH
 LABEL io.hass.name="Hearth Pi" io.hass.description="Experimental durable Home Assistant agent" io.hass.version="${BUILD_VERSION}" io.hass.type="app" io.hass.arch="${BUILD_ARCH}" org.opencontainers.image.licenses="MIT"
 WORKDIR /app

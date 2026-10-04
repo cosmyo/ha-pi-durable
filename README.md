@@ -4,63 +4,60 @@
 
 ![Original Hearth Pi mark](hearth_pi/icon.png)
 
-**Independent community App · 0.1.0 · experimental.** Hearth Pi is not an official Home Assistant or Pi product. Pi Durable 1.0.0 explicitly warns that its API can change without notice. This repository is an initial locally verified implementation, not a claim of live deployment, an audit, or a published App-store release.
-
-A thoughtful chat surface for understanding your home—with a reliable boundary between **a suggestion** and **an action**.
+**Independent community App · 0.2.0 · experimental.** Not an official Home Assistant or Pi product. The pinned Pi 1.0.1 APIs are experimental. This is a technical preview, not a production recommendation or external security audit.
 
 [![Checks and native container smoke](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml/badge.svg)](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml)
 
 ![Hearth Pi offline demonstration and reload](docs/images/offline-demo.gif)
 
-_Ten-second real UI capture using synthetic offline data, including page reload and committed-history hydration. No model inference or Home Assistant action was performed._
+_The original 0.1.0 GIF is a real browser capture with synthetic offline data and history restored after reload. No model inference or HA action occurred; it does not depict the newer subscription/workspace features._
 
-- **Continuity, not just saved chats.** Real version-pinned `@earendil-works/pi-durable` commits admitted inputs, task checkpoints, transcripts and application documents to SQLite with `synchronous=FULL`. Interrupted model/read work resumes after reopening. One SQLite connection owns the store exclusively.
-- **Your sessions, your view.** Persistent ownership-checked sessions, reconnecting full SSE snapshots, committed partial answers, tool visibility, reported token usage and mobile-friendly text rendering.
-- **Read-only by default.** Four original HA extension tools: scoped state search, individual state detail, live allowlisted-service discovery and immutable service proposals. Empty entity scope denies all reads. No shell, filesystem, admin, configuration-write or generic network tools.
-- **Human decisions, durable receipts.** Optional exact allowlisted light/switch actions require review of the original entity/data/hash. A dispatch intent is committed before one external attempt. Timeout or interrupted dispatch stays **unknown**, never automatically retried. HTTP acceptance is not device-state verification.
+- **Continuity, not just history.** Genuine pinned Pi Durable commits admitted inputs, task checkpoints, transcripts and documents to SQLite with `synchronous=FULL`. One writer owns each store. Reconnect to committed state.
+- **Home mode.** Explicitly scoped HA reads, service discovery and immutable light/switch proposals. Empty scope denies reads. Actions are disabled by default; enabling them still requires exact human approval. No Home-mode shell, filesystem, configuration, Docker or Supervisor-admin tools.
+- **Code mode, separately confined.** Genuine Pi coding-agent `read`, `edit`, `write` and `bash` tools run in an optional **separate** non-root, no-network worker container. It has its own files—not HA configuration, controller `/data`, SSH/Docker access or HA/provider credentials. Code sessions do not receive HA tools. This preview supports one trusted coding operator.
+- **ChatGPT subscription support.** Official Pi `openai-codex` OAuth, with headless device-code login and a state-checked browser redirect fallback. Tokens stay in private controller storage. OpenAI API-key mode is separate; a ChatGPT subscription does **not** make API-key calls free.
+- **Uncertain effects stay uncertain.** Interrupted coding calls are not replayed; an interrupted workspace turn requires a fresh human input before more tool execution. HA dispatches persist intent before one attempt; interrupted dispatch is unknown and never automatically retried. A service receipt is not physical-device verification.
 
-For ordinary voice control, consider [official Assist](https://www.home-assistant.io/voice_control/) first. Hearth Pi explores durable agent execution and exact reviewed actions, not replacing Assist or granting an agent administrative access. A plain chat-history file—or regular Pi coding agent—does not provide these task/admission checkpoints or our external-action ledger. We do **not** promise exactly-once physical effects.
+For ordinary voice control, consider [official Assist](https://www.home-assistant.io/voice_control/) first. Hearth Pi explores durable execution and explicit boundaries, not administrative autonomy. We do not promise exactly-once physical effects, local inference or power-loss proof.
 
-## Try it without AI credentials
+## Try without AI credentials
 
-Target: **Node 24.21.0 LTS**, npm, a clean checkout. No HA is needed for the offline demonstration.
+Use **Node 24.21.0 LTS**, npm and a clean checkout:
 
 ```sh
 npm ci
 npm --prefix hearth_pi ci
 npm run check
-# In Bash, choose a private 24+ character local password (not an API key):
+# In Bash; choose a private 24+ character password, not an API key:
 read -r -s -p 'Local password: ' HEARTH_LOCAL_PASSWORD; printf '\n'
 export HEARTH_LOCAL_PASSWORD
 HEARTH_MODE=local HEARTH_PROVIDER=offline npm --prefix hearth_pi start
 ```
 
-Open `http://127.0.0.1:8099/`; browser authentication username is **hearth**, password is the one you entered. Create a session and send a message. The actual durable harness uses the upstream faux provider; it returns an explicitly offline demonstration response, **not model inference**. Stop with Ctrl+C; restart and reconnect to committed state. Local mode binds only loopback, never trusts Ingress identity headers, requires a password and refuses root.
+Open `http://127.0.0.1:8099/`; username **hearth**, password as entered. The real durable harness uses an explicitly offline faux provider, not an LLM. Restart and reload to see committed history. Local mode binds loopback, rejects root and never trusts Ingress identity headers. Local state stays in ignored `hearth_pi/.local/`.
 
-Local state defaults to `hearth_pi/.local/` when using the command above. Keep it out of Git. An exclusive owner prevents a second server opening the same store. Use a local disk, not a network share. Admission is bounded (four active conversations, one in-flight input per conversation); limits return explicit errors rather than silently queuing unlimited work.
+## Home Assistant installation
 
-## Home Assistant App
+Public source repository: **https://github.com/cosmyo/ha-pi-durable**. Add it to the HA App store only on an authorized test installation and follow [App installation/options](hearth_pi/DOCS.md).
 
-The self-contained [`hearth_pi/`](hearth_pi/) directory is the complete Docker build context: source, UI, manifest and committed lockfile. No generated sync copy or context escape is needed. It requests only `homeassistant_api: true`, Ingress and persistent `/data`; **no public ports, HA config mounts, Supervisor-admin/auth/Docker APIs or privilege grants**.
+The complete App build context is `hearth_pi/`. It requests Ingress, HA's scoped API proxy and private `/data`, plus **only its own** `addon_config` bridge directory. No public ports, HA Core configuration mounts, Supervisor-admin/auth/Docker APIs or added privileges. The optional coding worker requires a trusted operator to create a separately constrained container; the App/agent cannot create Docker containers. [Workspace installation and boundaries](docs/workspace.md).
 
-Follow [installation and options](hearth_pi/DOCS.md) on an **authorized isolated test installation**, or build locally using [the container gate](docs/validation.md). No remote repository URL or prebuilt image is invented here. Publishing and live installation have not been performed.
+All authorization/action/entity lists start empty; coding is disabled. Configure exact trusted operator IDs and the HTTPS origin used by your browser. Sidebar admin visibility is not server authorization or proof of current HA role membership. Authorized IDs are trusted App operators, including access to its shared provider setup; don't add untrusted household/guest accounts.
 
-Options start with no authorized user IDs, no entities and no permitted actions. Set the exact HA user IDs designated by your administrator, your external HTTPS origin and explicit entity scope. Sidebar `panel_admin` visibility is not authorization: every protected route checks the actual documented Ingress proxy socket peer and a configured ID. The IDs are an administrator-managed authorization list, **not proof of current HA role membership**.
+## Providers and privacy
 
-## Providers and data
+- `offline`: demonstration only; no inference.
+- `openai`: official OpenAI API-key endpoint; separate API billing.
+- `openai-codex`: ChatGPT subscription OAuth through Pi ModelRuntime. Sign in from **ChatGPT login** in the App. Account eligibility, model availability and provider limits still apply. Never put tokens or redirect URLs in chat/issues/recordings.
 
-Initial inference support is **OpenAI API-key authentication**, a model ID in the pinned provider catalog (default `gpt-4.1-mini`), and the official OpenAI endpoint only. Its real Responses adapter is tested with fake HTTP, including request/auth/stream/error handling; no live paid inference has been tested. Secrets come only from server environment or HA App options. They never belong in chat.
+Explicit protected storage replaces Pi's default credential/resource discovery. No personal `~/.pi` configuration, extensions or credentials are copied into the App or worker. Custom/local endpoints, voice integration and general Pi extension/MCP loading are not supported in this preview.
 
-**Subscription/Codex OAuth, custom OpenAI-compatible endpoints, local model inference and voice integration are deferred.** Upstream OAuth support does not make a safe container/Ingress login UX automatic. The offline mode is not a local LLM.
+When an online provider is used, input, conversation context, tool declarations and selected tool output go to that provider. That includes coding files you explicitly read. Requests use `store:false`; provider retention/account policies still apply. Reported token counts are **not a bill**. There is no App telemetry. [Security and threat model](docs/security.md).
 
-When OpenAI is selected, user input, conversation context, tool declarations and selected HA tool output are sent to OpenAI. Upstream requests set `store:false`; this does not supersede the provider's retention, billing or account policies. No app telemetry. HA attributes and model/tool output remain untrusted even when read-only.
+## Evidence and limitations
 
-## Verification and limits
+`npm run check` covers typechecking, real-harness/SIGKILL recovery, request deduplication, API/auth/approval tests, synthetic provider tests, genuine Pi tools over authenticated IPC, DOM rendering, production compilation, package validation and selected secret patterns. Native amd64/aarch64 CI includes separate controller and confined-worker Docker gates. A badge or green smoke test does not prove a real Supervisor deployment, a live subscription login or a mobile iframe.
 
-`npm run check` runs type checks, real-harness offline/process-death tests, HTTP/auth/approval/DOM tests, production compilation, static App validation and a local secret-pattern scan. CI is configured for native Linux amd64/aarch64 checks and isolated container smoke tests; **CI passes are not claimed**.
+[Validation evidence and remaining gates](docs/validation.md) separates verified paths from unfinished work. Backup restoration, physical power loss, real mobile behavior and broad performance remain separate tests. Model work may be repeated after recovery and consume account allowance/cost; physical and coding mutations do not automatically replay. Workspace files need a separate backup; an App database restore does not undo file/device effects.
 
-[Validation evidence and gaps](docs/validation.md) distinguish tested local paths from untested Docker execution, Supervisor installation/Ingress, mobile iframe behavior, backup restore and power loss. The local Docker daemon was unavailable. Container bootstrap reads root-owned options and then drops to UID/GID 1000 before agent/network work; static source checks are not proof that Supervisor permissions work in deployment.
-
-SQLite FULL asks SQLite/the filesystem to synchronize commits; SIGKILL tests are **not physical power-failure tests**. Recovery may repeat model requests (and incur cost), or repeat safe reads. Mutation intents never repeat. Every restart rejects still-pending approvals and converts unresolved dispatch intents to unknown, including conservative backup-rollback handling. Unknown actions require human reconciliation, not a retry button.
-
-See [architecture](docs/architecture.md), [security/threat model](docs/security.md), [research](docs/research.md), [roadmap](docs/roadmap.md), [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md). All application code and artwork are original, MIT-licensed to Hearth Pi contributors. Dependency license metadata is described in [third-party notes](docs/third-party.md).
+See [architecture](docs/architecture.md), [workspace](docs/workspace.md), [research](docs/research.md), [roadmap](docs/roadmap.md), [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md). Application code/artwork are original and MIT-licensed; [third-party notes](docs/third-party.md) describe dependencies.
