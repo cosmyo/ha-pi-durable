@@ -1,5 +1,6 @@
 import { createServer } from "node:net";
-import { readFile, chmod, unlink } from "node:fs/promises";
+import { readFile, chmod, unlink, lstat, access } from "node:fs/promises";
+import { constants } from "node:fs";
 import { networkInterfaces } from "node:os";
 import { pathToFileURL } from "node:url";
 import { createCodingTools } from "@earendil-works/pi-coding-agent";
@@ -16,7 +17,7 @@ export async function verifyWorkerIsolation() {
     "isolated_linux_worker_required",
   );
   const status = await readFile("/proc/self/status", "utf8");
-  for (const name of ["CapInh", "CapPrm", "CapEff", "CapAmb"])
+  for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"])
     insist(
       new RegExp(`^${name}:\\s+0+$`, "m").test(status),
       "worker_capabilities_present",
@@ -42,6 +43,16 @@ export async function verifyWorkerIsolation() {
     root?.split(" ")[5]?.split(",").includes("ro"),
     "worker_rootfs_must_be_readonly",
   );
+  const workspace = await lstat("/workspace");
+  insist(
+    workspace.isDirectory() &&
+      !workspace.isSymbolicLink() &&
+      workspace.uid === 1001 &&
+      workspace.gid === 1000 &&
+      (workspace.mode & 0o777) === 0o700,
+    "private_workspace_ownership_required",
+  );
+  await access("/workspace", constants.W_OK);
 }
 export async function serveWorker(
   socketPath: string,

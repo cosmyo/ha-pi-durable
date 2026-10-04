@@ -34,7 +34,7 @@ This preview requires a Docker-capable **trusted operator** on an authorized HA 
    sh scripts/install-workspace.sh local_hearth_pi hearth-pi-workspace:0.2.0
    ```
 
-3. The installer resolves only the controller's own `addon_config` mount via Docker inspection. It initializes a new private workspace volume and never silently replaces an existing worker/container or recursively changes user files.
+3. The installer resolves only the controller's own `addon_config` mount via Docker inspection (current `app_` or legacy `addon_` container name). It initializes a new private UID1001/GID1000 `0700` workspace volume with `volume-nocopy`: Docker must not reset an empty initialized volume from the image directory. It never silently replaces an existing worker/container or recursively changes user files. An existing volume with wrong ownership needs explicit operator inspection, not automatic repair.
 4. Verify Docker flags/mounts, worker startup gate, UID/capabilities/no-new-privs/seccomp/AppArmor, no routes, absence of HA/provider secrets and genuine tool execution. The worker fails closed if confinement is missing. A successful `docker run` is not verification.
 5. Sign in/configure inference in the controller, create **＋ Code**, and request work on synthetic files first. No physical HA actions occur from Code mode.
 
