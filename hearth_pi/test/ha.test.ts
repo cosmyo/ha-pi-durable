@@ -35,6 +35,77 @@ test("HA output redacts refreshed OAuth canaries added after client construction
   assert.match(result, /REDACTED/);
 });
 
+test("real HA tool paginates beyond 500 without widening exact read scope or enabling actions", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-large-scope-"));
+  const { faux, models, model } = offline();
+  const entities = Array.from(
+    { length: 876 },
+    (_, i) => `sensor.example_${String(i).padStart(4, "0")}`,
+  );
+  let reads = 0;
+  const ha = new HAClient(
+    "synthetic-ha-token",
+    { enabled: false, services: [], entities },
+    (async (_url, init) => {
+      assert.equal(init?.method, "GET");
+      reads++;
+      return Response.json(
+        [...entities, "sensor.private"].map((entity_id) => ({
+          entity_id,
+          state: "on",
+          attributes: {},
+        })),
+      );
+    }) as typeof fetch,
+  );
+  const runtime = await Runtime.open(dir, models, model, [haExtension(ha)]);
+  try {
+    const id = await runtime.create(
+      "owner",
+      "Large scoped home",
+      "create-large",
+    );
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("ha_search_states", { query: "", offset: 520 }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("Read-only discovery completed."),
+    ]);
+    const sid = await runtime.submit("owner", id, "request-large", "Next page");
+    assert.equal(
+      (
+        await (await runtime.harness.submission(
+          sid as SubmissionId,
+          ctx,
+        ))!.wait(ctx)
+      ).status,
+      "done",
+    );
+    assert.equal(reads, 1, "The real tool schema must admit a page past 500");
+    const snapshot = JSON.stringify(await runtime.snapshot("owner", id));
+    assert.match(snapshot, /sensor.example_0520/);
+    assert.match(snapshot, /sensor.example_0539/);
+    assert.doesNotMatch(snapshot, /sensor.private/);
+    const last = await ha.search("", 860);
+    assert.equal(last.items.length, 16);
+    assert.equal(last.nextOffset, null);
+    await assert.rejects(ha.state("sensor.private"), /entity_not_allowed/);
+    assert.throws(
+      () =>
+        ha.action({
+          service: "switch.turn_on",
+          entityId: entities[0],
+          data: {},
+        }),
+      /service_not_allowed/,
+    );
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 export function fakeHA(
   post: () => Promise<Response> = async () => Response.json([]),
 ): typeof fetch {
@@ -78,11 +149,15 @@ test("real HA extension proposes only; exact owner/hash/one-use approval; redact
       return Response.json([]);
     }),
   );
+  ha.actions.authorizeOwners(["owner"]);
   const runtime = await Runtime.open(
     dir,
     safeModels(models, ["synthetic-ha-token"]),
     model,
     [haExtension(ha)],
+    [],
+    undefined,
+    ha.actions,
   );
   try {
     const id = await runtime.create("owner", "Actions", "create-ha-1");
@@ -190,12 +265,15 @@ test("dispatch timeout remains unknown; disabled and stale approvals fail closed
       throw new Error("synthetic-token");
     }),
   );
+  ha.actions.authorizeOwners(["owner"]);
   const runtime = await Runtime.open(
     dir,
     models,
     model,
     [haExtension(ha)],
     ["synthetic-token"],
+    undefined,
+    ha.actions,
   );
   try {
     const id = await runtime.create("owner", "Review", "create-ha-2");
@@ -214,7 +292,7 @@ test("dispatch timeout remains unknown; disabled and stale approvals fail closed
     await (await runtime.harness.submission(sid as SubmissionId, ctx))!.wait(
       ctx,
     );
-    const p = Object.values(
+    let p = Object.values(
       (await runtime.harness.snapshot(Proposals, id as ConversationId, ctx))!
         .items,
     )[0]!;
@@ -222,9 +300,37 @@ test("dispatch timeout remains unknown; disabled and stale approvals fail closed
     ha.policy.enabled = false;
     await assert.rejects(
       actions.decide("owner", id, p.id, p.hash, "approve"),
-      /service_not_allowed/,
+      /home_read_only/,
     );
     ha.policy.enabled = true;
+    await assert.rejects(
+      actions.decide("owner", id, p.id, p.hash, "approve"),
+      /action_permission_stale/,
+    );
+    faux.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("ha_propose_service", {
+          service: "light.turn_on",
+          entityId: "light.example",
+          data: {},
+        }),
+        { stopReason: "toolUse" },
+      ),
+      fauxAssistantMessage("New review after policy change"),
+    ]);
+    const fresh = await runtime.submit(
+      "owner",
+      id,
+      "request-ha-fresh",
+      "Request a new proposal",
+    );
+    await (await runtime.harness.submission(fresh as SubmissionId, ctx))!.wait(
+      ctx,
+    );
+    p = Object.values(
+      (await runtime.harness.snapshot(Proposals, id as ConversationId, ctx))!
+        .items,
+    ).sort((a, b) => b.created - a.created)[0]!;
     await runtime.harness.commit(async (tx) => {
       (await tx.doc(Proposals, id as ConversationId)).items[p.id]!.expires = 1;
     }, ctx);

@@ -62,6 +62,24 @@
         <button id="account-close" type="button">Close</button>
       </div>
     </dialog>
+    <section id="home-permissions" aria-label="Home permissions">
+      <label for="home-mode">Home permissions</label>
+      <select id="home-mode">
+        <option value="read-only">Read-only</option>
+        <option value="ask">Ask</option>
+        <option value="full">Full access</option>
+      </select>
+      <button id="save-home-mode" type="button">Apply Home permissions</button>
+      <button id="emergency-read-only" type="button">
+        Emergency Read-only
+      </button>
+      <p id="permission-summary" role="status"></p>
+      <p class="muted">
+        Only configured exact light/switch on/off and light brightness. No Home
+        shell, config, SSH, Docker, scripts or admin access. Code permissions
+        are unchanged and separately confined.
+      </p>
+    </section>
     <main>
       <aside aria-label="Sessions">
         <div class="section-head">
@@ -130,8 +148,10 @@
               <p>
                 Ask Hearth to understand your home, build a useful status view,
                 or carry a scoped task through with evidence. Conversation and
-                canvas state are committed by Pi Durable. Device actions still
-                require exact human review; nothing executes from model prose.
+                canvas state are committed by Pi Durable. Device actions follow
+                Home permissions: Ask reviews each action; explicitly
+                acknowledged Full access auto-approves only supported scoped
+                actions. Model prose is not an action receipt.
               </p>
               <p>Create a session to begin.</p>
             </div>

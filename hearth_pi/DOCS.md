@@ -6,11 +6,11 @@ Use an **authorized test Home Assistant installation**, with a backup/rollback p
 
 - `authorized_user_ids`: explicit trusted HA operator IDs. `[]` denies everyone. Server identity requires the documented Ingress socket peer and one `X-Remote-User-Id`; sidebar admin visibility is not authentication or proof of current role. Authorized operators may use/setup/remove the installation's shared provider credential. Do not add untrusted/guest users.
 - `public_origin`: exact external HTTPS origin, no path/trailing slash, e.g. `https://home.example`. Needed for Origin/CSRF and iframe policy. Alternative origins are not implicitly accepted.
-- `allowed_entities`: exact entity IDs for Home-mode reads and optional reviewed actions. Empty denies all. Scope filters output, not the broad underlying HA token or states response processed in memory.
+- `allowed_entities`: up to 10,000 exact entity IDs for Home reads and optional supported actions; no wildcards/all-future scope. Search pages contain twenty items. Empty denies all. Scope filters output, not the broad underlying HA token or states response processed in memory.
 - `provider`: `offline`, `openai`, or `openai-codex`. Offline is a faux response, not local inference. Online conversations and selected HA/coding output go to the provider.
 - `model`: empty selects the provider default: `gpt-4.1-mini` for API-key mode, `gpt-5.5` for Codex, faux for offline. An explicit value must be in the pinned provider catalog and available to your account.
 - `openai_api_key`: used only for `openai` API-key mode. Server-side secret; options/backups are sensitive. ChatGPT subscription access does not make this API billing free.
-- `service_actions_enabled`: false by default. Optional `allowed_services` contains only `light.turn_on`, `light.turn_off`, `switch.turn_on`, `switch.turn_off`, with exact allowed entities. The model proposes; the human approves the immutable entity/data/hash once. No indirect area/device/group selectors. An HTTP receipt is not device verification.
+- `service_actions_enabled`: false by default. Optional `allowed_services` contains only `light.turn_on`, `light.turn_off`, `switch.turn_on`, `switch.turn_off`, with exact allowed entities. **Home permissions** defaults to Read-only with writes disabled, otherwise Ask: the model proposes and the human approves the immutable entity/data/hash once. The authenticated owner may explicitly acknowledge Full access / auto-approve for only these configured exact actions (optional brightness 0-255 for light.turn_on). This is not all HA services or host/admin access; Code is unchanged and separately confined. No indirect area/device/group selectors. An HTTP receipt is not device verification.
 - `workspace_enabled`: false by default. True requires exactly one trusted operator and a **separate confined worker** installed by the trusted host operator; it does not create a container or expose Docker. [Workspace guide](../docs/workspace.md).
 
 ## ChatGPT subscription login
@@ -26,5 +26,13 @@ OAuth is an account authorization step performed by the human, not a model tool.
 ## Privileges, state and rollback
 
 Ingress only, no host ports, HA Core configuration mounts or Supervisor/admin/auth/Docker API. `/workspace_link` is this App's own `addon_config` mapping, only for worker IPC—not HA Core `/config`. HA's token is broad; the App's fixed tools enforce narrower policy. Code mode has no HA tools; its worker has no HA/model network or credentials.
+
+## Home permissions (unreleased source slice)
+
+Use the Home permissions selector to choose Read-only, Ask or Full access. Full acknowledgement binds to the displayed exact policy fingerprint, revision, schema and owner; settings persist in the existing durable store, not browser storage. New Full inputs may execute supported requests without per-action prompts. Running/legacy inputs cannot acquire Full, and choosing Full never executes old Ask proposals. Exact scope/service or schema changes invalidate Full; changing the policy back does not restore the grant.
+
+Emergency Read-only stays available during work. It invalidates pending actions and promptly prevents/cancels dispatch; it cannot undo an already attempted effect. Receipts show human/automatic authorization, revision and accepted versus unknown. An unresolved dispatch/unknown blocks Home writes installation-wide, including new sessions, other owners, mode toggles and restarts. Only the owning human's reconciliation of the specific unknown clears it; check independently and never automatically retry. Other owners see only that writes are blocked, not private receipt details. Stop task is not a substitute for Read-only.
+
+No Home shell/config/SSH/Docker, scripts, automations, Core or Supervisor-admin operations. No generic service/JSON proxy or new Supervisor privilege. Avoid safety-critical devices. This slice is offline/source-tested only; live/mobile/restore/power-loss paths need separate authorization and validation.
 
 `/data` survives restart/update but not uninstall. Cold App backups are sensitive and do not include the separate worker's files. Restoration does not undo device/file effects; old approvals are invalidated and uncertain effects need human reconciliation. Disable workspace/actions and stop only the specific App/worker to roll back; preserve files unless deletion is explicitly intended. No Home Assistant Core restart is needed for this App's ordinary install/configuration.

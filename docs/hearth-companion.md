@@ -11,7 +11,7 @@ The goal is a useful home companion, not just a chat box or a visually similar a
 3. **Carry work forward** through durable inputs, tool tasks, committed documents, reconnect and recovery; show what is known, stale, failed or waiting for a person.
 4. **Remember deliberately**: future owner-approved preferences and household context must be inspectable, editable and forgettable; a saved transcript is not proof of a long-term memory feature.
 5. **Take bounded initiative**: future opt-in monitors/briefings/reminders need exact sources, frequency, budget, expiry/cancellation and replay policy. No secretly enabled polling, notifications or physical routines.
-6. **Act carefully**: immutable reviewed proposals, exact service scope and visible receipts/unknown outcomes; never equate an API acknowledgment with physical verification.
+6. **Act carefully**: Home Read-only / Ask / explicitly acknowledged Full access, immutable action receipts, exact service scope and visible receipts/unknown outcomes; never equate an API acknowledgment with physical verification.
 7. **Create safely**: later structured interactive mini-apps and explicit handoff to the confined coding worker, not arbitrary model HTML, host-shell privileges or HA credentials inside generated programs.
 
 ## First functional slice: assistant-built Home canvas

@@ -2,6 +2,8 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { insist, object, text, entityPattern } from "./safety.js";
 
+export const MAX_ENTITIES = 10000;
+
 export const supportedServices = [
   "light.turn_on",
   "light.turn_off",
@@ -83,7 +85,7 @@ export async function loadConfig(): Promise<Config> {
   const entities = strings(
     options.allowed_entities ??
       (process.env.HEARTH_ALLOWED_ENTITIES ?? "").split(",").filter(Boolean),
-    500,
+    MAX_ENTITIES,
   );
   insist(
     services.every((s) => supportedServices.includes(s)) &&
@@ -107,7 +109,7 @@ export async function loadConfig(): Promise<Config> {
     );
   const apiKey = text(
     options.openai_api_key ?? process.env.OPENAI_API_KEY ?? "",
-    500,
+    MAX_ENTITIES,
     0,
   );
   if (provider === "openai") insist(apiKey.length > 0, "provider_key_required");

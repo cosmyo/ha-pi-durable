@@ -41,7 +41,7 @@ Multiple users in [the token-cost discussion](https://community.home-assistant.i
 
 [Extended OpenAI issue #322](https://github.com/jekalmin/extended_openai_conversation/issues/322) is a **closed historical** 2025 report of model claims that an action completed while nothing happened. We did not reproduce it or establish its current status beyond the inspected issue state.
 
-**Decision:** a deterministic action card is the receipt of record. The model can propose but cannot approve or dispatch. Approval binds owner/session/action hash/policy/expiry. Dispatch intent is stored before one external attempt. `accepted` means an HTTP service receipt, not confirmed physical state. Timeout, crash or an error after dispatch is `unknown`; a human reconciles it without automatic retry.
+**Decision:** a deterministic action card is the receipt of record. The original Ask/default design lets models propose but not approve. The explicitly opt-in Home Full access source slice now permits automatic dispatch of supported exact actions under an owner/revision/policy-bound grant; it does not broaden HA services or host privileges. Approval binds owner/session/action hash/policy/expiry. Dispatch intent is stored before one external attempt. `accepted` means an HTTP service receipt, not confirmed physical state. Timeout, crash or an error after dispatch is `unknown`; a human reconciles it without automatic retry.
 
 ### Hallucinated services and malformed arguments — concrete failure classes
 
@@ -59,7 +59,7 @@ Multiple users in [the token-cost discussion](https://community.home-assistant.i
 
 [The voice-continuation discussion](https://community.home-assistant.io/t/continue-conversation-automatically-on-home-assistant-voice-pe/829487) (2025-01-15) has multiple requests for natural follow-ups. A suggested workaround disables prompt-only confirmation; another reply reports noisy-room loops. It does not establish that current Voice PE lacks continuation.
 
-**Decision:** concise, exact, accessible action cards and browser-enforced approval flow, not confirmation solely in a system prompt. Voice/Assist integration is a separately scoped roadmap item.
+**Decision:** concise, exact, accessible action cards and server-enforced Ask approval or explicit Full grant flow, not confirmation solely in a system prompt. Voice/Assist integration is a separately scoped roadmap item.
 
 ### Durability is an engineering differentiator, not a proven top request
 

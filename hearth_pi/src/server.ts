@@ -6,7 +6,7 @@ import {
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
-import { Proposals } from "./documents.js";
+import { HomePermissions, Proposals } from "./documents.js";
 import { HomeCanvas } from "./canvas.js";
 import { Boundary } from "./auth.js";
 import type { Config } from "./config.js";
@@ -119,15 +119,36 @@ export function appServer(
             config.provider === "offline"
               ? "Offline demonstration"
               : config.model,
-          safety: config.policy.enabled
-            ? "Explicit reviewed actions only"
-            : "Read-only · actions disabled",
+          safety: "Home permissions · scoped light/switch controls only",
+          entityScopeCount: new Set(config.policy.entities).size,
+          homePermissions: await actions.engine.settings(owner),
           experimental: true,
           workspaceEnabled: config.workspaceEnabled ?? false,
           inferenceReady:
             config.provider !== "openai-codex" ||
             !!options.subscription?.status(owner).configured,
         });
+      if (path === "/api/home-permissions") {
+        if (req.method === "GET")
+          return json(res, 200, await actions.engine.settings(owner));
+        const v = object(await body(req), [
+          "mode",
+          "revision",
+          "policy",
+          "acknowledgement",
+        ]);
+        return json(
+          res,
+          200,
+          await actions.engine.setMode(
+            owner,
+            v.mode,
+            v.revision,
+            v.policy,
+            v.acknowledgement,
+          ),
+        );
+      }
       if (path.startsWith("/api/auth/")) {
         const subscription = options.subscription;
         insist(subscription, "subscription_unavailable", 503);
@@ -191,21 +212,28 @@ export function appServer(
             conversation.id,
             ctx,
           );
+          await actions.engine.settings(owner);
+          const permissions = await runtime.harness.watchDoc(
+            HomePermissions,
+            ctx,
+          );
           const canvas = await runtime.harness.watchDoc(
             HomeCanvas,
             conversation.id,
             ctx,
           );
-          if (!proposals || !canvas) {
+          if (!proposals || !canvas || !permissions) {
             await watch.stop();
             await proposals?.stop();
             await canvas?.stop();
+            await permissions?.stop();
             throw new Fault(404, "session_not_found");
           }
           if (res.destroyed) {
             await watch.stop();
             await proposals.stop();
             await canvas.stop();
+            await permissions.stop();
             return;
           }
           streams.add(res);
@@ -222,6 +250,7 @@ export function appServer(
             void watch.stop();
             void proposals.stop();
             void canvas.stop();
+            void permissions.stop();
           };
           // One asynchronous snapshot at a time; coalesce change notifications.
           const send = async () => {
@@ -271,6 +300,7 @@ export function appServer(
           watch.start(send);
           proposals.start(send);
           canvas.start(send);
+          permissions.start(send);
           return;
         }
         if (req.method === "POST" && operation === "inputs") {

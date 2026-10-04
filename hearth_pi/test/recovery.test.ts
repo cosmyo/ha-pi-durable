@@ -303,3 +303,204 @@ test("SIGKILL after persisted dispatch intent: external write is unknown and nev
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("SIGKILL: configured owner removal invalidates Full before unfinished generation resumes; re-adding does not resurrect its grant", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-owner-revoked-"));
+  await dieAt(dir, "auto-owner-generating", "generating");
+  let posts = 0;
+  const makeHa = () =>
+    new HAClient(
+      "synthetic-recovery-token",
+      {
+        enabled: true,
+        services: ["light.turn_on"],
+        entities: ["light.example"],
+      },
+      (async (url, init) => {
+        if (init?.method === "POST") {
+          posts++;
+          return Response.json([]);
+        }
+        return String(url).endsWith("services")
+          ? Response.json([{ domain: "light", services: { turn_on: {} } }])
+          : Response.json({
+              entity_id: "light.example",
+              state: "off",
+              attributes: {},
+            });
+      }) as typeof fetch,
+    );
+  const resumed = offline();
+  resumed.faux.setResponses([
+    fauxAssistantMessage(
+      fauxToolCall("ha_propose_service", {
+        service: "light.turn_on",
+        entityId: "light.example",
+        data: {},
+      }),
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("No action while owner is removed"),
+  ]);
+  const removedHa = makeHa();
+  removedHa.actions.authorizeOwners([]);
+  const removed = await Runtime.open(
+    dir,
+    resumed.models,
+    resumed.model,
+    [haExtension(removedHa)],
+    [],
+    undefined,
+    removedHa.actions,
+  );
+  try {
+    const id = (await removed.list("owner"))[0]!.id;
+    const p = await removedHa.actions.settings("owner");
+    assert.equal(p.mode, "read-only");
+    assert.equal(p.grant, null);
+    const input = (await removed.harness.snapshot(
+      Inputs,
+      id as ConversationId,
+      ctx,
+    ))!.requests["request-crash-1"]!;
+    assert.equal(input.homePermission?.mode, "full");
+    await (await removed.harness.submission(
+      input.submissionId as SubmissionId,
+      ctx,
+    ))!.wait(ctx);
+    assert.equal(posts, 0);
+    assert.deepEqual(
+      (await removed.harness.snapshot(Proposals, id as ConversationId, ctx))!
+        .items,
+      {},
+    );
+  } finally {
+    await removedHa.actions.close();
+    await removed.close();
+  }
+  const added = offline();
+  const addedHa = makeHa();
+  addedHa.actions.authorizeOwners(["owner"]);
+  const reopened = await Runtime.open(
+    dir,
+    added.models,
+    added.model,
+    [haExtension(addedHa)],
+    [],
+    undefined,
+    addedHa.actions,
+  );
+  try {
+    const p = await addedHa.actions.settings("owner");
+    assert.equal(p.mode, "read-only");
+    assert.equal(p.grant, null);
+    assert.match(p.invalidation, /Owner removed/);
+    assert.equal(posts, 0);
+  } finally {
+    await addedHa.actions.close();
+    await reopened.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+for (const [mode, stage] of [
+  ["auto-before", "validating"],
+  ["auto-intent", "intent"],
+  ["auto-attempt", "dispatched"],
+])
+  test(`SIGKILL ${mode}: unsafe Home tool does not replay; durable intent/attempt barriers prevent autonomous reissue`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), `hearth-kill-${mode}-`));
+    await dieAt(dir, mode!, stage!);
+    const { models, model, faux } = offline();
+    let posts = 0;
+    const ha = new HAClient(
+      "synthetic-recovery-token",
+      {
+        enabled: true,
+        services: ["light.turn_on"],
+        entities: ["light.example"],
+      },
+      (async (url, init) => {
+        if (init?.method === "POST") {
+          posts++;
+          return Response.json([]);
+        }
+        return String(url).endsWith("services")
+          ? Response.json([{ domain: "light", services: { turn_on: {} } }])
+          : Response.json({
+              entity_id: "light.example",
+              state: "off",
+              attributes: {},
+            });
+      }) as typeof fetch,
+    );
+    ha.actions.authorizeOwners(["owner"]);
+    faux.setResponses(
+      mode === "auto-before"
+        ? [fauxAssistantMessage("Interrupted before dispatch; no retry.")]
+        : [
+            fauxAssistantMessage(
+              fauxToolCall("ha_propose_service", {
+                service: "light.turn_on",
+                entityId: "light.example",
+                data: {},
+              }),
+              { stopReason: "toolUse" },
+            ),
+            fauxAssistantMessage(
+              "Must wait for human reconciliation; no retry.",
+            ),
+          ],
+    );
+    const runtime = await Runtime.open(
+      dir,
+      models,
+      model,
+      [haExtension(ha)],
+      [],
+      undefined,
+      ha.actions,
+    );
+    try {
+      const id = (await runtime.list("owner"))[0]!.id;
+      const input = (await runtime.harness.snapshot(
+        Inputs,
+        id as ConversationId,
+        ctx,
+      ))!.requests["request-crash-1"]!;
+      await (await runtime.harness.submission(
+        input.submissionId as SubmissionId,
+        ctx,
+      ))!.wait(ctx);
+      assert.equal(posts, 0);
+      const items = Object.values(
+        (await runtime.harness.snapshot(Proposals, id as ConversationId, ctx))!
+          .items,
+      );
+      if (mode === "auto-before") {
+        assert.equal(items.length, 0);
+        assert.equal((await ha.actions.settings("owner")).blocked, false);
+      } else {
+        assert.equal(items.length, 1);
+        assert.equal(items[0]!.status, "unknown");
+        assert.equal(Boolean(items[0]!.attemptedAt), mode === "auto-attempt");
+        assert.equal((await ha.actions.settings("owner")).blocked, true);
+        assert.match(
+          JSON.stringify(await runtime.snapshot("owner", id)),
+          /home_outcome_unresolved/,
+        );
+      }
+      assert.match(
+        JSON.stringify(await runtime.snapshot("owner", id)),
+        /interrupted/,
+      );
+      const attempts = await readFile(join(dir, "posts.txt"), "utf8").catch(
+        () => "",
+      );
+      assert.equal(attempts, mode === "auto-attempt" ? "attempt\n" : "");
+    } finally {
+      await ha.actions.close();
+      await runtime.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });

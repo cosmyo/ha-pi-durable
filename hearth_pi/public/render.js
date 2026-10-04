@@ -133,7 +133,12 @@ export function renderCanvas(container, canvas, ask) {
   }
   container.replaceChildren(fragment);
 }
-export function renderProposals(container, proposals, decide) {
+export function renderProposals(
+  container,
+  proposals,
+  decide,
+  canApprove = true,
+) {
   const fragment = document.createDocumentFragment();
   for (const proposal of Object.values(proposals).sort(
     (a, b) => b.created - a.created,
@@ -144,6 +149,13 @@ export function renderProposals(container, proposals, decide) {
       node("p", proposal.action.entityId),
       node("pre", JSON.stringify(proposal.action.data, null, 2)),
     );
+    if (proposal.authorization)
+      card.append(
+        node(
+          "p",
+          `${proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
+        ),
+      );
     const fingerprint = node("details");
     fingerprint.append(
       node("summary", "Exact immutable fingerprint"),
@@ -175,7 +187,9 @@ export function renderProposals(container, proposals, decide) {
           decision === "approve" ? "approve" : "",
         );
         button.type = "button";
-        button.disabled = proposal.expires <= Date.now();
+        button.disabled =
+          proposal.expires <= Date.now() ||
+          (decision === "approve" && !canApprove);
         button.addEventListener("click", () => decide(proposal, decision));
         buttons.append(button);
       }

@@ -540,3 +540,32 @@ dialog .actions {
       background 0.15s;
   }
 }
+
+#home-permissions {
+  padding: 12px 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+#home-permissions p {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  margin: 0;
+}
+#home-mode {
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 44px;
+}
+#home-mode:focus-visible {
+  outline: 3px solid var(--warm);
+}
+#emergency-read-only {
+  border-color: var(--warm);
+}

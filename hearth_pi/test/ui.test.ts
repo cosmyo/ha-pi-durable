@@ -133,6 +133,14 @@ test("UI renders model/entity/tool/action data as text, not executable HTML; exa
     assert.equal(decisions.length, 0);
     container.querySelector("button")!.dispatchEvent(new Event("click"));
     assert.deepEqual(decisions, [{ proposal: p, decision: "approve" }]);
+    renderProposals(
+      container,
+      { "123": p },
+      () => assert.fail("should not dispatch"),
+      false,
+    );
+    assert.equal(container.querySelector("button")!.disabled, true);
+    assert.equal(container.querySelectorAll("button")[1]!.disabled, false);
     const script = await readFile(
       new URL("../public/app.js", import.meta.url),
       "utf8",

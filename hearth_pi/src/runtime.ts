@@ -11,7 +11,8 @@ import {
 import type { Models } from "@earendil-works/pi-ai/models";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
-import { Catalog, Inputs, Proposals } from "./documents.js";
+import { Catalog, Inputs, Proposals, HomePermissions } from "./documents.js";
+import type { HomeActions } from "./home-actions.js";
 import { HomeCanvas, scopedCanvas } from "./canvas.js";
 import { WorkspaceGuard } from "./workspace.js";
 import {
@@ -26,6 +27,7 @@ import {
 export class Runtime {
   readonly admission = new Serial();
   closing = false;
+  homeActions?: HomeActions;
   private constructor(
     readonly harness: Harness,
     readonly model: { provider: string; modelId: string },
@@ -42,6 +44,7 @@ export class Runtime {
       home: extensions,
       workspace: [],
     },
+    homeActions?: HomeActions,
   ): Promise<Runtime> {
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
     const db = await openNodeSqliteDatabase(join(dataDir, "hearth.sqlite"), {
@@ -78,6 +81,8 @@ export class Runtime {
         ctx,
       );
       const runtime = new Runtime(harness, model, redactor(secrets), groups);
+      homeActions?.attach(runtime);
+      await homeActions?.initialize();
       const unfinished = await harness.inspect(ctx);
       // Pending approvals do not survive a boot: this also fails closed on backup rollback.
       await harness.commit(async (tx) => {
@@ -107,8 +112,10 @@ export class Runtime {
             session.id as ConversationId,
           );
           for (const proposal of Object.values(proposals.items)) {
-            if (proposal.status === "dispatching") proposal.status = "unknown";
-            else if (proposal.status === "pending") {
+            if (proposal.status === "dispatching") {
+              proposal.status = "unknown";
+              (await tx.doc(HomePermissions)).actionRevision++;
+            } else if (proposal.status === "pending") {
               proposal.status = "rejected";
               proposal.resolution =
                 "Restart invalidated approval; request a new proposal.";
@@ -257,6 +264,10 @@ export class Runtime {
           content: message,
           submissionId: 0,
           admitted: Date.now(),
+          ...((await tx.doc(Catalog)).items.find((s) => s.id === id)?.kind !==
+            "workspace" && this.homeActions
+            ? { homePermission: await this.homeActions.bind(tx, owner) }
+            : {}),
         };
       }, ctx);
       return this.place(id, key, message);
@@ -305,6 +316,9 @@ export class Runtime {
         : undefined;
       return {
         view: view.value,
+        homePermissions: this.homeActions
+          ? await this.homeActions.settings(owner)
+          : null,
         homeCanvas:
           (await this.list(owner)).find((s) => s.id === id)?.kind ===
           "workspace"

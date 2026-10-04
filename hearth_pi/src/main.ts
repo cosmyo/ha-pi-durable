@@ -26,6 +26,9 @@ try {
     secrets,
   );
   const ha = new HAClient(config.haToken, config.policy, fetch, secrets);
+  ha.actions.authorizeOwners(
+    config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
+  );
   const home = [haExtension(ha)];
   const workspace = [];
   if (config.workspaceEnabled) {
@@ -45,6 +48,7 @@ try {
     [...home, ...workspace],
     secrets,
     { home, workspace },
+    ha.actions,
   );
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscription,

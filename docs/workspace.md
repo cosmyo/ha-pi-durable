@@ -5,7 +5,7 @@ Version 0.2.0 adds an **optional separate worker**, not a shell inside the HA co
 ## Boundary
 
 ```text
-Authenticated operator → durable Home session → scoped HA tools / exact review
+Authenticated operator → durable Home session → scoped HA tools / Home Read-only, Ask or explicitly granted Full
                        → durable Code session → authenticated local IPC → worker
 Controller → official model provider; private OAuth/API credentials stay here
 Worker → its own /workspace files + temporary /tmp; no network or HA/model API

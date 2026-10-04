@@ -23,6 +23,7 @@ export type Input = {
   content: string;
   submissionId: number;
   admitted: number;
+  homePermission?: PermissionBinding;
 };
 export const Inputs = defineDoc<{ requests: Record<string, Input> }>({
   kind: "hearth.inputs",
@@ -56,6 +57,12 @@ export type Proposal = {
   decidedBy: string;
   decidedAt: number;
   resolution: string;
+  authorization?: PermissionBinding & {
+    source: "human" | "automatic";
+    owner: string;
+    inputIds: number[];
+  };
+  attemptedAt?: number;
 };
 export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   kind: "hearth.proposals",
@@ -64,5 +71,39 @@ export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   history: "latest",
   fork: "initial",
   initial: () => ({ items: {} }),
+  checkpointWhen,
+});
+
+export type HomeMode = "read-only" | "ask" | "full";
+export type PermissionBinding = {
+  mode: HomeMode;
+  revision: number;
+  policy: string;
+  grant: string;
+};
+export type HomePermission = {
+  explicit: boolean;
+  mode: HomeMode;
+  revision: number;
+  policy: string;
+  schema: number;
+  grant: null | {
+    owner: string;
+    policy: string;
+    schema: number;
+    acknowledgement: string;
+    at: number;
+  };
+  invalidation: string;
+};
+// Owner settings live in the same single-writer durable store as the action ledger.
+export const HomePermissions = defineDoc<{
+  actionRevision: number;
+  owners: Record<string, HomePermission>;
+}>({
+  kind: "hearth.home-permissions",
+  version: 1,
+  scope: "session",
+  initial: () => ({ actionRevision: 0, owners: {} }),
   checkpointWhen,
 });

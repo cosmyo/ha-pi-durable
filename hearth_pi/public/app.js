@@ -17,6 +17,7 @@ let csrf = "",
   inferenceReady = true,
   selectedKind = "home",
   homeSafety = "Read-only · actions disabled",
+  permissions = null,
   loginId = "",
   accountTimer = null;
 const feedback = (value) => {
@@ -52,11 +53,60 @@ async function bootstrap() {
   const status = await api("bootstrap");
   csrf = status.csrf;
   $("provider").textContent = `${status.provider} · ${status.model}`;
-  homeSafety = status.safety;
+  updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   $("new-workspace").hidden = !status.workspaceEnabled;
   controls();
 }
+function updatePermissions(value) {
+  if (!value) return;
+  permissions = value;
+  $("home-mode").value = value.effectiveMode;
+  homeSafety = `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
+  $("permission-summary").textContent =
+    `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
+  for (const option of $("home-mode").options)
+    option.disabled = !value.enabled && option.value !== "read-only";
+}
+async function setHomeMode(mode) {
+  if (!permissions) return;
+  const current = permissions;
+  if (
+    mode === "full" &&
+    !window.confirm(
+      `Enable Home Full access / auto-approve? ${current.acknowledgement}\n${current.entityScopeCount} exact configured entities; ${current.services.join(", ")}.\nPolicy: ${current.policy}\nRunning/old inputs are not elevated. Emergency Read-only cannot undo in-flight effects.`,
+    )
+  )
+    return;
+  try {
+    updatePermissions(
+      await api("home-permissions", {
+        mode,
+        revision: current.revision,
+        policy: current.policy,
+        ...(mode === "full"
+          ? { acknowledgement: current.acknowledgement }
+          : {}),
+      }),
+    );
+    actionSignature = "";
+    if (selected) snapshot(await api(`sessions/${selected}/snapshot`));
+    controls();
+    feedback(
+      "Home permissions saved. Old actions were invalidated; in-flight effects cannot be undone.",
+    );
+  } catch (error) {
+    feedback(error.message);
+    updatePermissions(await api("home-permissions"));
+    controls();
+  }
+}
+$("save-home-mode").addEventListener("click", () => {
+  void setHomeMode($("home-mode").value);
+});
+$("emergency-read-only").addEventListener("click", () => {
+  void setHomeMode("read-only");
+});
 function pending() {
   try {
     return JSON.parse(
@@ -111,6 +161,7 @@ $("canvas-toggle").addEventListener("click", () => {
 function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
+  updatePermissions(value.homePermissions);
   renderMessages($("messages"), value);
   const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
   const nextCanvasSignature = JSON.stringify(canvas);
@@ -118,10 +169,19 @@ function snapshot(value) {
     canvasSignature = nextCanvasSignature;
     renderCanvas($("home-canvas"), canvas, draftQuestion);
   }
-  const signature = JSON.stringify(value.proposals);
+  const signature = JSON.stringify([
+    value.proposals,
+    permissions?.effectiveMode,
+    permissions?.blocked,
+  ]);
   if (signature !== actionSignature) {
     actionSignature = signature;
-    renderProposals($("approvals"), value.proposals, decide);
+    renderProposals(
+      $("approvals"),
+      value.proposals,
+      decide,
+      permissions?.effectiveMode !== "read-only" && !permissions?.blocked,
+    );
   }
   busy = !!value.view.docs["pi.live"]?.run;
   $("task-status").textContent = busy
