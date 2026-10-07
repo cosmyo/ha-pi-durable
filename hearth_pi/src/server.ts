@@ -81,6 +81,7 @@ export function appServer(
         ? !!options.local?.configured
         : true;
   const streams = new Set<ServerResponse>();
+  const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
   const rates = new Map<string, { count: number; until: number }>();
   const stringify = (data: unknown) =>
@@ -249,13 +250,21 @@ export function appServer(
         });
       }
       const route =
-        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model))?$/.exec(
+        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete))?$/.exec(
           path,
         );
       if (route) {
         const id = Number(route[1]);
         const operation = route[2];
         const conversation = await runtime.session(owner, id);
+        if (req.method === "POST" && operation === "delete") {
+          const v = object(await body(req), ["confirm"]);
+          insist(v.confirm === true, "confirmation_required");
+          await runtime.delete(owner, id);
+          for (const stop of sessionStreams.get(id) ?? []) stop();
+          sessionStreams.delete(id);
+          return json(res, 200, { deleted: true });
+        }
         if (req.method === "GET" && operation === "snapshot")
           return json(
             res,
@@ -307,6 +316,7 @@ export function appServer(
             if (ended) return;
             ended = true;
             streams.delete(res);
+            sessionStreams.get(id)?.delete(stop);
             perOwner.set(owner, Math.max(0, (perOwner.get(owner) ?? 1) - 1));
             clearInterval(heartbeat);
             void watch.stop();
@@ -314,6 +324,9 @@ export function appServer(
             void canvas.stop();
             void permissions.stop();
           };
+          const forSession = sessionStreams.get(id) ?? new Set();
+          forSession.add(stop);
+          sessionStreams.set(id, forSession);
           // One asynchronous snapshot at a time; coalesce change notifications.
           const send = async () => {
             if (ended) return;

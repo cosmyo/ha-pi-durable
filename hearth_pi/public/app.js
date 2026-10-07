@@ -154,6 +154,10 @@ function controls() {
   $("send").disabled =
     $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
   $("stop").disabled = !selected || !busy;
+  $("delete-session").disabled = !selected;
+  // Keep the compact header row within phone width; the always-visible
+  // aria-label still names the action for assistive tech.
+  $("delete-session").textContent = compact() ? "🗑" : "Delete";
   $("model-choice").disabled =
     !selected ||
     !modelSelection ||
@@ -442,6 +446,68 @@ $("stop").addEventListener("click", async () => {
     feedback(error.message);
   }
 });
+// Human-readable text for each distinct 409 reason the server refuses a
+// delete with, so an open safety concern is never mistaken for a generic error.
+const DELETE_REFUSALS = {
+  delete_proposal_unresolved:
+    "This session has an action awaiting approval or an unresolved outcome. Reject or resolve it first, then delete.",
+  delete_task_running:
+    "This session has a task in progress. Wait for it to finish, then delete.",
+  delete_session_busy:
+    "This session has an input that has not been answered yet. Wait for it to settle, then delete.",
+  delete_workspace_blocked:
+    "This workspace is paused after an uncertain operation and cannot be deleted until a human resolves it.",
+};
+function showWelcome() {
+  selected = null;
+  selectedKind = "home";
+  modelSelection = null;
+  modelDraftDirty = false;
+  actionSignature = "";
+  canvasSignature = "";
+  busy = false;
+  $("title").textContent = "A little warmth. A little more certainty.";
+  $("safety").textContent = "Read-only by default";
+  $("task-status").textContent = "Choose a session";
+  $("usage").textContent = "No model usage yet";
+  $("active-model").textContent = "Choose a session";
+  $("messages").replaceChildren();
+  $("approvals").replaceChildren();
+  renderCanvas($("home-canvas"), null, draftQuestion);
+  controls();
+}
+async function deleteSession() {
+  if (!selected) return;
+  const id = selected,
+    title = $("title").textContent;
+  if (
+    !window.confirm(
+      `Delete "${title}"? This cannot be undone through the App. The stored transcript stays in the App's private data store and is not securely erased.`,
+    )
+  )
+    return;
+  try {
+    await api(`sessions/${id}/delete`, { confirm: true });
+    if (selected === id) {
+      stream?.close();
+      stream = null;
+    }
+    const items = await listSessions();
+    if (selected !== id) return;
+    const next = items[items.length - 1];
+    if (next) await select(next);
+    else showWelcome();
+    await listSessions();
+    feedback("Session deleted. The stored transcript is not securely erased.");
+  } catch (error) {
+    feedback(
+      DELETE_REFUSALS[error.message] ?? `Not deleted: ${error.message}.`,
+    );
+  }
+}
+$("delete-session").addEventListener("click", () => {
+  void deleteSession();
+});
 async function decide(proposal, decision) {
   let note = "";
   if (decision === "resolve") {
@@ -471,6 +537,15 @@ async function decide(proposal, decision) {
 }
 let loginPromptSignature = "";
 const when = (ms) => new Date(ms).toLocaleString();
+// Pi offers openai-codex login via "browser" (needs pasting the localhost
+// redirect URL) and "device_code" (shows a code, Pi polls, no paste needed).
+// Device code is the smoother choice for Home Assistant / phones, so it is
+// shown first and recommended here; unknown/other option ids keep Pi's order.
+const LOGIN_METHOD_RANK = { device_code: 0, browser: 1 };
+const LOGIN_METHOD_NOTE = {
+  device_code: "Recommended for Home Assistant and phones",
+  browser: "Requires pasting a redirect URL",
+};
 // Mirrors Pi's interactive /login: show whichever step Pi is waiting on.
 function renderLoginPrompt(prompt) {
   const choice = prompt?.type === "select" ? prompt : null,
@@ -479,8 +554,12 @@ function renderLoginPrompt(prompt) {
   if (signature === loginPromptSignature) return;
   loginPromptSignature = signature;
   $("login-prompt").textContent = choice?.message ?? "";
+  const options = [...(choice?.options ?? [])].sort(
+    (a, b) => (LOGIN_METHOD_RANK[a.id] ?? 99) - (LOGIN_METHOD_RANK[b.id] ?? 99),
+  );
   $("login-options").replaceChildren(
-    ...(choice?.options ?? []).map((option) => {
+    ...options.map((option) => {
+      const card = node("div", "", "login-option");
       const button = node("button", option.label);
       button.type = "button";
       if (option.description) button.title = option.description;
@@ -492,7 +571,19 @@ function renderLoginPrompt(prompt) {
           $("account-status").textContent = e.message;
         }
       });
-      return button;
+      card.append(button);
+      const note = LOGIN_METHOD_NOTE[option.id];
+      if (note)
+        card.append(
+          node(
+            "span",
+            note,
+            option.id === "device_code"
+              ? "login-recommended"
+              : "login-option-note",
+          ),
+        );
+      return card;
     }),
   );
 }
@@ -521,13 +612,17 @@ async function refreshAccount() {
       : login?.state === "failed"
         ? anthropic
           ? "Login failed. Retry using Copy code login (headless)."
-          : "Login failed. Retry, or choose the other method; device-code access may need enabling in your OpenAI account."
+          : login.method === "device_code"
+            ? "Device code login failed. It may need to be enabled in your OpenAI account security settings — retry, or use Browser login instead."
+            : "Login failed. Retry, or try Device code login instead."
         : login?.state === "cancelled"
           ? "Login cancelled."
           : prompt?.type === "select"
             ? "Choose how to sign in."
             : pending
-              ? `Waiting for you to finish at ${anthropic ? "Anthropic" : "OpenAI"}. Do not share the code or redirect URL.`
+              ? login?.userCode
+                ? `Waiting for approval at ${anthropic ? "Anthropic" : "OpenAI"}… this window updates automatically. Do not share this code.`
+                : `Waiting for you to finish at ${anthropic ? "Anthropic" : "OpenAI"}. Do not share the code or redirect URL.`
               : "Not signed in.";
     $("account-token").textContent = status.configured
       ? [
@@ -551,7 +646,14 @@ async function refreshAccount() {
     $("login-url").hidden = !login?.url;
     if (login?.url) $("login-url").href = login.url;
     else $("login-url").removeAttribute("href");
+    const hasCode = !!login?.userCode;
     $("login-code").textContent = login?.userCode ?? "";
+    $("login-code").hidden = !hasCode;
+    $("login-copy-row").hidden = !hasCode;
+    $("login-copy-feedback").textContent = "";
+    $("login-steps").hidden = !hasCode;
+    $("login-step-open").textContent =
+      `Open ${anthropic ? "Anthropic" : "OpenAI"}`;
     $("login-answer").hidden = prompt?.type !== "manual_code";
     $("login-redirect-label").textContent =
       prompt?.type === "manual_code"
@@ -664,6 +766,28 @@ async function startLogin() {
   }
 }
 $("login-start").addEventListener("click", startLogin);
+$("login-copy").addEventListener("click", async () => {
+  const code = $("login-code").textContent;
+  if (!code) return;
+  try {
+    if (!navigator.clipboard?.writeText)
+      throw new Error("clipboard_unavailable");
+    await navigator.clipboard.writeText(code);
+    $("login-copy-feedback").textContent = "Copied";
+  } catch {
+    // No Clipboard API (or it was denied): select the code so the user can
+    // copy it with their platform's own shortcut instead.
+    const selection = window.getSelection?.();
+    if (selection && document.createRange) {
+      const range = document.createRange();
+      range.selectNodeContents($("login-code"));
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    $("login-copy-feedback").textContent =
+      "Couldn't copy automatically: the code is selected, copy it manually.";
+  }
+});
 $("login-answer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const value = $("login-redirect").value;

@@ -50,12 +50,26 @@
       <button id="login-start" type="button">Sign in with ChatGPT</button>
       <fieldset id="login-choice" hidden>
         <legend id="login-prompt"></legend>
-        <div id="login-options" class="actions"></div>
+        <div id="login-options"></div>
       </fieldset>
+      <ol id="login-steps" class="muted" hidden>
+        <li>Copy the code</li>
+        <li id="login-step-open">Open OpenAI</li>
+        <li>Approve — Hearth finishes automatically</li>
+      </ol>
+      <code id="login-code" hidden></code>
+      <div id="login-copy-row" class="actions" hidden>
+        <button id="login-copy" type="button">Copy code</button>
+      </div>
+      <p
+        id="login-copy-feedback"
+        class="muted"
+        role="status"
+        aria-live="polite"
+      ></p>
       <a id="login-url" target="_blank" rel="noopener noreferrer" hidden
         >Continue at OpenAI</a
       >
-      <code id="login-code"></code>
       <form id="login-answer" autocomplete="off" hidden>
         <label id="login-redirect-label" for="login-redirect"
           >Final localhost redirect URL</label
@@ -182,6 +196,14 @@
               Home view
             </button>
             <button id="stop" type="button" disabled>Stop task</button>
+            <button
+              id="delete-session"
+              type="button"
+              aria-label="Delete session"
+              disabled
+            >
+              Delete
+            </button>
           </div>
         </div>
         <div id="model-picker" class="model-picker" aria-label="Session model">

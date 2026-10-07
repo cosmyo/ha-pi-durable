@@ -420,9 +420,75 @@ dialog .actions {
   margin: 12px 0;
   padding: 10px 12px;
 }
+#login-options {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.login-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.login-option button {
+  width: 100%;
+  text-align: left;
+}
+.login-recommended {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--teal);
+}
+.login-option-note {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+#login-steps {
+  margin: 12px 0;
+  padding-left: 20px;
+  font-size: 0.82rem;
+}
+#login-steps li {
+  margin: 4px 0;
+}
 #login-code {
   color: var(--warm);
-  font-size: 1.3rem;
+  font-size: 1.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-align: center;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  word-break: break-word;
+}
+#login-copy-row {
+  margin-top: 10px;
+}
+#login-copy-row button {
+  flex: 1 1 auto;
+}
+#login-copy-feedback {
+  min-height: 20px;
+  font-size: 0.8rem;
+}
+#login-url {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--warm);
+  color: #2d2c23;
+  font-weight: 600;
+  text-decoration: none;
+  text-align: center;
+}
+#login-url:hover {
+  filter: brightness(1.05);
 }
 #home-surface {
   border: 1px solid var(--line);
@@ -903,6 +969,15 @@ dialog .actions {
   }
   dialog .actions button {
     flex: 1 1 auto;
+  }
+  #login-code {
+    font-size: 1.4rem;
+    letter-spacing: 0.05em;
+    padding: 12px;
+  }
+  #login-copy-row button,
+  #login-url {
+    min-height: 44px;
   }
 }
 @media (max-height: 560px) and (min-width: 721px) {

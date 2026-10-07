@@ -223,6 +223,9 @@ export class Subscription {
               expires: login.expires,
               url: login.url,
               userCode: login.userCode,
+              // The chosen method id (e.g. "device_code"), not raw provider text,
+              // so the UI can tailor its failure hint without any provider error leaking.
+              ...(login.method ? { method: login.method } : {}),
               // Compatibility with the 0.2.0 browser fallback field.
               manual: login.prompt?.type === "manual_code",
               ...(login.prompt ? { prompt: login.prompt } : {}),

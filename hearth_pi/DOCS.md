@@ -73,7 +73,7 @@ The authenticated session picker lists only chat models from the already configu
 ## ChatGPT subscription login
 
 1. Select `provider: openai-codex`; leave `model` empty or choose an appropriate catalog model. Restart **only this App** after option changes.
-2. Open **ChatGPT login → Sign in with ChatGPT**. Like Pi's interactive `/login`, the dialog shows whichever step Pi's own login flow is waiting on: first Pi's method choice (**Browser login** or **Device code login (headless)**), then the OpenAI link and code. Device code is recommended for remote HA. Complete the login/consent in your own OpenAI browser session; account eligibility and provider limits apply. Device-code login may need enabling in OpenAI's account security settings.
+2. Open **ChatGPT login → Sign in with ChatGPT**. Like Pi's interactive `/login`, the dialog shows whichever step Pi's own login flow is waiting on: first Pi's method choice, with **Device code login (headless)** listed first and marked **Recommended for Home Assistant and phones** (no pasting needed — just a code to enter at OpenAI) and **Browser login** listed second with a note that it needs pasting a redirect URL. Pi's own option ids/labels are unchanged; only the order and the annotation are added. Choosing device code shows a large code with a **Copy code** button (falls back to selecting the text if the Clipboard API is unavailable), a prominent **Continue at OpenAI** link/button and three steps (copy the code, open OpenAI, approve). While Pi polls, the dialog shows **Waiting for approval at OpenAI… this window updates automatically**; it updates to **Subscription connected** once Pi confirms. If device code login fails, the hint suggests enabling it in your OpenAI account security settings or switching to Browser login. Complete the login/consent in your own OpenAI browser session; account eligibility and provider limits apply.
 3. Browser login uses the official Pi PKCE flow. If localhost:1455 cannot reach HA, paste the **complete final redirect URL with code and state** into the protected password field, not chat. The official flow verifies state. No callback port is publicly exposed.
 4. Wait for **Subscription connected**. The dialog shows the access token's expiry time, never the token. Pi refreshes it automatically before model requests; **Check connection** asks Pi to resolve auth the same way (refreshing only if it is close to expiry) and records OK/failed. If a check fails, choose **Sign in again**. Access/refresh tokens stay in private controller `/data`, never in browser responses, model context or coding storage. Login state is owner-bound, temporary and cancellable. No personal Pi credentials/resources are automatically imported.
 5. Local sign-out removes this App's credential; it does not revoke the OpenAI account or retroactively undo requests already sent. Backups containing credentials must be protected.
@@ -113,6 +113,19 @@ Boundaries:
 - Model quality and tool calling depend on the local model; small models may call tools poorly. Only `thinking: off` is offered for local models.
 
 This is source-tested with fake servers and a real local HTTP server, not against a real Ollama/LM Studio/vLLM installation or on Home Assistant OS.
+
+## Deleting a session
+
+Select a session, then choose **Delete** in its header (a trash glyph on phone-width layouts; both carry `aria-label="Delete session"`). The confirmation names the session and states this cannot be undone through the App. Deleting removes it from your list, from the owner-scoped session count used for the 30-per-owner / 100-total limits, and from every session-scoped API route, which then answers `404` as if it never existed; an already-deleted or already-gone id also answers `404`. **The committed transcript is not securely erased**: Pi Durable 1.0.1 has no API to erase a conversation or its entries, so the data remains in the private App store (`/data`) until the whole store is removed, per "Privileges, state and rollback" below.
+
+Deletion is refused (`409`, a distinct error per reason) while the session still has an open safety concern, so a removal can never quietly drop one:
+
+- an action proposal awaiting approval, dispatching, or with an unknown outcome — reject or resolve it first;
+- a durable task still running for that conversation;
+- an admitted input that has not yet been answered or placed;
+- for a coding workspace session, a `WorkspaceGuard` still paused after an uncertain operation.
+
+These checks, and the removal itself, run serialized with session creation/submission and are re-read inside the same commit that removes the session, so the installation-wide unknown-outcome write barrier can never be silently lifted by deleting the conversation that holds it.
 
 ## Privileges, state and rollback
 

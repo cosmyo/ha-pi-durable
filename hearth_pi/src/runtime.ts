@@ -252,6 +252,65 @@ export class Runtime {
       }, ctx);
     });
   }
+  // Pi Durable has no API to erase a conversation or its entries: this only
+  // removes it from the owner-scoped Catalog, which is what listing, 404s and
+  // the per-owner/total session limits are keyed on. The committed transcript
+  // stays in the private App store; see DOCS.md. Refused (409, distinct code)
+  // while any safety barrier for this conversation is still open, so a removal
+  // can never silently drop an unresolved proposal, running task or unplaced
+  // input. Runs serialized on admission like create/submit, and every document
+  // check is re-read inside the same commit that performs the removal.
+  async delete(owner: string, id: number): Promise<void> {
+    return this.admission.run(async () => {
+      insist(!this.closing, "closing", 503);
+      const conversation = await this.session(owner, id);
+      const inspection = await this.harness.inspect(ctx);
+      insist(
+        !inspection.tasks.some((t) => t.record.conversationId === id),
+        "delete_task_running",
+        409,
+      );
+      await conversation.commit(async (tx) => {
+        const catalog = await tx.doc(Catalog);
+        const index = catalog.items.findIndex(
+          (s) => s.id === id && s.owner === owner,
+        );
+        insist(index >= 0, "session_not_found", 404);
+        const session = catalog.items[index]!;
+        const proposals = await tx.doc(Proposals, conversation.id);
+        insist(
+          Object.values(proposals.items).every(
+            (p) => !["pending", "dispatching", "unknown"].includes(p.status),
+          ),
+          "delete_proposal_unresolved",
+          409,
+        );
+        const inputs = await tx.doc(Inputs, conversation.id);
+        const live = await tx.doc(LiveDoc, conversation.id);
+        const inbox = await tx.doc(InboxDoc, conversation.id);
+        insist(
+          Object.values(inputs.requests).every(
+            (input) => input.submissionId > 0,
+          ) &&
+            !live.run &&
+            !live.compactions?.length &&
+            !inbox.items.length,
+          "delete_session_busy",
+          409,
+        );
+        if (session.kind === "workspace") {
+          const guard = await tx.doc(WorkspaceGuard, conversation.id);
+          const epoch = Object.keys(inputs.requests).length;
+          insist(
+            guard.blockedEpoch !== epoch || guard.blockedEpoch === 0,
+            "delete_workspace_blocked",
+            409,
+          );
+        }
+        catalog.items.splice(index, 1);
+      }, ctx);
+    });
+  }
   // Only the configured provider's in-process chat registry is exposed. These
   // fields are projected explicitly: never serialize a provider/model object.
   modelChoices() {
