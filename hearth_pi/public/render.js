@@ -34,8 +34,9 @@ export function renderMessages(container, snapshot) {
         "",
         `message ${message.role === "user" ? "user" : message.role === "toolResult" ? "tool" : "assistant"}`,
       );
-      article.append(node("h3", role), node("pre", value));
-      if (message.stopReason === "error" || message.stopReason === "aborted")
+      article.append(node("h3", role));
+      if (value) article.append(node("pre", value));
+      if (message.stopReason === "error" || message.stopReason === "aborted") {
         article.append(
           node(
             "p",
@@ -43,6 +44,10 @@ export function renderMessages(container, snapshot) {
             "error",
           ),
         );
+        // Controller-fixed reason (never raw provider text); rendered as text.
+        if (message.errorMessage)
+          article.append(node("p", message.errorMessage, "muted"));
+      }
       fragment.append(article);
     }
   }

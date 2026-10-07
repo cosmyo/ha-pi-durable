@@ -28,6 +28,31 @@ export function supportsThinking(
     : true;
 }
 
+// Provider error text is never passed through: it can echo request data or
+// credentials. Classify it into a fixed, owner-actionable message instead.
+export function providerFailure(raw: string | undefined): string {
+  const text = raw ?? "";
+  if (
+    /\b401\b|unauthori[sz]ed|authentication|expired|invalid[ _-]?(api[ _-]?key|token)|sign[ -]?in|log[ -]?in/i.test(
+      text,
+    )
+  )
+    return "Provider sign-in expired or was rejected. Open the login dialog and sign in again.";
+  if (
+    /\b429\b|rate[ _-]?limit|quota|usage[ _-]?limit|too many requests/i.test(
+      text,
+    )
+  )
+    return "Provider rate or usage limit reached. Try again later.";
+  if (
+    /\b403\b|forbidden|not (allowed|entitled)|permission|\bplan\b/i.test(text)
+  )
+    return "Provider refused this account or model. Check your plan and the selected model.";
+  if (/model.*(not found|does not exist|unsupported)|\b404\b/i.test(text))
+    return "Selected model is unavailable from this provider. Choose another model.";
+  return "Provider request failed; check server configuration.";
+}
+
 // Filter before Pi commits provider events, including error/partial fields.
 export function safeModels(models: Models, secrets: string[]): Models {
   const redact = redactor(secrets);
@@ -74,8 +99,7 @@ export function safeModels(models: Models, secrets: string[]): Models {
           )
             throw new Error("unsupported_or_excessive_tools");
           if (safe.type === "error")
-            safe.error.errorMessage =
-              "Provider request failed; check server configuration.";
+            safe.error.errorMessage = providerFailure(safe.error.errorMessage);
           stream.push(safe);
         }
       } catch {

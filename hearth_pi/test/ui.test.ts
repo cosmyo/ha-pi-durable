@@ -105,6 +105,27 @@ test("UI renders model/entity/tool/action data as text, not executable HTML; exa
     });
     assert(chat.textContent!.includes(malicious));
     assert.equal(chat.querySelector("img"), null);
+    renderMessages(chat, {
+      view: {
+        entries: [
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [],
+                stopReason: "error",
+                errorMessage: malicious,
+              },
+            ],
+          },
+        ],
+        docs: { "pi.live": {} },
+      },
+    });
+    assert.match(chat.textContent!, /did not complete/);
+    assert(chat.textContent!.includes(malicious));
+    assert.equal(chat.querySelector("img"), null);
+    assert.equal(chat.querySelector("pre"), null);
     assert.equal(chat.querySelector("script"), null);
     const container = document.getElementById("actions")!;
     const decisions: unknown[] = [];

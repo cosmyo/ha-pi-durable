@@ -1,7 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Config } from "../src/config.js";
-import { configuredModels, safeModels } from "../src/models.js";
+import {
+  configuredModels,
+  providerFailure,
+  safeModels,
+} from "../src/models.js";
 import {
   fauxAssistantMessage,
   fauxToolCall,
@@ -201,4 +205,44 @@ test("bounded models refuse nine model turns, excessive tool calls and oversized
     ).stopReason,
     "error",
   );
+});
+
+test("provider failures become fixed owner-actionable reasons, never raw provider text", async () => {
+  const canary = "synthetic-canary-token-value";
+  const cases: [string, RegExp][] = [
+    [
+      "Your authentication token has expired. Please try refreshing it.",
+      /sign in again/,
+    ],
+    [`401 Unauthorized: bearer ${canary}`, /sign in again/],
+    ["429 Too Many Requests", /usage limit/],
+    ["You've hit your usage limit", /usage limit/],
+    ["403 Forbidden", /plan and the selected model/],
+    ["The model `x` does not exist", /Choose another model/],
+    [`socket hang up ${canary}`, /check server configuration/],
+    ["", /check server configuration/],
+  ];
+  for (const [raw, expected] of cases) {
+    const reason = providerFailure(raw);
+    assert.match(reason, expected);
+    assert(!reason.includes(canary));
+  }
+  assert.match(providerFailure(undefined), /check server configuration/);
+  // Through the real guarded stream: committed errors carry only the fixed reason.
+  const { faux, models, model } = offline();
+  const guarded = safeModels(models, []);
+  faux.setResponses([
+    fauxAssistantMessage("", {
+      stopReason: "error",
+      errorMessage: `Your authentication token has expired. ${canary}`,
+    }),
+  ]);
+  const reply = await guarded
+    .streamSimple(models.getModel(model.provider, model.modelId)!, {
+      messages: [{ role: "user", content: "Question", timestamp: 0 }],
+    })
+    .result();
+  assert.equal(reply.stopReason, "error");
+  assert.match(reply.errorMessage ?? "", /sign in again/);
+  assert.doesNotMatch(JSON.stringify(reply), new RegExp(canary));
 });
