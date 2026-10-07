@@ -13,7 +13,11 @@ import type { Config } from "./config.js";
 import type { Runtime } from "./runtime.js";
 import type { Actions } from "./ha.js";
 import { Fault, insist, object, text, redactor } from "./safety.js";
-import type { Subscription } from "./subscription.js";
+import {
+  isSubscriptionProvider,
+  subscriptionProviders,
+  type Subscription,
+} from "./subscription.js";
 import type { LocalEndpoints } from "./local.js";
 
 async function body(req: IncomingMessage): Promise<unknown> {
@@ -62,7 +66,7 @@ export function appServer(
   runtime: Runtime,
   actions: Actions,
   options: {
-    subscription?: Subscription;
+    subscriptions?: readonly Subscription[];
     local?: LocalEndpoints;
     secrets?: string[];
   } = {},
@@ -71,15 +75,38 @@ export function appServer(
     redact = redactor(
       options.secrets ?? [config.apiKey, config.haToken, config.password],
     );
-  const ready = (owner: string) =>
-    config.provider === "openai-codex" || config.provider === "anthropic"
-      ? (config.provider !== "anthropic" ||
-          config.anthropicAuthEnabled === true) &&
-        options.subscription?.provider === config.provider &&
-        !!options.subscription.status(owner).configured
+  // Available OAuth providers, ChatGPT/Codex first. Anthropic additionally
+  // needs its (re-checked) feature flag; a provider without a Subscription is absent.
+  const authProviders = () =>
+    subscriptionProviders.flatMap((provider) => {
+      const subscription = options.subscriptions?.find(
+        (s) => s.provider === provider && s.enabled,
+      );
+      return subscription &&
+        (provider !== "anthropic" || config.anthropicAuthEnabled === true)
+        ? [subscription]
+        : [];
+    });
+  const defaultAuthProvider = isSubscriptionProvider(config.provider)
+    ? config.provider
+    : "openai-codex";
+  const subscriptionFor = (provider: unknown) => {
+    insist(options.subscriptions?.length, "subscription_unavailable", 503);
+    const name = provider === undefined ? defaultAuthProvider : provider;
+    const subscription = authProviders().find((s) => s.provider === name);
+    insist(subscription, "provider_unavailable", 403);
+    return subscription;
+  };
+  const signedIn = (provider: string) =>
+    authProviders().some((s) => s.provider === provider && s.configured());
+  const configuredReady = () =>
+    isSubscriptionProvider(config.provider)
+      ? signedIn(config.provider)
       : config.provider === "local"
         ? !!options.local?.configured
         : true;
+  const ready = () =>
+    configuredReady() || authProviders().some((s) => s.configured());
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
@@ -143,7 +170,8 @@ export function appServer(
           homePermissions: await actions.engine.settings(owner),
           experimental: true,
           workspaceEnabled: config.workspaceEnabled ?? false,
-          inferenceReady: ready(owner),
+          authProviders: authProviders().map((s) => s.provider),
+          inferenceReady: ready(),
         });
       if (path === "/api/home-permissions") {
         if (req.method === "GET")
@@ -167,40 +195,57 @@ export function appServer(
         );
       }
       if (path.startsWith("/api/auth/")) {
-        insist(
-          config.provider !== "anthropic" ||
-            config.anthropicAuthEnabled === true,
-          "anthropic_auth_disabled",
-          403,
-        );
-        const subscription = options.subscription;
-        insist(subscription, "subscription_unavailable", 503);
         if (req.method === "GET" && path === "/api/auth/status")
-          return json(res, 200, subscription.status(owner));
+          return json(res, 200, subscriptionFor(undefined).status(owner));
+        if (req.method === "GET" && path === "/api/auth/providers") {
+          insist(
+            options.subscriptions?.length,
+            "subscription_unavailable",
+            503,
+          );
+          return json(res, 200, {
+            items: authProviders().map((s) => s.status(owner)),
+          });
+        }
         if (req.method === "POST" && path === "/api/auth/login") {
           const v = object(await body(req), ["method", "provider"]);
-          insist(
-            v.provider === undefined || v.provider === subscription.provider,
-            "configured_login_provider_required",
-            409,
+          return json(
+            res,
+            202,
+            await subscriptionFor(v.provider).start(owner, v.method),
           );
-          return json(res, 202, await subscription.start(owner, v.method));
         }
         if (req.method === "POST" && path === "/api/auth/answer") {
-          const v = object(await body(req), ["id", "value"]);
-          return json(res, 200, subscription.answer(owner, v.id, v.value));
+          const v = object(await body(req), ["id", "value", "provider"]);
+          return json(
+            res,
+            200,
+            subscriptionFor(v.provider).answer(owner, v.id, v.value),
+          );
         }
         if (req.method === "POST" && path === "/api/auth/cancel") {
-          const v = object(await body(req), ["id"]);
-          return json(res, 200, await subscription.cancel(owner, v.id));
+          const v = object(await body(req), ["id", "provider"]);
+          return json(
+            res,
+            200,
+            await subscriptionFor(v.provider).cancel(owner, v.id),
+          );
         }
         if (req.method === "POST" && path === "/api/auth/verify") {
-          object(await body(req), []);
-          return json(res, 200, await subscription.verify(owner));
+          const v = object(await body(req), ["provider"]);
+          return json(
+            res,
+            200,
+            await subscriptionFor(v.provider).verify(owner),
+          );
         }
         if (req.method === "POST" && path === "/api/auth/logout") {
-          object(await body(req), []);
-          return json(res, 200, await subscription.logout(owner));
+          const v = object(await body(req), ["provider"]);
+          return json(
+            res,
+            200,
+            await subscriptionFor(v.provider).logout(owner),
+          );
         }
         throw new Fault(404, "not_found");
       }
@@ -380,6 +425,7 @@ export function appServer(
         }
         if (req.method === "POST" && operation === "model") {
           const v = object(await body(req), [
+            "provider",
             "modelId",
             "thinkingLevel",
             "revision",
@@ -393,6 +439,7 @@ export function appServer(
               v.modelId,
               v.thinkingLevel,
               v.revision,
+              v.provider,
             ),
           );
         }
@@ -404,30 +451,23 @@ export function appServer(
               content.trim(),
             );
             insist(command, "invalid_login_command");
-            insist(
-              config.provider !== "anthropic" ||
-                config.anthropicAuthEnabled === true,
-              "anthropic_auth_disabled",
-              403,
-            );
-            const subscription = options.subscription;
-            insist(subscription, "subscription_unavailable", 503);
-            insist(
-              !command[1] || command[1] === subscription.provider,
-              "configured_login_provider_required",
-              409,
-            );
-            return json(res, 202, { auth: await subscription.start(owner) });
+            return json(res, 202, {
+              auth: await subscriptionFor(command[1]).start(owner),
+            });
           }
+          // The session's committed provider decides readiness; a session on a
+          // non-OAuth model (e.g. not yet switched) uses the configured provider.
+          const committed = await runtime.sessionProvider(owner, id);
+          const provider = isSubscriptionProvider(committed)
+            ? committed
+            : config.provider;
           insist(
-            (config.provider !== "openai-codex" &&
-              config.provider !== "anthropic") ||
-              ready(owner),
+            !isSubscriptionProvider(provider) || signedIn(provider),
             "subscription_login_required",
             403,
           );
           insist(
-            config.provider !== "local" || options.local?.configured,
+            provider !== "local" || options.local?.configured,
             "local_endpoint_required",
             403,
           );
@@ -501,7 +541,8 @@ export function appServer(
       const closed = new Promise<void>((resolve) =>
         server.close(() => resolve()),
       );
-      await options.subscription?.close();
+      for (const subscription of options.subscriptions ?? [])
+        await subscription.close();
       await actions.close();
       await runtime.close();
       server.closeAllConnections();

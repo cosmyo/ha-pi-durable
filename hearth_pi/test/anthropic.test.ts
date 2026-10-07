@@ -514,7 +514,7 @@ test("Anthropic auth HTTP and /login bypass durable admission but retain owner/C
   );
   const ha = new HAClient("", cfg.policy);
   const app = appServer(cfg, runtime, new Actions(runtime, ha), {
-    subscription,
+    subscriptions: [subscription],
     secrets,
   });
   await new Promise<void>((resolve) =>
@@ -570,10 +570,10 @@ test("Anthropic auth HTTP and /login bypass durable admission but retain owner/C
       ).status,
       403,
     );
-    assert.equal(
-      (await post("auth/login", { provider: "openai-codex" })).status,
-      409,
-    );
+    // Only the Anthropic subscription is wired here: Codex is unavailable.
+    const unavailable = await post("auth/login", { provider: "openai-codex" });
+    assert.equal(unavailable.status, 403);
+    assert.equal((await unavailable.json()).error, "provider_unavailable");
     assert.equal(
       (
         await post(`sessions/${id}/inputs`, {

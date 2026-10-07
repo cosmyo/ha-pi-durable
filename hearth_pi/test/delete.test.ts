@@ -477,21 +477,41 @@ test("delete UI control calls the API only after an explicit window.confirm", as
       document.getElementById("title")!.textContent,
       "Kitchen planning",
     );
-    const button = document.getElementById(
-      "delete-session",
+    // Delete now lives behind each session row's "More" menu, not a header
+    // button, but the same explicit window.confirm gate still applies.
+    const toggle = document.querySelector(
+      '[aria-label="More for Kitchen planning"]',
     ) as HTMLButtonElement;
-    assert.equal(button.disabled, false);
-    assert.equal(button.getAttribute("aria-label"), "Delete session");
+    assert(toggle, "expected a row menu toggle for the session");
+    assert.equal(toggle.getAttribute("aria-haspopup"), "true");
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    toggle.dispatchEvent(new window.Event("click"));
+    assert.equal(toggle.getAttribute("aria-expanded"), "true");
+    const menu = toggle.parentElement!.querySelector(".session-menu")!;
+    assert.equal((menu as HTMLElement).hidden, false);
+    const deleteItem = [...menu.querySelectorAll("button")].find(
+      (b) => b.textContent === "Delete",
+    ) as HTMLButtonElement;
+    assert(deleteItem, "expected a Delete item in the row menu");
     window.confirm = () => false;
-    button.dispatchEvent(new window.Event("click"));
+    deleteItem.dispatchEvent(new window.Event("click"));
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert(!requests.some((r) => r.path.endsWith("/delete")));
     assert.equal(
       document.getElementById("title")!.textContent,
       "Kitchen planning",
     );
+    const toggleAgain = document.querySelector(
+      '[aria-label="More for Kitchen planning"]',
+    ) as HTMLButtonElement;
+    toggleAgain.dispatchEvent(new window.Event("click"));
+    const menuAgain =
+      toggleAgain.parentElement!.querySelector(".session-menu")!;
+    const deleteItemAgain = [...menuAgain.querySelectorAll("button")].find(
+      (b) => b.textContent === "Delete",
+    ) as HTMLButtonElement;
     window.confirm = () => true;
-    button.dispatchEvent(new window.Event("click"));
+    deleteItemAgain.dispatchEvent(new window.Event("click"));
     await new Promise((resolve) => setTimeout(resolve, 20));
     const deleteCalls = requests.filter((r) =>
       r.path.endsWith("/sessions/7/delete"),

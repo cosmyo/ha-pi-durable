@@ -80,9 +80,11 @@ test("actual Anthropic /login UI opens protected auth while disconnected, withou
     await import(
       new URL(`../public/app.js?auth-ui-${Date.now()}`, import.meta.url).href
     );
+    // The drawer/account control now shows a short cross-provider summary
+    // ("ChatGPT \u2713 \u00b7 Claude"), not a single provider-specific label.
     assert.equal(
-      document.getElementById("account")!.textContent,
-      "Anthropic login",
+      document.getElementById("account")!.textContent!.trim(),
+      "Claude",
     );
     const message = document.getElementById("message") as HTMLTextAreaElement;
     assert.equal(message.disabled, false);

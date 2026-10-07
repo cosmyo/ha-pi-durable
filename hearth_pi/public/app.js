@@ -7,9 +7,22 @@ import {
 const $ = (id) => document.getElementById(id);
 const base = new URL("./", window.location.href);
 // Phones, the HA companion app and short landscape screens use a compact
-// layout: secondary panels start collapsed so the conversation keeps the space.
+// layout: the drawer becomes an off-canvas panel instead of a permanent
+// sidebar, and secondary panels open as sheets instead of staying inline.
 const COMPACT_QUERY = "(max-width: 720px), (max-height: 560px)";
 const compact = () => !!window.matchMedia?.(COMPACT_QUERY).matches;
+// Short, human labels for OAuth auth providers. Unknown ids fall back to
+// their raw provider string so a new provider never renders as blank.
+const AUTH_PROVIDER_LABEL = { "openai-codex": "ChatGPT", anthropic: "Claude" };
+const THINKING_LABEL = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "Extra high",
+  max: "Max",
+};
 let csrf = "",
   selected = null,
   stream = null,
@@ -30,10 +43,18 @@ let csrf = "",
   defaultThinkingLevel = "off",
   modelSelection = null,
   modelDraftDirty = false,
-  applyingModel = false;
+  applyingModel = false,
+  authProviders = [],
+  accountStatuses = new Map(),
+  activeAuthProvider = "",
+  openSessionMenu = "";
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
+function setConnection(text) {
+  $("connection").textContent = text;
+  $("connection").hidden = text === "Connected";
+}
 async function api(path, payload) {
   const response = await fetch(new URL(`api/${path}`, base), {
     credentials: "same-origin",
@@ -60,34 +81,103 @@ async function api(path, payload) {
   }
   return value;
 }
+// The default auth provider when none is named explicitly: the OAuth
+// provider matching the configured inference provider, else ChatGPT/Codex,
+// which is always available.
+function defaultAuthProvider() {
+  return provider === "anthropic" ? "anthropic" : "openai-codex";
+}
+// GET /api/auth/providers lists every available OAuth provider in one call.
+// Older servers do not have that route yet: fall back to the single default
+// provider's existing GET /api/auth/status.
+async function loadAuthProviders() {
+  try {
+    const { items } = await api("auth/providers");
+    return items;
+  } catch {
+    try {
+      return [await api("auth/status")];
+    } catch {
+      return [];
+    }
+  }
+}
+async function refreshAccountSummary() {
+  const items = await loadAuthProviders();
+  authProviders = items.map((i) => i.provider);
+  accountStatuses = new Map(items.map((i) => [i.provider, i]));
+  if (!authProviders.includes(activeAuthProvider))
+    activeAuthProvider = authProviders[0] ?? "";
+  $("account-summary").textContent = items.length
+    ? items
+        .map(
+          (i) =>
+            `${AUTH_PROVIDER_LABEL[i.provider] ?? i.provider}${i.configured ? " ✓" : ""}`,
+        )
+        .join(" · ")
+    : "Account";
+  renderAccountProviders();
+}
+function renderAccountProviders() {
+  const fragment = document.createDocumentFragment();
+  if (authProviders.length > 1) {
+    for (const id of authProviders) {
+      const status = accountStatuses.get(id);
+      const card = node("div", "", "account-provider");
+      const info = node("div", "", "account-provider-info");
+      info.append(
+        node("strong", status?.providerName ?? AUTH_PROVIDER_LABEL[id] ?? id),
+        node(
+          "span",
+          status?.configured ? "Connected" : "Not signed in",
+          "muted",
+        ),
+      );
+      const manage = node(
+        "button",
+        id === activeAuthProvider ? "Managing" : "Manage",
+      );
+      manage.type = "button";
+      manage.setAttribute("aria-current", String(id === activeAuthProvider));
+      manage.addEventListener("click", () => {
+        activeAuthProvider = id;
+        renderAccountProviders();
+        void refreshAccount();
+      });
+      card.append(info, manage);
+      fragment.append(card);
+    }
+  }
+  $("account-providers").replaceChildren(fragment);
+  $("account-providers").hidden = authProviders.length <= 1;
+}
 async function bootstrap() {
   const status = await api("bootstrap");
   csrf = status.csrf;
   $("provider").textContent = status.provider;
   provider = status.provider;
-  $("account").textContent =
-    provider === "local"
-      ? "Local model"
-      : provider === "anthropic"
-        ? "Anthropic login"
-        : "ChatGPT login";
+  $("account-local").hidden = provider !== "local";
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
   $("new-workspace").hidden = !status.workspaceEnabled;
+  if (!activeAuthProvider) activeAuthProvider = defaultAuthProvider();
+  await refreshAccountSummary();
   controls();
 }
 function updatePermissions(value) {
   if (!value) return;
   permissions = value;
   $("home-mode").value = value.effectiveMode;
-  $("permissions-mode").textContent = value.blocked
+  const modeLabel = value.blocked
     ? "Paused"
     : value.effectiveMode === "full"
       ? "Full access"
       : value.effectiveMode === "ask"
         ? "Ask"
         : "Read-only";
+  $("permissions-mode").textContent = modeLabel;
+  $("permissions-mode-row").textContent = modeLabel;
   homeSafety = `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
   $("permission-summary").textContent =
     `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
@@ -153,11 +243,9 @@ function controls() {
   const loginCommand = /^\/login(?:\s|$)/.test($("message").value.trim());
   $("send").disabled =
     $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
+  $("stop").hidden = !busy;
   $("stop").disabled = !selected || !busy;
-  $("delete-session").disabled = !selected;
-  // Keep the compact header row within phone width; the always-visible
-  // aria-label still names the action for assistive tech.
-  $("delete-session").textContent = compact() ? "🗑" : "Delete";
+  $("send").hidden = busy;
   $("model-choice").disabled =
     !selected ||
     !modelSelection ||
@@ -171,10 +259,10 @@ function controls() {
     $("model-choice").disabled ||
     ($("model-choice").value === modelSelection?.model?.modelId &&
       $("thinking-choice").value === modelSelection?.thinkingLevel);
-  $("home-surface").hidden = selectedKind === "workspace";
   $("canvas-toggle").hidden = selectedKind === "workspace";
-  $("home-canvas").hidden = !canvasOpen;
-  $("home-surface").classList.toggle("collapsed", !canvasOpen);
+  // Collapsed means fully hidden, not an empty bordered box: there is
+  // nothing useful to show until the chip reopens it.
+  $("home-surface").hidden = selectedKind === "workspace" || !canvasOpen;
   $("canvas-toggle").setAttribute("aria-expanded", String(canvasOpen));
   for (const button of document.querySelectorAll(
     ".canvas-question, .home-starters button",
@@ -204,15 +292,6 @@ $("canvas-toggle").addEventListener("click", () => {
   canvasOpen = !canvasOpen;
   controls();
 });
-// Compact-layout disclosure panels. Wide layouts always show both panels.
-function panelToggle(button, className) {
-  $(button).addEventListener("click", () => {
-    const open = document.body.classList.toggle(className);
-    $(button).setAttribute("aria-expanded", String(open));
-  });
-}
-panelToggle("permissions-toggle", "show-permissions");
-panelToggle("model-toggle", "show-model");
 // Grow the composer with its content instead of reserving rows up front.
 function fitComposer() {
   const box = $("message");
@@ -242,6 +321,9 @@ function snapshot(value) {
     $("active-model").textContent = active
       ? `Active: ${active.provider} / ${active.modelId} · thinking ${modelSelection.thinkingLevel}`
       : "Active model unavailable; ask the administrator";
+    $("model-chip").textContent = active
+      ? `${active.modelId} · ${THINKING_LABEL[modelSelection.thinkingLevel] ?? modelSelection.thinkingLevel}`
+      : "Model unavailable";
     if (
       !modelDraftDirty ||
       !modelChoices.some((m) => m.id === $("model-choice").value)
@@ -288,23 +370,88 @@ function snapshot(value) {
   controls();
   if (atBottom) area.scrollTop = area.scrollHeight;
 }
+// Compact relative time for the conversation list, Claude-app style.
+function relativeTime(ms) {
+  const diff = Date.now() - ms;
+  const minute = 60000,
+    hour = 3600000,
+    day = 86400000;
+  if (diff < minute) return "now";
+  if (diff < hour) return `${Math.floor(diff / minute)}m`;
+  if (diff < day) return `${Math.floor(diff / hour)}h`;
+  if (diff < 2 * day) return "Yesterday";
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d`;
+  return new Date(ms).toLocaleDateString();
+}
+function closeSessionMenus() {
+  openSessionMenu = "";
+  for (const menu of document.querySelectorAll(".session-menu"))
+    menu.hidden = true;
+  for (const toggle of document.querySelectorAll(".session-menu-toggle"))
+    toggle.setAttribute("aria-expanded", "false");
+}
 async function listSessions() {
   const { items } = await api("sessions");
   const fragment = document.createDocumentFragment();
   for (const session of items.slice().reverse()) {
-    const button = node(
-      "button",
-      `${session.kind === "workspace" ? "⌘ " : "◈ "}${session.title}`,
-      "session",
+    const row = node("div", "", "session-row");
+    const button = node("button", "", "session");
+    button.append(
+      node(
+        "span",
+        `${session.kind === "workspace" ? "⌘ " : "◈ "}${session.title}`,
+        "session-title",
+      ),
     );
     button.type = "button";
+    if (Number.isFinite(session.created)) {
+      const when = node("span", relativeTime(session.created), "session-time");
+      when.title = `Created ${new Date(session.created).toLocaleString()}`;
+      button.append(when);
+    }
     button.setAttribute("aria-current", String(session.id === selected));
-    button.addEventListener("click", () => select(session));
-    fragment.append(button);
+    button.addEventListener("click", () => {
+      closeSessionMenus();
+      select(session);
+      if (compact()) closeDrawer();
+    });
+    const menuWrap = node("div", "", "session-menu-wrap");
+    const toggle = node("button", "⋯", "session-menu-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-haspopup", "true");
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-label", `More for ${session.title}`);
+    const menu = node("div", "", "session-menu");
+    menu.setAttribute("role", "menu");
+    menu.hidden = true;
+    const del = node("button", "Delete");
+    del.type = "button";
+    del.setAttribute("role", "menuitem");
+    del.addEventListener("click", () => {
+      closeSessionMenus();
+      void deleteSession(session.id, session.title);
+    });
+    menu.append(del);
+    toggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const opening = openSessionMenu !== String(session.id);
+      closeSessionMenus();
+      if (opening) {
+        openSessionMenu = String(session.id);
+        menu.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+      }
+    });
+    menuWrap.append(toggle, menu);
+    row.append(button, menuWrap);
+    fragment.append(row);
   }
   $("sessions").replaceChildren(fragment);
   return items;
 }
+document.addEventListener("click", (event) => {
+  if (!event.target.closest?.(".session-menu-wrap")) closeSessionMenus();
+});
 async function select(session) {
   stream?.close();
   selected = session.id;
@@ -312,6 +459,7 @@ async function select(session) {
   modelSelection = null;
   modelDraftDirty = false;
   $("active-model").textContent = "Loading session model…";
+  $("model-chip").textContent = "Loading…";
   $("model-choice").value = "";
   $("thinking-choice").value = "off";
   actionSignature = "";
@@ -325,9 +473,10 @@ async function select(session) {
     const state = await api(`sessions/${id}/snapshot`);
     if (selected !== id) return;
     snapshot(state);
+    await listSessions();
     stream = new EventSource(new URL(`api/sessions/${id}/events`, base));
     stream.onopen = () => {
-      if (selected === id) $("connection").textContent = "Connected";
+      if (selected === id) setConnection("Connected");
     };
     stream.addEventListener("snapshot", (event) => {
       if (selected === id) {
@@ -340,7 +489,7 @@ async function select(session) {
       }
     });
     stream.onerror = () => {
-      if (selected === id) $("connection").textContent = "Reconnecting…";
+      if (selected === id) setConnection("Reconnecting…");
     };
   } catch (error) {
     feedback(error.message);
@@ -367,6 +516,9 @@ async function sendSaved() {
   } finally {
     sending = false;
     controls();
+    // Re-measure now that the textarea is enabled again: some browsers do
+    // not reflow a disabled textarea's auto-grow height correctly.
+    fitComposer();
   }
 }
 $("composer").addEventListener("submit", (event) => {
@@ -376,19 +528,15 @@ $("composer").addEventListener("submit", (event) => {
   if (!content) return;
   if (/^\/login\b/.test(content)) {
     const command = /^\/login(?:\s+(anthropic|openai-codex))?$/.exec(content);
-    const loginProvider =
-      provider === "anthropic" ? "anthropic" : "openai-codex";
-    if (
-      !command ||
-      (command[1] && command[1] !== loginProvider) ||
-      provider === "local"
-    ) {
+    const loginProvider = command?.[1] ?? defaultAuthProvider();
+    if (!command || !authProviders.includes(loginProvider)) {
       feedback(
-        "Use /login with the subscription provider selected in App configuration.",
+        "That subscription provider is not available. Use /login with an available provider.",
       );
       return;
     }
     $("message").value = "";
+    activeAuthProvider = loginProvider;
     openAccount();
     void startLogin();
     return;
@@ -426,6 +574,7 @@ async function newSession(kind) {
     await listSessions();
     await select({ id: result.id, title, kind });
     await listSessions();
+    if (compact()) closeDrawer();
   } catch (error) {
     feedback(error.message);
   }
@@ -435,6 +584,9 @@ $("new-session").addEventListener("click", () => {
 });
 $("new-workspace").addEventListener("click", () => {
   void newSession("workspace");
+});
+$("new-chat-icon").addEventListener("click", () => {
+  void newSession("home");
 });
 $("stop").addEventListener("click", async () => {
   try {
@@ -471,15 +623,13 @@ function showWelcome() {
   $("task-status").textContent = "Choose a session";
   $("usage").textContent = "No model usage yet";
   $("active-model").textContent = "Choose a session";
+  $("model-chip").textContent = "Choose a session";
   $("messages").replaceChildren();
   $("approvals").replaceChildren();
   renderCanvas($("home-canvas"), null, draftQuestion);
   controls();
 }
-async function deleteSession() {
-  if (!selected) return;
-  const id = selected,
-    title = $("title").textContent;
+async function deleteSession(id, title) {
   if (
     !window.confirm(
       `Delete "${title}"? This cannot be undone through the App. The stored transcript stays in the App's private data store and is not securely erased.`,
@@ -505,9 +655,6 @@ async function deleteSession() {
     );
   }
 }
-$("delete-session").addEventListener("click", () => {
-  void deleteSession();
-});
 async function decide(proposal, decision) {
   let note = "";
   if (decision === "resolve") {
@@ -565,7 +712,11 @@ function renderLoginPrompt(prompt) {
       if (option.description) button.title = option.description;
       button.addEventListener("click", async () => {
         try {
-          await api("auth/answer", { id: loginId, value: option.id });
+          await api("auth/answer", {
+            id: loginId,
+            value: option.id,
+            provider: activeAuthProvider,
+          });
           await refreshAccount();
         } catch (e) {
           $("account-status").textContent = e.message;
@@ -588,9 +739,19 @@ function renderLoginPrompt(prompt) {
   );
 }
 async function refreshAccount() {
+  if (!activeAuthProvider) activeAuthProvider = defaultAuthProvider();
   try {
-    const status = await api("auth/status"),
-      login = status.login,
+    // GET /api/auth/providers (with its single-provider GET /api/auth/status
+    // fallback) is the only source of per-provider status; it is re-fetched
+    // here so the polled login prompt/code stay current for activeAuthProvider.
+    await refreshAccountSummary();
+    const status = accountStatuses.get(activeAuthProvider);
+    if (!status) {
+      $("account-status").textContent =
+        "That subscription provider is not available.";
+      return;
+    }
+    const login = status.login,
       prompt = login?.prompt;
     loginId = login?.id ?? "";
     const pending = !!login && ["starting", "waiting"].includes(login.state);
@@ -600,7 +761,7 @@ async function refreshAccount() {
       ? "Experimental Pi Anthropic OAuth with pi-anthropic-auth 3.4.2 compatibility. Credentials stay in the controller, never the coding workspace. Provider terms apply; third-party usage may incur extra per-token billing. Login does not guarantee included Claude plan usage."
       : "Official Pi OAuth. Credentials stay in the controller, never the coding workspace. Your subscription's limits apply. API-key billing is separate.";
     $("account-config").textContent =
-      `Select provider ${status.provider} in App configuration. Signing out removes only this App's credential; it does not revoke your account.`;
+      `Select provider ${status.provider} in App configuration to use this login for inference. Signing out removes only this App's credential; it does not revoke your account.`;
     $("login-url").textContent = anthropic
       ? "Continue at Anthropic"
       : "Continue at OpenAI";
@@ -738,13 +899,14 @@ $("local-close").addEventListener("click", () => $("local-dialog").close());
 $("local-dialog").addEventListener("close", () => {
   $("local-key").value = "";
 });
+$("open-local").addEventListener("click", () => {
+  $("local-dialog").showModal();
+  void refreshLocal();
+});
 function openAccount() {
-  if (provider === "local") {
-    $("local-dialog").showModal();
-    void refreshLocal();
-    return;
-  }
+  $("account").setAttribute("aria-expanded", "true");
   $("account-dialog").showModal();
+  renderAccountProviders();
   void refreshAccount();
   clearInterval(accountTimer);
   accountTimer = setInterval(() => {
@@ -755,11 +917,12 @@ $("account").addEventListener("click", openAccount);
 $("account-dialog").addEventListener("close", () => {
   clearInterval(accountTimer);
   $("login-redirect").value = "";
+  $("account").setAttribute("aria-expanded", "false");
 });
 $("account-close").addEventListener("click", () => $("account-dialog").close());
 async function startLogin() {
   try {
-    await api("auth/login", {});
+    await api("auth/login", { provider: activeAuthProvider });
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
@@ -793,7 +956,11 @@ $("login-answer").addEventListener("submit", async (e) => {
   const value = $("login-redirect").value;
   $("login-redirect").value = "";
   try {
-    await api("auth/answer", { id: loginId, value });
+    await api("auth/answer", {
+      id: loginId,
+      value,
+      provider: activeAuthProvider,
+    });
     await refreshAccount();
   } catch (error) {
     $("account-status").textContent = error.message;
@@ -801,7 +968,7 @@ $("login-answer").addEventListener("submit", async (e) => {
 });
 $("login-cancel").addEventListener("click", async () => {
   try {
-    await api("auth/cancel", { id: loginId });
+    await api("auth/cancel", { id: loginId, provider: activeAuthProvider });
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
@@ -810,7 +977,7 @@ $("login-cancel").addEventListener("click", async () => {
 $("login-verify").addEventListener("click", async () => {
   $("login-verify").disabled = true;
   try {
-    await api("auth/verify", {});
+    await api("auth/verify", { provider: activeAuthProvider });
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
@@ -819,14 +986,15 @@ $("login-verify").addEventListener("click", async () => {
   }
 });
 $("login-logout").addEventListener("click", async () => {
+  const label = AUTH_PROVIDER_LABEL[activeAuthProvider] ?? activeAuthProvider;
   if (
     !window.confirm(
-      `Remove this App's local ${provider === "anthropic" ? "Anthropic" : "ChatGPT"} credential? This does not revoke your provider account.`,
+      `Remove this App's local ${label} credential? This does not revoke your provider account.`,
     )
   )
     return;
   try {
-    await api("auth/logout", {});
+    await api("auth/logout", { provider: activeAuthProvider });
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
@@ -847,12 +1015,25 @@ $("apply-model").addEventListener("click", async () => {
   if (!selected || !modelSelection || $("apply-model").disabled) return;
   const id = selected;
   const revision = modelSelection.revision;
-  const modelId = $("model-choice").value;
+  const raw = $("model-choice").value;
+  // Multi-provider catalogs encode "provider\u0000modelId" to disambiguate
+  // ids that collide across providers; the configured inference provider's
+  // own models keep a plain modelId value and omit the field (= default).
+  const [maybeProvider, maybeModelId] = raw.split("\u0000");
+  const modelId = maybeModelId ?? raw;
+  const modelProvider = maybeModelId ? maybeProvider : undefined;
   const thinkingLevel = $("thinking-choice").value;
   applyingModel = true;
   controls();
   try {
-    await api(`sessions/${id}/model`, { modelId, thinkingLevel, revision });
+    await api(`sessions/${id}/model`, {
+      ...(modelProvider && modelProvider !== provider
+        ? { provider: modelProvider }
+        : {}),
+      modelId,
+      thinkingLevel,
+      revision,
+    });
     if (selected === id) {
       const updated = await api(`sessions/${id}/snapshot`);
       if (selected !== id) return;
@@ -886,30 +1067,122 @@ $("apply-model").addEventListener("click", async () => {
   }
 });
 renderCanvas($("home-canvas"), null, draftQuestion);
-// Local endpoints can add or replace models without an App restart.
+// Local endpoints can add or replace models without an App restart. When
+// more than one provider is present, models group under their provider's
+// name so e.g. "gpt-5" (ChatGPT) and "gpt-5" (local) never read as one model.
 async function loadModels() {
   modelChoices = (await api("models")).items;
+  const providers = [...new Set(modelChoices.map((m) => m.provider))];
+  const multi = providers.length > 1;
   const choices = document.createDocumentFragment();
+  const groups = new Map();
   for (const model of modelChoices) {
     const option = document.createElement("option");
-    option.value = model.id;
+    option.value = multi ? `${model.provider}\u0000${model.id}` : model.id;
     option.textContent = `${model.name} (${model.id})`;
-    choices.append(option);
+    if (!multi) {
+      choices.append(option);
+      continue;
+    }
+    let group = groups.get(model.provider);
+    if (!group) {
+      group = document.createElement("optgroup");
+      group.label = AUTH_PROVIDER_LABEL[model.provider] ?? model.provider;
+      groups.set(model.provider, group);
+      choices.append(group);
+    }
+    group.append(option);
   }
   $("model-choice").replaceChildren(choices);
   controls();
 }
+// --- Drawer (off-canvas on compact, permanent sidebar on wide screens) ---
+function drawerFocusable() {
+  return [
+    ...$("drawer").querySelectorAll(
+      'button:not([hidden]):not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ),
+  ];
+}
+function openDrawer() {
+  document.body.classList.add("drawer-open");
+  $("backdrop").hidden = false;
+  $("drawer-toggle").setAttribute("aria-expanded", "true");
+  const first = drawerFocusable()[0];
+  first?.focus();
+}
+function closeDrawer() {
+  document.body.classList.remove("drawer-open");
+  $("backdrop").hidden = true;
+  $("drawer-toggle").setAttribute("aria-expanded", "false");
+  closeSessionMenus();
+  $("drawer-toggle").focus();
+}
+$("drawer-toggle").addEventListener("click", () => {
+  if (document.body.classList.contains("drawer-open")) closeDrawer();
+  else openDrawer();
+});
+$("drawer-close").addEventListener("click", closeDrawer);
+$("backdrop").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+});
+document.addEventListener("keydown", (event) => {
+  if (
+    event.key !== "Tab" ||
+    !compact() ||
+    !document.body.classList.contains("drawer-open")
+  )
+    return;
+  const focusable = drawerFocusable();
+  if (!focusable.length) return;
+  const first = focusable[0],
+    last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+});
+// --- Sheets: Home permissions and Model open as dialogs from several entry points ---
+function openPermissions() {
+  $("permissions-dialog").showModal();
+  $("permissions-toggle").setAttribute("aria-expanded", "true");
+  $("permissions-row").setAttribute("aria-expanded", "true");
+}
+$("permissions-toggle").addEventListener("click", openPermissions);
+$("permissions-row").addEventListener("click", openPermissions);
+$("permissions-close").addEventListener("click", () =>
+  $("permissions-dialog").close(),
+);
+$("permissions-dialog").addEventListener("close", () => {
+  $("permissions-toggle").setAttribute("aria-expanded", "false");
+  $("permissions-row").setAttribute("aria-expanded", "false");
+});
+function openModel() {
+  $("model-dialog").showModal();
+  $("model-chip").setAttribute("aria-expanded", "true");
+}
+$("model-chip").addEventListener("click", openModel);
+$("model-close").addEventListener("click", () => $("model-dialog").close());
+$("model-dialog").addEventListener("close", () => {
+  $("model-chip").setAttribute("aria-expanded", "false");
+});
 try {
   await bootstrap();
   await loadModels();
   const sessions = await listSessions();
-  $("connection").textContent = "Connected";
+  setConnection("Connected");
   if (sessions.length) {
     await select(sessions[sessions.length - 1]);
     await listSessions();
   }
 } catch {
-  $("connection").textContent = "Unavailable";
+  setConnection("Unavailable");
   feedback(
     "Authentication or server unavailable. Local mode uses username hearth and the configured password. Reload to reconnect.",
   );

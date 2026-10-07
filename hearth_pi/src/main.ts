@@ -12,15 +12,18 @@ import { WorkspaceClient, workspaceExtension } from "./workspace.js";
 try {
   const config = await loadConfig();
   await dropAppPrivileges(config);
+  // ChatGPT/Codex login is always offered; Anthropic only behind its flag.
+  // One Pi ModelRuntime serves both, each with its own private credential file.
   const {
-    subscription,
+    subscriptions,
     runtime: native,
     secrets,
-  } = await Subscription.open(
+  } = await Subscription.openProviders(
     config.dataDir,
     [config.apiKey, config.haToken, config.password],
-    config.provider === "anthropic" ? "anthropic" : "openai-codex",
-    config.provider !== "anthropic" || config.anthropicAuthEnabled === true,
+    config.anthropicAuthEnabled === true
+      ? ["openai-codex", "anthropic"]
+      : ["openai-codex"],
   );
   const { models, provider, modelId } = await configuredModels(
     config,
@@ -59,8 +62,16 @@ try {
     ha.actions,
     config.thinkingLevel,
   );
+  // Signed-in OAuth providers' models become selectable per session. The
+  // offline demonstration keeps its faux-only registry (no real inference).
+  if (config.provider !== "offline")
+    runtime.oauthProviders = () =>
+      subscriptions.map((s) => ({
+        provider: s.provider,
+        signedIn: s.configured(),
+      }));
   const app = appServer(config, runtime, new Actions(runtime, ha), {
-    subscription,
+    subscriptions,
     local,
     secrets,
   });

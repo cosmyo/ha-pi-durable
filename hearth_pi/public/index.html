@@ -14,80 +14,300 @@
     <script type="module" src="./app.js"></script>
   </head>
   <body>
-    <header>
-      <img src="./icon.svg" width="44" height="44" alt="" />
-      <div>
-        <h1>Hearth Pi</h1>
-        <p>Your home companion · powered by Pi Durable</p>
+    <div id="backdrop" hidden></div>
+    <div id="app">
+      <nav id="drawer" aria-label="Conversations">
+        <div class="drawer-head">
+          <img src="./icon.svg" width="26" height="26" alt="" />
+          <span class="brand">Hearth Pi</span>
+          <button
+            id="drawer-close"
+            class="compact-only"
+            type="button"
+            aria-label="Close conversations"
+          >
+            ✕
+          </button>
+        </div>
+        <div class="drawer-actions">
+          <button id="new-session" type="button" class="primary">
+            ＋ New chat
+          </button>
+          <button id="new-workspace" type="button" hidden>
+            ＋ New code session
+          </button>
+        </div>
+        <div id="sessions" aria-label="Select a session"></div>
+        <div class="drawer-footer">
+          <button
+            id="permissions-row"
+            type="button"
+            aria-controls="permissions-dialog"
+            aria-expanded="false"
+          >
+            <span>Home permissions</span>
+            <span id="permissions-mode-row" class="muted">Read-only</span>
+          </button>
+          <button
+            id="account"
+            type="button"
+            aria-controls="account-dialog"
+            aria-expanded="false"
+          >
+            <span id="account-summary">Account</span>
+          </button>
+          <p class="muted drawer-note">
+            Independent community app.<br />Pi Durable is experimental.
+          </p>
+          <span class="pill" id="provider">Provider loading</span>
+        </div>
+      </nav>
+      <div id="main">
+        <header id="topbar">
+          <button
+            id="drawer-toggle"
+            class="compact-only"
+            type="button"
+            aria-controls="drawer"
+            aria-expanded="false"
+            aria-label="Conversations"
+          >
+            ☰
+          </button>
+          <div class="topbar-title">
+            <h2 id="title">A little warmth. A little more certainty.</h2>
+            <button
+              id="permissions-toggle"
+              type="button"
+              aria-controls="permissions-dialog"
+              aria-expanded="false"
+            >
+              <span id="permissions-mode">Read-only</span>
+            </button>
+          </div>
+          <button id="new-chat-icon" type="button" aria-label="New chat">
+            ✎
+          </button>
+        </header>
+        <p id="connection" role="status">Connecting</p>
+        <section class="conversation" aria-label="Chat">
+          <p id="safety" class="sr-only" aria-live="polite">
+            Read-only by default
+          </p>
+          <div class="scroll-area" id="scroll-area">
+            <section id="home-surface" aria-label="Saved Home canvas">
+              <div
+                id="home-canvas"
+                aria-label="Saved Home canvas"
+                aria-live="polite"
+              ></div>
+              <p class="canvas-disclosure">
+                Model-selected layout · controller-read HA values · saved,
+                timestamped evidence. Questions are drafted for you to send;
+                nothing here approves an action.
+              </p>
+            </section>
+            <div
+              id="messages"
+              role="log"
+              aria-label="Conversation"
+              aria-live="polite"
+            >
+              <div class="welcome">
+                <h3>Your home, thoughtfully assisted.</h3>
+                <p>
+                  Ask Hearth to understand your home or build a useful status
+                  view. Device actions follow Home permissions: Ask reviews each
+                  action; explicitly acknowledged Full access auto-approves only
+                  supported scoped actions. Model prose is not an action
+                  receipt.
+                </p>
+                <div class="home-starters">
+                  <button id="build-view" type="button" disabled>
+                    Build me a home view
+                  </button>
+                  <button id="home-briefing" type="button" disabled>
+                    Give me a grounded briefing
+                  </button>
+                </div>
+              </div>
+            </div>
+            <section id="approvals" aria-label="Exact action reviews"></section>
+          </div>
+          <p id="feedback" role="status"></p>
+          <form id="composer">
+            <label class="sr-only" for="message">Your message</label
+            ><textarea
+              id="message"
+              placeholder="What would you like to understand?"
+              maxlength="4000"
+              rows="1"
+              required
+              disabled
+            ></textarea
+            ><button id="send" type="submit" disabled aria-label="Send">
+              <span aria-hidden="true">↑</span></button
+            ><button id="stop" type="button" disabled>Stop</button
+            ><button id="retry" type="button" hidden>Retry saved input</button>
+          </form>
+          <div class="composer-chips">
+            <button
+              id="canvas-toggle"
+              class="chip"
+              type="button"
+              aria-controls="home-surface"
+              aria-expanded="true"
+            >
+              Home view
+            </button>
+            <button
+              id="model-chip"
+              class="chip"
+              type="button"
+              aria-controls="model-dialog"
+              aria-expanded="false"
+            >
+              Choose a session
+            </button>
+          </div>
+        </section>
       </div>
-      <span class="pill" id="connection" role="status">Connecting</span>
-      <button
-        id="permissions-toggle"
-        class="compact-only"
-        type="button"
-        aria-controls="home-permissions"
-        aria-expanded="false"
-        aria-label="Home permissions"
-      >
-        ◈ <span id="permissions-mode">Read-only</span>
-      </button>
-      <button id="account" type="button">ChatGPT login</button>
-    </header>
-    <dialog id="account-dialog" aria-labelledby="account-title">
-      <h2 id="account-title">ChatGPT / Codex subscription</h2>
-      <p id="account-details">
-        Official Pi OAuth. Credentials stay in the controller, never in the
-        coding workspace. Your subscription's limits apply. API-key billing is
-        separate.
-      </p>
-      <p id="account-config" class="muted">
-        Select provider <code>openai-codex</code> in the App configuration to
-        use this login. Signing out here removes the local credential; it does
-        not revoke your account.
-      </p>
-      <p id="account-status" role="status"></p>
-      <p id="account-token" class="muted"></p>
-      <button id="login-start" type="button">Sign in with ChatGPT</button>
-      <fieldset id="login-choice" hidden>
-        <legend id="login-prompt"></legend>
-        <div id="login-options"></div>
-      </fieldset>
-      <ol id="login-steps" class="muted" hidden>
-        <li>Copy the code</li>
-        <li id="login-step-open">Open OpenAI</li>
-        <li>Approve — Hearth finishes automatically</li>
-      </ol>
-      <code id="login-code" hidden></code>
-      <div id="login-copy-row" class="actions" hidden>
-        <button id="login-copy" type="button">Copy code</button>
-      </div>
-      <p
-        id="login-copy-feedback"
-        class="muted"
-        role="status"
-        aria-live="polite"
-      ></p>
-      <a id="login-url" target="_blank" rel="noopener noreferrer" hidden
-        >Continue at OpenAI</a
-      >
-      <form id="login-answer" autocomplete="off" hidden>
-        <label id="login-redirect-label" for="login-redirect"
-          >Final localhost redirect URL</label
-        >
-        <input
-          id="login-redirect"
-          type="password"
-          autocomplete="off"
-          placeholder="Paste final localhost:1455 redirect URL"
-          maxlength="4096"
-          required
-        />
-        <button type="submit">Complete login</button>
-      </form>
+    </div>
+    <dialog id="permissions-dialog" aria-label="Home permissions">
+      <h2>Home permissions</h2>
+      <section id="home-permissions" aria-label="Home permissions">
+        <label for="home-mode">Mode</label>
+        <select id="home-mode">
+          <option value="read-only">Read-only</option>
+          <option value="ask">Ask</option>
+          <option value="full">Full access</option>
+        </select>
+        <button id="save-home-mode" type="button">
+          Apply Home permissions
+        </button>
+        <button id="emergency-read-only" type="button">
+          Emergency Read-only
+        </button>
+        <p id="permission-summary" role="status"></p>
+        <p class="muted">
+          Only configured exact light/switch on/off and light brightness. No
+          Home shell, config, SSH, Docker, scripts or admin access.
+        </p>
+        <p class="muted">
+          Code permissions are unchanged and separately confined.
+        </p>
+      </section>
       <div class="actions">
-        <button id="login-cancel" type="button" hidden>Cancel login</button>
-        <button id="login-verify" type="button" hidden>Check connection</button>
-        <button id="login-logout" type="button" hidden>Sign out locally</button>
+        <button id="permissions-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="model-dialog" aria-label="Session model">
+      <h2>Model</h2>
+      <div class="model-picker" aria-label="Session model">
+        <label for="model-choice">Model for next input</label>
+        <select id="model-choice" disabled></select>
+        <label for="thinking-choice">Thinking</label>
+        <select id="thinking-choice" disabled>
+          <option value="off">Off</option>
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="xhigh">Extra high</option>
+          <option value="max">Max</option>
+        </select>
+        <button id="apply-model" type="button" disabled>
+          Apply model and thinking
+        </button>
+        <span id="active-model" role="status">Choose a session</span>
+        <details>
+          <summary>About model selection</summary>
+          <p>
+            Models listed by this provider's local catalog; provider account
+            limits apply. New sessions use the configured default model and
+            thinking; existing sessions retain their choices. Selecting does not
+            switch until you press Apply.
+          </p>
+        </details>
+        <p id="task-status" class="muted">Choose a session</p>
+        <p id="usage" class="muted">No model usage yet</p>
+      </div>
+      <div class="actions">
+        <button id="model-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="account-dialog" aria-label="Account">
+      <h2>Account</h2>
+      <div id="account-providers"></div>
+      <div id="account-detail">
+        <h3 id="account-title">ChatGPT / Codex subscription</h3>
+        <p id="account-details">
+          Official Pi OAuth. Credentials stay in the controller, never in the
+          coding workspace. Your subscription's limits apply. API-key billing is
+          separate.
+        </p>
+        <p id="account-config" class="muted">
+          Select provider <code>openai-codex</code> in the App configuration to
+          use this login for inference. Signing out here removes the local
+          credential; it does not revoke your account.
+        </p>
+        <p id="account-status" role="status"></p>
+        <p id="account-token" class="muted"></p>
+        <button id="login-start" type="button">Sign in with ChatGPT</button>
+        <fieldset id="login-choice" hidden>
+          <legend id="login-prompt"></legend>
+          <div id="login-options"></div>
+        </fieldset>
+        <ol id="login-steps" class="muted" hidden>
+          <li>Copy the code</li>
+          <li id="login-step-open">Open OpenAI</li>
+          <li>Approve — Hearth finishes automatically</li>
+        </ol>
+        <code id="login-code" hidden></code>
+        <div id="login-copy-row" class="actions" hidden>
+          <button id="login-copy" type="button">Copy code</button>
+        </div>
+        <p
+          id="login-copy-feedback"
+          class="muted"
+          role="status"
+          aria-live="polite"
+        ></p>
+        <a id="login-url" target="_blank" rel="noopener noreferrer" hidden
+          >Continue at OpenAI</a
+        >
+        <form id="login-answer" autocomplete="off" hidden>
+          <label id="login-redirect-label" for="login-redirect"
+            >Final localhost redirect URL</label
+          >
+          <input
+            id="login-redirect"
+            type="password"
+            autocomplete="off"
+            placeholder="Paste final localhost:1455 redirect URL"
+            maxlength="4096"
+            required
+          />
+          <button type="submit">Complete login</button>
+        </form>
+        <div class="actions">
+          <button id="login-cancel" type="button" hidden>Cancel login</button>
+          <button id="login-verify" type="button" hidden>
+            Check connection
+          </button>
+          <button id="login-logout" type="button" hidden>
+            Sign out locally
+          </button>
+        </div>
+      </div>
+      <section id="account-local" hidden>
+        <h3>Local model endpoint</h3>
+        <p class="muted">
+          Configured inference provider is a local OpenAI-compatible server.
+        </p>
+        <button id="open-local" type="button">Manage local endpoint</button>
+      </section>
+      <div class="actions">
         <button id="account-close" type="button">Close</button>
       </div>
     </dialog>
@@ -135,163 +355,5 @@
         <button id="local-close" type="button">Close</button>
       </div>
     </dialog>
-    <section id="home-permissions" aria-label="Home permissions">
-      <label for="home-mode">Home permissions</label>
-      <select id="home-mode">
-        <option value="read-only">Read-only</option>
-        <option value="ask">Ask</option>
-        <option value="full">Full access</option>
-      </select>
-      <button id="save-home-mode" type="button">Apply Home permissions</button>
-      <button id="emergency-read-only" type="button">
-        Emergency Read-only
-      </button>
-      <p id="permission-summary" role="status"></p>
-      <p class="muted">
-        Only configured exact light/switch on/off and light brightness. No Home
-        shell, config, SSH, Docker, scripts or admin access. Code permissions
-        are unchanged and separately confined.
-      </p>
-    </section>
-    <main>
-      <aside aria-label="Sessions">
-        <div class="section-head">
-          <h2>Your sessions</h2>
-          <button id="new-session" type="button">＋ Home</button>
-          <button id="new-workspace" type="button" hidden>＋ Code</button>
-        </div>
-        <nav id="sessions" aria-label="Select a session"></nav>
-        <div class="aside-note">
-          <strong>Continuity, not just history.</strong>
-          <p>
-            Admitted work is saved before acknowledgment. Reconnect to committed
-            state.
-          </p>
-          <p>Independent community app.<br />Pi Durable is experimental.</p>
-          <span class="pill" id="provider">Provider loading</span>
-        </div>
-      </aside>
-      <section class="conversation" aria-label="Chat">
-        <div class="conversation-head">
-          <div>
-            <h2 id="title">A little warmth. A little more certainty.</h2>
-            <p id="safety" class="safety">Read-only by default</p>
-          </div>
-          <div class="actions">
-            <button
-              id="model-toggle"
-              class="compact-only"
-              type="button"
-              aria-controls="model-picker"
-              aria-expanded="false"
-            >
-              Model
-            </button>
-            <button
-              id="canvas-toggle"
-              type="button"
-              aria-controls="home-canvas"
-              aria-expanded="true"
-            >
-              Home view
-            </button>
-            <button id="stop" type="button" disabled>Stop task</button>
-            <button
-              id="delete-session"
-              type="button"
-              aria-label="Delete session"
-              disabled
-            >
-              Delete
-            </button>
-          </div>
-        </div>
-        <div id="model-picker" class="model-picker" aria-label="Session model">
-          <label for="model-choice">Model for next input</label>
-          <select id="model-choice" disabled></select>
-          <label for="thinking-choice">Thinking</label>
-          <select id="thinking-choice" disabled>
-            <option value="off">Off</option>
-            <option value="minimal">Minimal</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
-            <option value="xhigh">Extra high</option>
-            <option value="max">Max</option>
-          </select>
-          <button id="apply-model" type="button" disabled>
-            Apply model and thinking
-          </button>
-          <span id="active-model" role="status">Choose a session</span>
-          <p>
-            Models listed by this provider's local catalog; provider account
-            limits apply. New sessions use the configured default model and
-            thinking; existing sessions retain their choices. Selecting does not
-            switch until you press Apply.
-          </p>
-        </div>
-        <div class="scroll-area" id="scroll-area">
-          <section id="home-surface" aria-label="Hearth home companion">
-            <div class="home-starters">
-              <button id="build-view" type="button" disabled>
-                Build me a home view
-              </button>
-              <button id="home-briefing" type="button" disabled>
-                Give me a grounded briefing
-              </button>
-            </div>
-            <div
-              id="home-canvas"
-              aria-label="Saved Home canvas"
-              aria-live="polite"
-            ></div>
-            <p class="canvas-disclosure">
-              Model-selected layout · controller-read HA values · saved,
-              timestamped evidence. Questions are drafted for you to send;
-              nothing here approves an action.
-            </p>
-          </section>
-          <div
-            id="messages"
-            role="log"
-            aria-label="Conversation"
-            aria-live="polite"
-          >
-            <div class="welcome">
-              <h3>Your home, thoughtfully assisted.</h3>
-              <p>
-                Ask Hearth to understand your home, build a useful status view,
-                or carry a scoped task through with evidence. Conversation and
-                canvas state are committed by Pi Durable. Device actions follow
-                Home permissions: Ask reviews each action; explicitly
-                acknowledged Full access auto-approves only supported scoped
-                actions. Model prose is not an action receipt.
-              </p>
-              <p>Create a session to begin.</p>
-            </div>
-          </div>
-          <section id="approvals" aria-label="Exact action reviews"></section>
-        </div>
-        <p id="feedback" role="status"></p>
-        <form id="composer">
-          <label class="sr-only" for="message">Your message</label
-          ><textarea
-            id="message"
-            placeholder="What would you like to understand?"
-            maxlength="4000"
-            rows="1"
-            required
-            disabled
-          ></textarea
-          ><button id="send" type="submit" disabled>
-            Send <span aria-hidden="true">↗</span></button
-          ><button id="retry" type="button" hidden>Retry saved input</button>
-        </form>
-        <footer>
-          <span id="task-status">Choose a session</span
-          ><span id="usage">No model usage yet</span>
-        </footer>
-      </section>
-    </main>
   </body>
 </html>

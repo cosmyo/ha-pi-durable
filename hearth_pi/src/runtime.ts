@@ -311,23 +311,48 @@ export class Runtime {
       }, ctx);
     });
   }
-  // Only the configured provider's in-process chat registry is exposed. These
-  // fields are projected explicitly: never serialize a provider/model object.
+  /**
+   * Available OAuth providers besides the configured one, with whether they
+   * are signed in. Set by the controller; empty keeps the configured provider
+   * the only choice (offline demonstration, tests).
+   */
+  oauthProviders: () => readonly { provider: string; signedIn: boolean }[] =
+    () => [];
+  // The configured provider's in-process chat registry plus that of every
+  // signed-in OAuth provider. These fields are projected explicitly: never
+  // serialize a provider/model object. (provider, id) is the key.
   modelChoices() {
-    return this.models
-      .getModels(this.model.provider)
-      .filter(
-        (m) =>
-          m.provider === this.model.provider &&
-          /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,119}$/.test(m.id) &&
-          !/^(sk-|bearer|eyJ)/i.test(m.id),
-      )
-      .slice(0, 200)
-      .map((m) => ({
-        id: m.id,
-        name: m.name.slice(0, 120),
-        provider: this.model.provider,
-      }));
+    const providers = [
+      this.model.provider,
+      ...this.oauthProviders()
+        .filter((p) => p.signedIn && p.provider !== this.model.provider)
+        .map((p) => p.provider),
+    ];
+    return providers.flatMap((provider) =>
+      this.models
+        .getModels(provider)
+        .filter(
+          (m) =>
+            m.provider === provider &&
+            /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,119}$/.test(m.id) &&
+            !/^(sk-|bearer|eyJ)/i.test(m.id),
+        )
+        .slice(0, 200)
+        .map((m) => ({ id: m.id, name: m.name.slice(0, 120), provider })),
+    );
+  }
+  /** Providers a session may be committed to: configured and available OAuth. */
+  private sessionProviders() {
+    return [
+      this.model.provider,
+      ...this.oauthProviders().map((p) => p.provider),
+    ];
+  }
+  /** The committed model provider of an owner's session, if any. */
+  async sessionProvider(owner: string, id: number) {
+    const conversation = await this.session(owner, id);
+    return (await this.harness.snapshot(AgentDoc, conversation.id, ctx))?.model
+      ?.provider;
   }
   async selectModel(
     owner: string,
@@ -335,14 +360,24 @@ export class Runtime {
     modelId: unknown,
     thinkingLevel: unknown,
     revision: unknown,
+    provider?: unknown,
   ) {
     const desired = text(modelId, 120);
     insist(
       Number.isSafeInteger(revision) && (revision as number) >= 0,
       "invalid_revision",
     );
+    const target =
+      provider === undefined ? this.model.provider : text(provider, 64);
+    if (target !== this.model.provider) {
+      const oauth = this.oauthProviders().find((p) => p.provider === target);
+      insist(oauth, "provider_unavailable", 403);
+      insist(oauth.signedIn, "subscription_login_required", 409);
+    }
     insist(
-      this.modelChoices().some((m) => m.id === desired),
+      this.modelChoices().some(
+        (m) => m.provider === target && m.id === desired,
+      ),
       "unsupported_model",
       400,
     );
@@ -356,7 +391,7 @@ export class Runtime {
     insist(
       supportsThinking(
         this.models,
-        this.model.provider,
+        target,
         desired,
         thinkingLevel as ModelThinkingLevel,
       ),
@@ -412,22 +447,24 @@ export class Runtime {
         );
         const stored = await tx.doc(AgentDoc, conversation.id);
         insist(
-          stored.model?.provider === this.model.provider,
+          stored.model &&
+            this.sessionProviders().includes(stored.model.provider),
           "unsupported_model",
           409,
         );
         if (
+          stored.model.provider !== target ||
           stored.model.modelId !== desired ||
           (stored.thinkingLevel ?? "off") !== thinkingLevel
         ) {
           await configure(tx, conversation.id, {
-            model: { provider: this.model.provider, modelId: desired },
+            model: { provider: target, modelId: desired },
             thinkingLevel: thinkingLevel as ModelThinkingLevel,
           });
           selection.revision++;
         }
         return {
-          model: { provider: this.model.provider, modelId: desired },
+          model: { provider: target, modelId: desired },
           thinkingLevel,
           revision: selection.revision,
         };
@@ -551,9 +588,10 @@ export class Runtime {
       return {
         modelSelection: {
           model:
-            committedModel?.provider === this.model.provider
+            committedModel &&
+            this.sessionProviders().includes(committedModel.provider)
               ? {
-                  provider: this.model.provider,
+                  provider: committedModel.provider,
                   modelId: committedModel.modelId,
                 }
               : null,

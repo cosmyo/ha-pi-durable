@@ -11,6 +11,19 @@ import { Serial, insist, text } from "./safety.js";
 import { anthropicAuthEnabled } from "./features.js";
 
 export type SubscriptionProvider = "openai-codex" | "anthropic";
+/** OAuth login providers in display order; ChatGPT/Codex is always first. */
+export const subscriptionProviders: readonly SubscriptionProvider[] = [
+  "openai-codex",
+  "anthropic",
+];
+export const isSubscriptionProvider = (
+  value: unknown,
+): value is SubscriptionProvider =>
+  subscriptionProviders.some((provider) => provider === value);
+const credentialFiles: Record<SubscriptionProvider, string> = {
+  "openai-codex": "chatgpt-oauth.json",
+  anthropic: "anthropic-oauth.json",
+};
 const providers = {
   "openai-codex": {
     name: "ChatGPT / Codex",
@@ -35,8 +48,13 @@ export class PrivateCredentials implements CredentialStore {
     readonly path: string,
     seeds: string[] = [],
     readonly provider: SubscriptionProvider = "openai-codex",
+    // Optional shared redaction list, so every provider's seeds and refreshed
+    // tokens land in the one list the server and model wrapper redact with.
+    secrets: string[] = [],
   ) {
-    this.secrets = seeds.filter(Boolean);
+    this.secrets = secrets;
+    for (const s of seeds)
+      if (s && !this.secrets.includes(s)) this.secrets.push(s);
   }
   private validate(
     value: Credential,
@@ -108,7 +126,7 @@ export class PrivateCredentials implements CredentialStore {
     });
   }
   async delete(id: string) {
-    insist(id === this.provider);
+    insist(id === this.provider, "unsupported_credentials");
     await this.serial.run(async () => {
       const { unlink } = await import("node:fs/promises");
       await unlink(this.path).catch((e) => {
@@ -116,6 +134,35 @@ export class PrivateCredentials implements CredentialStore {
       });
       this.expires = undefined;
     });
+  }
+}
+
+// One Pi credential store over the per-provider private files: each provider
+// id is delegated to its own PrivateCredentials (own file, own serial lock),
+// so Pi's refresh-under-lock stays per provider. Unknown ids are refused.
+export class ProviderCredentials implements CredentialStore {
+  constructor(readonly stores: readonly PrivateCredentials[]) {}
+  private store(id: string) {
+    return this.stores.find((store) => store.provider === id);
+  }
+  async read(id: string) {
+    return this.store(id)?.read(id);
+  }
+  async list() {
+    return (await Promise.all(this.stores.map((store) => store.list()))).flat();
+  }
+  modify(
+    id: string,
+    fn: (current: Credential | undefined) => Promise<Credential | undefined>,
+  ) {
+    const store = this.store(id);
+    insist(store, "unsupported_credentials");
+    return store.modify(id, fn);
+  }
+  async delete(id: string) {
+    const store = this.store(id);
+    insist(store, "unsupported_credentials");
+    await store.delete(id);
   }
 }
 
@@ -170,42 +217,63 @@ export class Subscription {
     enabled: boolean = provider !== "anthropic" || anthropicAuthEnabled(),
   ) {
     insist(provider !== "anthropic" || enabled, "anthropic_auth_disabled", 403);
-    const credentials = new PrivateCredentials(
-      join(
-        dataDir,
-        provider === "anthropic"
-          ? "anthropic-oauth.json"
-          : "chatgpt-oauth.json",
-      ),
-      seeds,
-      provider,
+    const { subscriptions, runtime, secrets } =
+      await Subscription.openProviders(dataDir, seeds, [provider]);
+    return { subscription: subscriptions[0]!, runtime, secrets };
+  }
+  /**
+   * Open one Pi ModelRuntime over the given providers' private credential
+   * files and one Subscription per provider sharing it. The caller passes
+   * "anthropic" only when its feature flag is enabled; providers left out
+   * have no credential store at all, so their files are never read.
+   */
+  static async openProviders(
+    dataDir: string,
+    seeds: string[],
+    enabled: readonly SubscriptionProvider[],
+  ) {
+    const list = subscriptionProviders.filter((p) => enabled.includes(p));
+    insist(list.length > 0, "subscription_unavailable");
+    const secrets: string[] = [];
+    const stores = list.map(
+      (provider) =>
+        new PrivateCredentials(
+          join(dataDir, credentialFiles[provider]),
+          seeds,
+          provider,
+          secrets,
+        ),
     );
     // Explicit storage; no ~/.pi discovery, project resources, custom endpoints or catalog fetch.
     const runtime = await ModelRuntime.create({
-      credentials,
-      authPath: credentials.path,
+      credentials: new ProviderCredentials(stores),
       modelsPath: null,
       modelsStorePath: join(dataDir, "pi-model-cache.json"),
       refreshOnCreate: false,
       allowModelNetwork: false,
     });
-    if (provider === "anthropic") {
+    if (list.includes("anthropic")) {
       const { registerAnthropicOAuth } = await import("./anthropic.js");
       await registerAnthropicOAuth(runtime);
     }
-    // Static provider: initialize auth metadata only. No remote catalogs, token exchange or model requests.
-    await runtime.refresh({ providers: [provider], allowNetwork: false });
-    await credentials.read(provider);
+    // Static providers: initialize auth metadata only. No remote catalogs, token exchange or model requests.
+    await runtime.refresh({ providers: list, allowNetwork: false });
+    for (const store of stores) await store.read(store.provider);
     return {
-      subscription: new Subscription(runtime, credentials, provider, enabled),
+      subscriptions: stores.map(
+        (store) => new Subscription(runtime, store, store.provider, true),
+      ),
       runtime,
-      secrets: credentials.secrets,
+      secrets,
     };
+  }
+  /** Signed in: enabled and Pi reports configured auth for this provider. */
+  configured() {
+    return this.enabled && this.runtime.hasConfiguredAuth(this.provider);
   }
   status(owner: string) {
     const login = this.login?.owner === owner ? this.login : undefined;
-    const configured =
-      this.enabled && this.runtime.hasConfiguredAuth(this.provider);
+    const configured = this.configured();
     return {
       configured,
       subscription: true,
