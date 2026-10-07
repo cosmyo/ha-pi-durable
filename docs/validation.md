@@ -1,6 +1,6 @@
 # Validation and release gates
 
-Baseline validation date: **2026-10-03**. Version **0.2.0** adds matching pinned Pi1.0.1, protected subscription OAuth and a separately confined coding worker. It is an experimental preview, not a production recommendation or external audit. The 0.1.0 CI evidence below is baseline evidence, not proof of the new worker or a live deployment.
+Baseline validation date: **2026-10-03**. Version **0.2.0** adds matching pinned Pi 1.0.1, protected subscription OAuth and a separately confined coding worker. It is an experimental preview, not a production recommendation or external audit. The 0.1.0 CI evidence below is baseline evidence, not proof of the new worker or a live deployment.
 
 ## Reproduce local checks
 
@@ -33,9 +33,9 @@ Test names and current counts come from the test runner, not this document. A gr
 
 ## New 0.2.0 gates
 
-Node24.21.0 clean install and local full check passed: **22 tests**, formatting, typecheck, build, package/lockfile/browser validation and public secret-pattern scan. Production dependency audit: zero known advisories. Two independent read-only reviews identified refreshed-secret HA redaction and partially failed Bash follow-up gaps; both reproduced failing regression tests, then passed after fixes. This is internal review, not an external security audit.
+Node 24.21.0 clean install and local full check passed: **22 tests**, formatting, typecheck, build, package/lockfile/browser validation and public secret-pattern scan. Production dependency audit: zero known advisories. Two independent read-only reviews identified refreshed-secret HA redaction and partially failed Bash follow-up gaps; both reproduced failing regression tests, then passed after fixes. This is internal review, not an external security audit.
 
-Synthetic tests exercise official Pi device-code OAuth through fake HTTP, protected credential storage/serialized refresh/restart/logout, owner-bound temporary login and state-required browser fallback. They never authenticate a real account. Matching Pi1.0.1 resolves a vulnerable dependency shrinkwrapped by SDK1.0.0; do not waive the production dependency audit.
+Synthetic tests exercise official Pi device-code OAuth through fake HTTP, protected credential storage/serialized refresh/restart/logout, owner-bound temporary login and state-required browser fallback. They never authenticate a real account. Matching Pi 1.0.1 resolves a vulnerable dependency shrinkwrapped by SDK 1.0.0; do not waive the production dependency audit.
 
 Genuine Pi read/write/edit/bash are exercised through bounded authenticated IPC. Explicit Home/Code capability groups, unknown-outcome blocking and a real subprocess SIGKILL prevent both durable replay and fresh model-driven coding reissue before human input. These local tests do not establish OS isolation.
 
@@ -43,7 +43,7 @@ The native amd64/aarch64 **0.2.0 gates passed** for `6fbad7c`: [CI run](https://
 
 ### Scoped live HA evidence — 2026-10-04
 
-On an authorized Raspberry Pi5/aarch64 target, Core **2026.9.4**, Supervisor **2026.09.3**:
+On an authorized Raspberry Pi 5/aarch64 target, Core **2026.9.4**, Supervisor **2026.09.3**:
 
 - Hearth **0.2.0** installed and started alongside existing services; no public ports. Controller runs as UID/GID1000 with zero effective capabilities and enforcing AppArmor.
 - Real external HTTPS Ingress owner/CSRF-bound Home and Code creation returned201, protected snapshots/catalog and SSE returned200. Direct loopback with forged identity/forwarded headers returned403. Desktop auth dialog rendered. This does not establish mobile or all proxy topologies.
@@ -52,7 +52,13 @@ On an authorized Raspberry Pi5/aarch64 target, Core **2026.9.4**, Supervisor **2
 - App-only restart preserved/hydrated both empty synthetic session catalogues; worker remained independent. Core API answered and Core and the other running services retained their pre-install start timestamps.
 - Live validation caught Docker empty-volume copy-up resetting ownership: the new empty volume was explicitly inspected/repaired, `volume-nocopy` added, startup strengthened and named-volume CI repeated. No broad/changing ownership of existing user files, Core configuration or host permissions.
 
-Controller source was `11e7567`; worker/installer correction `6fbad7c`. No personal credentials were copied. Human ChatGPT login and a model-driven demo remain unverified.
+Controller source was `11e7567`; worker/installer correction `6fbad7c`. No personal credentials were copied.
+
+Follow-up on the same date: **Show in sidebar** was enabled through Supervisor's `ingress_panel` option and the browser confirmed the admin-only Hearth Pi panel. App options and Core/other-host/controller/worker start timestamps were unchanged. After human account authorization, a genuine `openai-codex/gpt-5.5` Home submission completed: model-requested `ha_search_states` and `ha_state_detail` both read the configured virtual `sun.sun` successfully. The durable snapshot reported 1467 tokens (not a bill), zero proposals and completed status. No service was called, no physical effect occurred and no credentials/private transcript are published. This establishes one scoped live subscription-inference path, **not model-driven Code mode**, a recorded demo, broad entity access or general account compatibility.
+
+### Entity-scope usability fix (unreleased)
+
+A live diagnostic reproduced the original one-entity test allowlist: real HAClient discovery returned only `sun.sun`. It was an application-policy restriction, not a missing Pi Durable/HA connection. Separate synthetic regressions reproduced the 500-entry configuration/pagination cap and absent scope-count diagnostics. The local fix retains exact-ID authorization and deny-all defaults, raises configuration/pagination to the existing 10,000-state bound and exposes only configured count in bootstrap/Home safety text. For the combined installation-guide/canvas/permissions/model-picker source, Node 24.21.0 `npm run check` passed **51 tests**, packaging and secret-pattern scan, and the production dependency audit reported zero known advisories. The 2 MiB HA response limit remains separate; this is not a large-home benchmark. A build of this source line (including the unreleased canvas, Home permissions and model-picker slices below) was later installed on the same authorized target with a larger private exact-entity scope. That installation is not separate evidence for those slices, a large-home benchmark or any physical action.
 
 ## Baseline container gate — not executed locally
 
@@ -85,12 +91,12 @@ Follow [App installation/options](../hearth_pi/DOCS.md) only on an authorized te
 
 ## Explicit limitations
 
-Not yet established: Supervisor compatibility beyond the scoped target above, real mobile iframe behavior, backup restore, live account authentication/inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, HA configuration editing or custom/local inference endpoints. OAuth and isolated coding are now implemented, but a mock login/source test is not evidence of live subscription success or target-OS confinement.
+Not yet established: Supervisor compatibility beyond the scoped target above, real mobile iframe behavior, backup restore, model-driven coding inference, physical power loss, large-home latency/token benchmarks and external security review. SQLite FULL asks the database/filesystem to synchronize; local SIGKILL tests are not power-cut tests. Work may repeat model requests and safe reads after a crash, incurring cost. No exactly-once physical-effect guarantee, automatic write retry, voice/Assist bridge, HA configuration editing or custom/local inference endpoints. OAuth and isolated coding are now implemented, but a mock login/source test is not evidence of live subscription success or target-OS confinement.
 
 The local secret scanner detects selected patterns and excludes deliberate synthetic fixtures. It is a preflight aid, not comprehensive secret discovery. Review the actual public diff, dependency licenses/advisories and install documentation before publishing. Publishing and production deployment require a separate decision.
 
 ## Home permissions source slice (unreleased)
 
-Offline pinned Harness/faux-model/fake-HA tests cover Read-only/Ask defaults, exact manual approval, acknowledged Full one-shot/duplicate receipts, stale revisions, disabled/changed exact policy and no grant resurrection, owner/kind isolation, no elevation of running/legacy inputs, prompt revocation during HA validation and after dispatch, Read-only winning between intent and attempt, and installation-wide unknown barriers across conversations/owners/mode toggles/restart until specific human reconciliation. HTTP tests exercise authenticated owner-only settings, strict bounded bodies, Origin/CSRF/stale fingerprint failures, manual Read-only denial, count-only large-scope diagnostics and permission-only SSE hydration. Safe DOM tests cover disabled approval and preserved text rendering. Synthetic exact-scope tests cover10,000ID limits and twenty-item pagination past500.
+Offline pinned Harness/faux-model/fake-HA tests cover Read-only/Ask defaults, exact manual approval, acknowledged Full one-shot/duplicate receipts, stale revisions, disabled/changed exact policy and no grant resurrection, owner/kind isolation, no elevation of running/legacy inputs, prompt revocation during HA validation and after dispatch, Read-only winning between intent and attempt, and installation-wide unknown barriers across conversations/owners/mode toggles/restart until specific human reconciliation. HTTP tests exercise authenticated owner-only settings, strict bounded bodies, Origin/CSRF/stale fingerprint failures, manual Read-only denial, count-only large-scope diagnostics and permission-only SSE hydration. Safe DOM tests cover disabled approval and preserved text rendering. Synthetic exact-scope tests cover 10,000 ID limits and twenty-item pagination past 500.
 
 Actual SIGKILL fixtures interrupt automatic execution before intent, after committed intent but before attempted POST, and during attempted POST. Unsafe tools do not replay; intent/attempt recover to unknown and block fresh autonomous reissue. Existing Code/canvas/OAuth/auth/single-writer suites remain regression gates. No real HA/provider/device operation or deployment was performed for this slice. No mobile/backup-restore/power-loss/all-HA-capability/host-admin-autonomy or external-audit claim is made.

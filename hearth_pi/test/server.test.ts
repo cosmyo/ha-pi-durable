@@ -225,7 +225,14 @@ test("HTTP API: Basic auth, browser-bound CSRF/Origin, strict validation, protec
   const dir = await mkdtemp(join(tmpdir(), "hearth-http-"));
   const { faux, models, model } = offline();
   const runtime = await Runtime.open(dir, models, model);
-  const cfg = { ...config, dataDir: dir };
+  const cfg = {
+    ...config,
+    dataDir: dir,
+    policy: {
+      ...config.policy,
+      entities: ["sensor.private_id_canary", "light.private_id_canary"],
+    },
+  };
   const app = appServer(
     cfg,
     runtime,
@@ -255,7 +262,10 @@ test("HTTP API: Basic auth, browser-bound CSRF/Origin, strict validation, protec
     );
     assert.equal((await fetch(`${base}/api/sessions/3/events`)).status, 401);
     const boot = await fetchAPI("/api/bootstrap");
-    const csrf = (await boot.json()).csrf;
+    const bootstrap = await boot.json();
+    assert.equal(bootstrap.entityScopeCount, 2);
+    assert.doesNotMatch(JSON.stringify(bootstrap), /private_id_canary/);
+    const csrf = bootstrap.csrf;
     const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
     assert.match(cookie, /^hearth_browser=/);
     assert.match(boot.headers.get("set-cookie")!, /HttpOnly; SameSite=Strict/);

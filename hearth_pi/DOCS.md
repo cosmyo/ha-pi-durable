@@ -1,6 +1,58 @@
 # Installation and configuration (experimental 0.2.0)
 
-Use an **authorized test Home Assistant installation**, with a backup/rollback plan. Public App repository: `https://github.com/cosmyo/ha-pi-durable`. Add it under **Settings → Apps → App store → Repositories**, then install **Hearth Pi**, configure before starting, and open its Web UI. Older HA versions call Apps Add-ons. A local build is also possible by copying the complete `hearth_pi/` directory to `/addons/hearth_pi`. See [validation](../docs/validation.md) for actual evidence—not a blanket deployment/compatibility claim.
+Use an **authorized test Home Assistant OS installation**, an administrator account and a backup/rollback plan. Supported architectures: **amd64** and **aarch64**. This is an experimental community App, not an official HA/Pi product, a HACS package or a Devices & services integration. Container/Core installations without Supervisor cannot install it. See [validation](../docs/validation.md) for actual evidence—not a blanket compatibility claim.
+
+## Add the repository and install
+
+[![Add Hearth Pi's repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fcosmyo%2Fha-pi-durable)
+
+1. Click the button, enter/select your HA instance URL and confirm **Add**. The official My Home Assistant page only opens the repository dialog; you still review and install the App yourself.
+2. Alternatively, open **Settings → Apps → Install app** (App store), select **⋮ → Repositories**, add `https://github.com/cosmyo/ha-pi-durable` and select **Add**.
+3. Find **Hearth Pi** in the new repository card, open it and select **Install**. The preview is built on your HA host; allow several minutes and check the App/Supervisor logs if installation fails. No manual Git, Node, SSH or Docker setup is required for Home mode.
+4. Open the App's **Configuration** tab and complete the following options **before starting**. Older HA versions call Apps **Add-ons** and Install app **Add-on store**.
+
+A developer/local build is also possible by copying the complete `hearth_pi/` directory to `/addons/hearth_pi`; it is not needed for the App-store path.
+
+## Configure before starting
+
+1. Enable **Advanced mode** in your HA profile if needed. Go to **Settings → People → Users**, open your trusted administrator user and copy its **ID**. This is the HA user ID, not a person entity or a token.
+2. Set `public_origin` to the **exact HTTPS origin used to open HA**, e.g. `https://home.example`: no path or trailing slash. This preview requires HTTPS Ingress (such as an existing HA Cloud or HTTPS reverse-proxy URL); plain HTTP LAN access is not a supported alternative. The My Home Assistant instance URL should use this same origin.
+3. Choose the provider and list the exact entities Hearth may read. Copy IDs from **Settings → Devices & services → Entities**. The example `sun.sun` is optional and only works if that entity exists on your instance. Remove it or replace it with your intended scope. Empty means deny all; there is no wildcard/domain-wide grant.
+
+Example for subscription login; replace both placeholders:
+
+```yaml
+authorized_user_ids:
+  - REPLACE_WITH_YOUR_HA_USER_ID
+service_actions_enabled: false
+allowed_services: []
+allowed_entities:
+  - sun.sun
+public_origin: "https://home.example"
+provider: openai-codex
+model: ""
+openai_api_key: ""
+workspace_enabled: false
+```
+
+Select `provider: offline` instead to test startup without AI credentials; its replies are synthetic, not model inference. Do **not** create or paste an HA long-lived access token: the App gets its server-side HA API credential from Supervisor. Never put provider credentials or login redirect URLs in chat or issue reports.
+
+4. Save, open the **Info** tab and select **Start**. Enable **Start on boot** and **Show in sidebar** if desired, then select **Open Web UI**. Refresh the HA browser if the sidebar entry has not appeared. The sidebar is admin-only; it does not replace the App's explicit user authorization.
+5. For subscription mode, complete **ChatGPT login** below. Create a **Home** session and ask about an entity you allowed. **Code** sessions intentionally have no HA tools. Changing App options requires restarting **only Hearth Pi**, not HA Core.
+
+## Optional Code mode
+
+Leave `workspace_enabled: false` for the normal App-store installation. The sidebar/App installation does **not** provision the isolated coding worker. Code mode requires the separate trusted-operator setup in the [workspace guide](../docs/workspace.md), one authorized operator and its own backups. There is no one-click Code-worker installation in this preview; do not enable it without the worker or relax its confinement.
+
+## Troubleshooting first startup
+
+- **Repository not visible:** refresh the App store/browser; inspect **Settings → System → Logs → Supervisor** for repository/build errors. Check your architecture and Internet access.
+- **No sidebar entry:** enable **Show in sidebar** on the App's Info tab, use an administrator account and refresh HA. **Open Web UI** is the direct alternative.
+- **Access denied:** check `authorized_user_ids` and the HTTPS origin; sidebar visibility alone does not authorize you. Do not disable authentication or paste tokens to bypass it.
+- **No HA entities:** check `allowed_entities`, save/restart Hearth and use a **Home** session. The default is intentionally empty. Reads need no service-action permissions; keep those disabled while testing.
+- **Cannot send a prompt:** check the configured provider. For `openai-codex`, wait for **Subscription connected**; HA authentication and ChatGPT authentication are different.
+
+Official HA references: [adding a third-party App repository](https://www.home-assistant.io/common-tasks/os/#installing-a-third-party-app-repository), [App publishing and local builds](https://developers.home-assistant.io/docs/apps/publishing/).
 
 ## Required options and trust
 

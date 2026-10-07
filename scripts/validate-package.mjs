@@ -13,6 +13,10 @@ assert.equal(config.ingress, true);
 assert.equal(config.ingress_port, 8099);
 assert.equal(config.homeassistant_api, true);
 assert.equal(config.panel_admin, true);
+assert.equal(config.panel_title, "Hearth Pi");
+assert.equal(config.panel_icon, "mdi:fire");
+const repository = parse(await read("repository.yaml"));
+assert.equal(repository.url, config.url);
 assert.equal(config.backup, "cold");
 assert.equal(config.init, true);
 for (const field of [
@@ -81,6 +85,21 @@ for (const file of ["app.js", "render.js"]) {
 }
 const readme = await read("README.md");
 assert(readme.includes(config.version));
+const installLink = new URL(
+  "https://my.home-assistant.io/redirect/supervisor_add_addon_repository/",
+);
+installLink.searchParams.set("repository_url", repository.url);
+for (const [path, content] of [
+  ["README.md", readme],
+  ["hearth_pi/DOCS.md", await read("hearth_pi/DOCS.md")],
+]) {
+  assert(
+    content.includes(installLink.href),
+    `${path}: missing repository link`,
+  );
+  for (const instruction of ["Show in sidebar", "allowed_entities"])
+    assert(content.includes(instruction), `${path}: missing ${instruction}`);
+}
 console.log(
   "App packaging: manifest defaults/permissions, versions, exact pins/lockfile, complete local build context and browser syntax verified. Container execution is a separate gate.",
 );

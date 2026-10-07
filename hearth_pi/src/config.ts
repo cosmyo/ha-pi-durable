@@ -111,7 +111,7 @@ export async function loadConfig(): Promise<Config> {
     );
   const apiKey = text(
     options.openai_api_key ?? process.env.OPENAI_API_KEY ?? "",
-    MAX_ENTITIES,
+    500,
     0,
   );
   if (provider === "openai") insist(apiKey.length > 0, "provider_key_required");

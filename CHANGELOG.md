@@ -1,8 +1,17 @@
 # Changelog
 
+## Unreleased — installation, Home companion, permissions and model selection
+
+- Official one-click My Home Assistant repository link, manual App-store/sidebar instructions and complete safe configuration example. Home mode needs no operator shell setup; the optional Code worker remains a separate installation.
+- Native Home canvas (`ha_build_view`): assistant-selected structure over exact approved entities, controller-read values and atomic durable canvas/receipt with explicit refresh.
+- Home permissions: Read-only (default), Ask (exact human approval) and explicitly acknowledged Full access for the configured exact light/switch policy. Unknown outcomes block autonomous reissue until human reconciliation; no automatic retry.
+- Durable per-session model and thinking selector from the configured provider's local registry; Codex default `gpt-6.1-sol` with medium thinking when `model` is empty.
+- Raise bounded exact-entity configuration and search pagination beyond 500, aligned with the 10,000-state bound. Defaults still deny all entities; no wildcard grant.
+- Show configured entity count in Home-mode safety text without exposing entity IDs in bootstrap.
+
 ## 0.2.0 — subscription and isolated coding preview
 
-- Matching exact Pi1.0.1 pins; SDK1.0.0 shrinkwrap advisory resolved without audit suppression.
+- Matching exact Pi 1.0.1 pins; SDK 1.0.0 shrinkwrap advisory resolved without audit suppression.
 - Official ChatGPT/Codex OAuth device login, state-required browser fallback, private serialized credentials/refresh and protected owner-bound UI.
 - Genuine regular-Pi tools in a separate offline confined worker; explicit Home/Code sessions, no HA/model/host credentials in the worker.
 - Durable unsafe coding intents and fresh-human-input guard after uncertain outcome or restart; real SIGKILL and IPC tests.
