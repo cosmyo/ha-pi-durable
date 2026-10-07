@@ -61,9 +61,10 @@ All authorization/action/entity lists start empty; coding is disabled. Configure
 
 - `offline`: demonstration only; no inference.
 - `openai`: official OpenAI API-key endpoint; separate API billing.
+- `local` (unreleased source): an OpenAI-compatible server on your private network (Ollama, LM Studio, llama.cpp, vLLM). Connect it from **Local model** in the App: enter the URL, test, pick a model; no restart needed after the first switch to `local`. Private addresses only and no network scanning. Your conversation and selected Home data go to that server. [Details](hearth_pi/DOCS.md#local-model-endpoint-unreleased-source-slice).
 - `openai-codex`: ChatGPT subscription OAuth through Pi ModelRuntime. Sign in from **ChatGPT login** in the App. Account eligibility, model availability and provider limits still apply. Never put tokens or redirect URLs in chat/issues/recordings.
 
-Explicit protected storage replaces Pi's default credential/resource discovery. No personal `~/.pi` configuration, extensions or credentials are copied into the App or worker. Custom/local endpoints, voice integration and general Pi extension/MCP loading are not supported in this preview.
+Explicit protected storage replaces Pi's default credential/resource discovery. No personal `~/.pi` configuration, extensions or credentials are copied into the App or worker. Voice integration and general Pi extension/MCP loading are not supported in this preview.
 
 When an online provider is used, input, conversation context, tool declarations and selected tool output go to that provider. That includes coding files you explicitly read. Requests use `store:false`; provider retention/account policies still apply. Reported token counts are **not a bill**. There is no App telemetry. [Security and threat model](docs/security.md).
 

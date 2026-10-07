@@ -63,6 +63,50 @@
         <button id="account-close" type="button">Close</button>
       </div>
     </dialog>
+    <dialog id="local-dialog" aria-labelledby="local-title">
+      <h2 id="local-title">Local model endpoint</h2>
+      <p>
+        Connect an OpenAI-compatible server on your own network: Ollama, LM
+        Studio, llama.cpp, vLLM and similar. Only private addresses are
+        accepted. What you discuss, including selected Home data, is sent to
+        this server.
+      </p>
+      <p class="muted">
+        Usual ports: Ollama 11434, LM Studio 1234, llama.cpp 8080, vLLM 8000.
+        Home mode needs a model with tool calling.
+      </p>
+      <p id="local-status" role="status"></p>
+      <form id="local-test" autocomplete="off">
+        <label for="local-url">Server URL</label>
+        <input
+          id="local-url"
+          type="url"
+          placeholder="http://192.168.1.50:11434"
+          maxlength="300"
+          required
+        />
+        <label for="local-key">API key (optional)</label>
+        <input
+          id="local-key"
+          type="password"
+          autocomplete="off"
+          maxlength="500"
+        />
+        <button type="submit">Test connection</button>
+      </form>
+      <fieldset id="local-found" hidden>
+        <legend id="local-found-title"></legend>
+        <label for="local-model">Default model</label>
+        <select id="local-model"></select>
+        <p id="local-hidden" class="muted"></p>
+        <button id="local-save" type="button">Use this endpoint</button>
+      </fieldset>
+      <div class="actions">
+        <button id="local-refresh" type="button" hidden>Refresh models</button>
+        <button id="local-remove" type="button" hidden>Remove endpoint</button>
+        <button id="local-close" type="button">Close</button>
+      </div>
+    </dialog>
     <section id="home-permissions" aria-label="Home permissions">
       <label for="home-mode">Home permissions</label>
       <select id="home-mode">

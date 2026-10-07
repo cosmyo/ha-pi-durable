@@ -50,7 +50,7 @@ Leave `workspace_enabled: false` for the normal App-store installation. The side
 - **No sidebar entry:** enable **Show in sidebar** on the App's Info tab, use an administrator account and refresh HA. **Open Web UI** is the direct alternative.
 - **Access denied:** check `authorized_user_ids` and the HTTPS origin; sidebar visibility alone does not authorize you. Do not disable authentication or paste tokens to bypass it.
 - **No HA entities:** check `allowed_entities`, save/restart Hearth and use a **Home** session. The default is intentionally empty. Reads need no service-action permissions; keep those disabled while testing.
-- **Cannot send a prompt:** check the configured provider. For `openai-codex`, wait for **Subscription connected**; HA authentication and ChatGPT authentication are different.
+- **Cannot send a prompt:** check the configured provider. For `local`, save an endpoint under **Local model** first. For `openai-codex`, wait for **Subscription connected**; HA authentication and ChatGPT authentication are different.
 
 Official HA references: [adding a third-party App repository](https://www.home-assistant.io/common-tasks/os/#installing-a-third-party-app-repository), [App publishing and local builds](https://developers.home-assistant.io/docs/apps/publishing/).
 
@@ -59,7 +59,7 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 - `authorized_user_ids`: explicit trusted HA operator IDs. `[]` denies everyone. Server identity requires the documented Ingress socket peer and one `X-Remote-User-Id`; sidebar admin visibility is not authentication or proof of current role. Authorized operators may use/setup/remove the installation's shared provider credential. Do not add untrusted/guest users.
 - `public_origin`: exact external HTTPS origin, no path/trailing slash, e.g. `https://home.example`. Needed for Origin/CSRF and iframe policy. Alternative origins are not implicitly accepted.
 - `allowed_entities`: up to 10,000 exact entity IDs for Home reads and optional supported actions; no wildcards/all-future scope. Search pages contain twenty items. Empty denies all. Scope filters output, not the broad underlying HA token or states response processed in memory.
-- `provider`: `offline`, `openai`, or `openai-codex`. Offline is a faux response, not local inference. Online conversations and selected HA/coding output go to the provider.
+- `provider`: `offline`, `openai`, `openai-codex` or `local`. Offline is a faux response, not local inference. `local` uses an OpenAI-compatible server on your network that you connect from the UI; see [Local model endpoint](#local-model-endpoint-unreleased-source-slice). Online conversations and selected HA/coding output go to the provider.
 - **Updated requested default:** `openai-codex` new sessions use `gpt-6.1-sol` with **medium thinking** when `model` is empty. An explicit `model` option remains the operator's model default (the operator must set it to `gpt-6.1-sol` if already configured differently); Codex new-session thinking defaults to medium. API-key mode defaults to `gpt-4.1-mini` / off and offline to faux / off. The selected model must be in the pinned provider catalog; provider account limits apply. This changes no existing session's explicitly committed model/thinking choice and never rewrites admitted work.
 - `openai_api_key`: used only for `openai` API-key mode. Server-side secret; options/backups are sensitive. ChatGPT subscription access does not make this API billing free.
 - `service_actions_enabled`: false by default. Optional `allowed_services` contains only `light.turn_on`, `light.turn_off`, `switch.turn_on`, `switch.turn_off`, with exact allowed entities. **Home permissions** defaults to Read-only with writes disabled, otherwise Ask: the model proposes and the human approves the immutable entity/data/hash once. The authenticated owner may explicitly acknowledge Full access / auto-approve for only these configured exact actions (optional brightness 0-255 for light.turn_on). This is not all HA services or host/admin access; Code is unchanged and separately confined. No indirect area/device/group selectors. An HTTP receipt is not device verification.
@@ -80,6 +80,26 @@ The authenticated session picker lists only chat models from the already configu
 Claude subscription (Free/Pro/Max) login is intentionally not offered: Anthropic does not permit third-party apps to offer Claude.ai login or route requests through subscription credentials. Claude support would require a Claude Console API key.
 
 OAuth is an account authorization step performed by the human, not a model tool. Never share codes, redirect URLs, tokens, options or SQLite in issues/videos. A synthetic test is not a successful live login.
+
+## Local model endpoint (unreleased source slice)
+
+Use an OpenAI-compatible server on your own network, such as Ollama, LM Studio, llama.cpp (`llama-server`), vLLM or a compatible proxy. This follows the shape of Pi's own `/login llama.cpp` (enter a server, validate it by listing models) and of community Pi extensions such as Crossbar and pi-lm-providers (fingerprint the server, then pick a model). No code from those extensions is included.
+
+1. Select `provider: local`, leave `model` empty and restart **only this App** once.
+2. Open **Local model**. Enter the server URL, for example `http://192.168.1.50:11434` (usual ports: Ollama 11434, LM Studio 1234, llama.cpp 8080, vLLM 8000). Add an API key only if the server requires one.
+3. **Test connection** calls `GET /v1/models` and a few public metadata endpoints to identify the server, read context windows and hide embedding models. With Ollama, it also hides models that don't report tool calling, which Home mode requires.
+4. Choose the default model and select **Use this endpoint**. Its models appear in the session model picker immediately, with no restart. **Refresh models** re-lists the saved server; **Remove endpoint** deletes it and its key.
+
+Boundaries:
+
+- There is no network scanning. Hearth contacts only the URL an authorized owner types.
+- Only private addresses are accepted: loopback, 10/8, 172.16/12, 192.168/16 and IPv6 unique-local. Host names must resolve only to such addresses. Link-local/cloud-metadata ranges, the `supervisor` host and 172.30.32.2 are refused. Redirects are not followed. DNS can change after the check; this guards against mistakes, not a hostile DNS server.
+- Everything you discuss, including selected Home data and tool results, is sent to that server. Trust it as you would a cloud provider.
+- The endpoint, model list and optional key are stored in private controller `/data` (`0600`), never in browser responses or model context. Keys are limited to plain token characters, because Pi treats keys starting with `!` or `$` as commands or environment references.
+- Startup reloads the saved endpoint without contacting it. If its host name can't be resolved to a private address at boot (for example, a server App that starts later), Hearth still starts and asks you to **Refresh models**. Sessions can't be created and inputs are refused until an endpoint is saved.
+- Model quality and tool calling depend on the local model; small models may call tools poorly. Only `thinking: off` is offered for local models.
+
+This is source-tested with fake servers and a real local HTTP server, not against a real Ollama/LM Studio/vLLM installation or on Home Assistant OS.
 
 ## Privileges, state and rollback
 

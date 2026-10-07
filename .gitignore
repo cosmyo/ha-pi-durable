@@ -10,7 +10,7 @@ test-results/
 *.log
 .DS_Store
 /data/
-/.local/
+.local/
 /runtime/
 *.sqlite
 *.sqlite-*

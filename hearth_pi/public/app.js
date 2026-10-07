@@ -19,6 +19,8 @@ let csrf = "",
   homeSafety = "Read-only · actions disabled",
   permissions = null,
   loginId = "",
+  provider = "",
+  localTestId = "",
   accountTimer = null,
   modelChoices = [],
   defaultThinkingLevel = "off",
@@ -58,6 +60,9 @@ async function bootstrap() {
   const status = await api("bootstrap");
   csrf = status.csrf;
   $("provider").textContent = status.provider;
+  provider = status.provider;
+  $("account").textContent =
+    provider === "local" ? "Local model" : "ChatGPT login";
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
@@ -484,7 +489,82 @@ async function refreshAccount() {
       "Account service unavailable. No login credentials were displayed.";
   }
 }
+async function refreshLocal(update) {
+  try {
+    const status = update ?? (await api("local/status")),
+      endpoint = status.endpoint,
+      test = status.test;
+    localTestId = test?.id ?? "";
+    $("local-status").textContent = endpoint
+      ? `Connected: ${endpoint.kindName} at ${endpoint.url} · default model ${endpoint.model} · ${endpoint.models.length} model(s)${endpoint.authenticated ? " · API key stored" : ""}.`
+      : status.unverified
+        ? `Saved endpoint ${status.unverified.url} could not be verified at startup. Choose Refresh models to retry, or test a new URL.`
+        : "No endpoint saved. Enter your server's URL and test it.";
+    $("local-found").hidden = !test;
+    if (test) {
+      $("local-found-title").textContent =
+        `Found ${test.kindName} at ${test.url}`;
+      $("local-model").replaceChildren(
+        ...test.models.map((id) => {
+          const option = node("option", id);
+          option.value = id;
+          return option;
+        }),
+      );
+      $("local-hidden").textContent = test.hidden
+        ? `${test.hidden} model(s) hidden: embeddings, no tool calling or unsafe names.`
+        : "";
+    }
+    $("local-refresh").hidden = !endpoint && !status.unverified;
+    $("local-remove").hidden = !endpoint && !status.unverified;
+    if (update) await bootstrap();
+  } catch (e) {
+    $("local-status").textContent = e.message;
+  }
+}
+async function localAction(path, payload) {
+  try {
+    await refreshLocal(await api(path, payload));
+    await loadModels();
+  } catch (e) {
+    $("local-status").textContent = e.message;
+  }
+}
+$("local-test").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const apiKey = $("local-key").value;
+  $("local-key").value = "";
+  $("local-status").textContent = "Testing…";
+  await localAction("local/test", {
+    url: $("local-url").value,
+    ...(apiKey ? { apiKey } : {}),
+  });
+});
+$("local-save").addEventListener("click", () =>
+  localAction("local/save", { id: localTestId, model: $("local-model").value }),
+);
+$("local-refresh").addEventListener("click", () =>
+  localAction("local/refresh", {}),
+);
+$("local-remove").addEventListener("click", async () => {
+  if (
+    !window.confirm(
+      "Remove the saved local endpoint and its API key from this App? Existing conversations keep their history.",
+    )
+  )
+    return;
+  await localAction("local/remove", {});
+});
+$("local-close").addEventListener("click", () => $("local-dialog").close());
+$("local-dialog").addEventListener("close", () => {
+  $("local-key").value = "";
+});
 $("account").addEventListener("click", () => {
+  if (provider === "local") {
+    $("local-dialog").showModal();
+    void refreshLocal();
+    return;
+  }
   $("account-dialog").showModal();
   void refreshAccount();
   clearInterval(accountTimer);
@@ -603,8 +683,8 @@ $("apply-model").addEventListener("click", async () => {
   }
 });
 renderCanvas($("home-canvas"), null, draftQuestion);
-try {
-  await bootstrap();
+// Local endpoints can add or replace models without an App restart.
+async function loadModels() {
   modelChoices = (await api("models")).items;
   const choices = document.createDocumentFragment();
   for (const model of modelChoices) {
@@ -614,6 +694,11 @@ try {
     choices.append(option);
   }
   $("model-choice").replaceChildren(choices);
+  controls();
+}
+try {
+  await bootstrap();
+  await loadModels();
   const sessions = await listSessions();
   $("connection").textContent = "Connected";
   if (sessions.length) {

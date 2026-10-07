@@ -10,6 +10,6 @@
 
 Next native milestones, requiring their own implementation/consent/testing: inspectable owner-approved preferences; bounded opt-in Pi Durable monitoring/reminder tasks with cancellation/budget/expiry; richer structured interactive views; voice/ambient presentation; explicit artifact handoff to the existing confined Code worker. None grants host/admin tools or automatic physical action approval.
 
-**Future proposals requiring design/review:** easier Supervisor-managed worker provisioning with equivalent confinement, per-user workspaces/credentials, finer HA data privacy, retention/export, practical cost/context benchmarks, reviewed custom/local endpoints with SSRF/origin controls, and optional Assist/voice integration. Pi extension/MCP loading, HA configuration editing and privileged administrative agents are not enabled by this roadmap.
+**Future proposals requiring design/review:** easier Supervisor-managed worker provisioning with equivalent confinement, per-user workspaces/credentials, finer HA data privacy, retention/export, practical cost/context benchmarks, review of the local endpoint slice (private-address policy, no scanning) against real servers, and optional Assist/voice integration. Pi extension/MCP loading, HA configuration editing and privileged administrative agents are not enabled by this roadmap.
 
 Don't market faux offline mode as local inference, claim token savings without benchmarks, claim exactly-once physical effects or conceal unsupported deployment paths.

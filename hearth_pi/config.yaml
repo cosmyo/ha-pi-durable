@@ -44,7 +44,7 @@ schema:
   allowed_entities:
     - str
   public_origin: str
-  provider: list(offline|openai|openai-codex)
+  provider: list(offline|openai|openai-codex|local)
   model: str
   openai_api_key: password
   workspace_enabled: bool

@@ -14,6 +14,7 @@ import type { Runtime } from "./runtime.js";
 import type { Actions } from "./ha.js";
 import { Fault, insist, object, text, redactor } from "./safety.js";
 import type { Subscription } from "./subscription.js";
+import type { LocalEndpoints } from "./local.js";
 
 async function body(req: IncomingMessage): Promise<unknown> {
   insist(
@@ -60,12 +61,22 @@ export function appServer(
   config: Config,
   runtime: Runtime,
   actions: Actions,
-  options: { subscription?: Subscription; secrets?: string[] } = {},
+  options: {
+    subscription?: Subscription;
+    local?: LocalEndpoints;
+    secrets?: string[];
+  } = {},
 ) {
   const boundary = new Boundary(config),
     redact = redactor(
       options.secrets ?? [config.apiKey, config.haToken, config.password],
     );
+  const ready = (owner: string) =>
+    config.provider === "openai-codex"
+      ? !!options.subscription?.status(owner).configured
+      : config.provider === "local"
+        ? !!options.local?.configured
+        : true;
   const streams = new Set<ServerResponse>();
   const perOwner = new Map<string, number>();
   const rates = new Map<string, { count: number; until: number }>();
@@ -119,15 +130,15 @@ export function appServer(
           model:
             config.provider === "offline"
               ? "Offline demonstration"
-              : config.model,
+              : config.provider === "local"
+                ? (options.local?.model ?? "Local endpoint not configured")
+                : config.model,
           safety: "Home permissions · scoped light/switch controls only",
           entityScopeCount: new Set(config.policy.entities).size,
           homePermissions: await actions.engine.settings(owner),
           experimental: true,
           workspaceEnabled: config.workspaceEnabled ?? false,
-          inferenceReady:
-            config.provider !== "openai-codex" ||
-            !!options.subscription?.status(owner).configured,
+          inferenceReady: ready(owner),
         });
       if (path === "/api/home-permissions") {
         if (req.method === "GET")
@@ -177,6 +188,29 @@ export function appServer(
         }
         throw new Fault(404, "not_found");
       }
+      if (path.startsWith("/api/local/")) {
+        const local = options.local;
+        insist(local, "local_provider_not_selected", 409);
+        if (req.method === "GET" && path === "/api/local/status")
+          return json(res, 200, local.status(owner));
+        if (req.method === "POST" && path === "/api/local/test") {
+          const v = object(await body(req), ["url", "apiKey"]);
+          return json(res, 200, await local.test(owner, v.url, v.apiKey));
+        }
+        if (req.method === "POST" && path === "/api/local/save") {
+          const v = object(await body(req), ["id", "model"]);
+          return json(res, 200, await local.save(owner, v.id, v.model));
+        }
+        if (req.method === "POST" && path === "/api/local/refresh") {
+          object(await body(req), []);
+          return json(res, 200, await local.refresh(owner));
+        }
+        if (req.method === "POST" && path === "/api/local/remove") {
+          object(await body(req), []);
+          return json(res, 200, await local.remove(owner));
+        }
+        throw new Fault(404, "not_found");
+      }
       if (req.method === "GET" && path === "/api/models")
         return json(res, 200, { items: runtime.modelChoices() });
       if (req.method === "GET" && path === "/api/sessions")
@@ -184,6 +218,12 @@ export function appServer(
       if (req.method === "POST" && path === "/api/sessions") {
         const v = object(await body(req), ["title", "requestId", "kind"]);
         const kind = v.kind ?? "home";
+        // A session commits its model at creation; wait for a real local one.
+        insist(
+          config.provider !== "local" || options.local?.configured,
+          "local_endpoint_required",
+          403,
+        );
         insist(
           kind === "home" || (kind === "workspace" && config.workspaceEnabled),
           "workspace_not_enabled",
@@ -333,6 +373,11 @@ export function appServer(
             config.provider !== "openai-codex" ||
               options.subscription?.status(owner).configured,
             "subscription_login_required",
+            403,
+          );
+          insist(
+            config.provider !== "local" || options.local?.configured,
+            "local_endpoint_required",
             403,
           );
           const v = object(await body(req), ["requestId", "content"]);

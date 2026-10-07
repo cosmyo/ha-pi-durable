@@ -120,7 +120,11 @@ export async function configuredModels(
         throw new Error("api_key_auth_required");
       await native.setRuntimeApiKey("openai", config.apiKey);
     }
-    if (!native.getModel(config.provider, config.model))
+    // Local endpoint models are registered at runtime by LocalEndpoints.
+    if (
+      config.provider !== "local" &&
+      !native.getModel(config.provider, config.model)
+    )
       throw new Error("unsupported_model");
     return {
       models: safeModels(native, secrets),

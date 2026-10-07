@@ -2,6 +2,7 @@
 
 ## Unreleased — installation, Home companion, permissions and model selection
 
+- Local model endpoint provider (`provider: local`): connect an OpenAI-compatible server on your private network (Ollama, LM Studio, llama.cpp, vLLM) from the UI — enter URL, test (fingerprints the server, hides embedding and non-tool models), pick a default model — registered as a real Pi provider with no restart. Private addresses only, no scanning, no redirects; optional key stored privately. Startup reloads the saved endpoint offline.
 - ChatGPT login dialog follows Pi's interactive `/login`: Pi's own method selection is relayed to the owner, then the device code or browser step. Shows token expiry (never the token) and adds **Check connection**, which resolves auth through Pi and refreshes near expiry. Claude subscription OAuth is deliberately not offered (Anthropic terms).
 - Official one-click My Home Assistant repository link, manual App-store/sidebar instructions and complete safe configuration example. Home mode needs no operator shell setup; the optional Code worker remains a separate installation.
 - Native Home canvas (`ha_build_view`): assistant-selected structure over exact approved entities, controller-read values and atomic durable canvas/receipt with explicit refresh.

@@ -599,3 +599,14 @@ dialog .actions {
 #emergency-read-only {
   border-color: var(--warm);
 }
+#local-test,
+#local-found {
+  display: grid;
+  gap: 8px;
+}
+#local-found {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+}

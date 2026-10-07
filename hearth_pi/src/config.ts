@@ -24,7 +24,7 @@ export type Config = {
   password: string;
   authorizedUsers: string[];
   dataDir: string;
-  provider: "offline" | "openai" | "openai-codex";
+  provider: "offline" | "openai" | "openai-codex" | "local";
   model: string;
   thinkingLevel?: ModelThinkingLevel;
   workspaceEnabled?: boolean;
@@ -100,7 +100,8 @@ export async function loadConfig(): Promise<Config> {
   insist(
     provider === "offline" ||
       provider === "openai" ||
-      provider === "openai-codex",
+      provider === "openai-codex" ||
+      provider === "local",
   );
   const workspaceEnabled = options.workspace_enabled ?? false;
   insist(typeof workspaceEnabled === "boolean");
@@ -131,6 +132,8 @@ export async function loadConfig(): Promise<Config> {
         ? "/data"
         : resolve(process.env.HEARTH_DATA_DIR ?? ".local"),
     provider,
+    // A local endpoint's model is chosen in the authenticated UI, after the
+    // owner tests the server; an option value is only an initial preference.
     model: text(
       options.model ||
         process.env.HEARTH_MODEL ||
@@ -138,8 +141,11 @@ export async function loadConfig(): Promise<Config> {
           ? "faux"
           : provider === "openai-codex"
             ? "gpt-6.1-sol"
-            : "gpt-4.1-mini"),
+            : provider === "local"
+              ? ""
+              : "gpt-4.1-mini"),
       100,
+      provider === "local" ? 0 : 1,
     ),
     thinkingLevel,
     workspaceEnabled,

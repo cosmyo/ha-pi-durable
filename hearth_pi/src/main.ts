@@ -6,6 +6,7 @@ import { HAClient, haExtension, Actions } from "./ha.js";
 import { appServer } from "./server.js";
 import { readFile } from "node:fs/promises";
 import { Subscription } from "./subscription.js";
+import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
 import { WorkspaceClient, workspaceExtension } from "./workspace.js";
 
 try {
@@ -25,6 +26,12 @@ try {
     native,
     secrets,
   );
+  // Mutable default: a saved local endpoint supplies its chosen model.
+  const model = { provider, modelId };
+  const local =
+    provider === LOCAL_PROVIDER
+      ? await LocalEndpoints.open(config.dataDir, native, secrets, model)
+      : undefined;
   const ha = new HAClient(config.haToken, config.policy, fetch, secrets);
   ha.actions.authorizeOwners(
     config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
@@ -44,7 +51,7 @@ try {
   const runtime = await Runtime.open(
     config.dataDir,
     models,
-    { provider, modelId },
+    model,
     [...home, ...workspace],
     secrets,
     { home, workspace },
@@ -53,6 +60,7 @@ try {
   );
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscription,
+    local,
     secrets,
   });
   await new Promise<void>((resolve, reject) => {

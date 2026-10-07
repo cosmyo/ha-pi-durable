@@ -14,6 +14,7 @@ import {
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { supportsThinking } from "./models.js";
+import { LOCAL_PROVIDER } from "./local.js";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
@@ -66,7 +67,11 @@ export class Runtime {
         model.provider,
         model.modelId,
         defaultThinkingLevel,
-      ),
+      ) ||
+        // An unconfigured local endpoint has no models yet; sessions wait for it.
+        (model.provider === LOCAL_PROVIDER &&
+          defaultThinkingLevel === "off" &&
+          !models.getModel(model.provider, model.modelId)),
       "unsupported_default_thinking",
     );
     await mkdir(dataDir, { recursive: true, mode: 0o700 });
@@ -255,7 +260,7 @@ export class Runtime {
       .filter(
         (m) =>
           m.provider === this.model.provider &&
-          /^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,119}$/.test(m.id) &&
+          /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]{0,119}$/.test(m.id) &&
           !/^(sk-|bearer|eyJ)/i.test(m.id),
       )
       .slice(0, 200)
