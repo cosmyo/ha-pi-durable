@@ -39,6 +39,10 @@ assert.deepEqual(config.map, [
   { type: "addon_config", read_only: false, path: "/workspace_link" },
 ]);
 assert.equal(config.options.workspace_enabled, false);
+assert.equal(config.options.anthropic_auth_enabled, false);
+assert.equal(config.schema.anthropic_auth_enabled, "bool");
+assert.equal(pkg.dependencies["@gotgenes/pi-anthropic-auth"], "3.4.2");
+assert.equal(pkg.dependencies.jiti, "2.7.0");
 assert.deepEqual(config.options.authorized_user_ids, []);
 assert.deepEqual(config.options.allowed_entities, []);
 assert.deepEqual(config.options.allowed_services, []);

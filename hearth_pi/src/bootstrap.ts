@@ -33,6 +33,7 @@ export async function dropAppPrivileges(config: Config): Promise<void> {
     "hearth.sqlite-wal",
     "hearth.sqlite-shm",
     "chatgpt-oauth.json",
+    "anthropic-oauth.json",
   ]) {
     const path = join("/data", name);
     const stat = await lstat(path).catch((error) => {

@@ -14,6 +14,14 @@ npm run check
 
 The root check runs pinned formatting checks, TypeScript checking, Node test suites, production compilation, App-manifest/build-context assertions, browser syntax checks and a local secret-pattern scan. Tests use synthetic identities/credentials, an offline provider or fake HTTP. They do not connect to a real home or paid model account.
 
+### Flagged Anthropic source slice (unreleased)
+
+The local Node **24.21.0** full check passes **64/64** tests, formatting, types, production build, package/default/pin validation and secret-pattern scanning. Production npm audit reports zero known advisories.
+
+Synthetic proof uses real pinned Pi native copy-code login/official endpoints, state and callback-origin/duplicate-parameter rejection, owner/cancel/storage0600/separated Codex file/reopen/refresh/expiry/check/logout. Actual installed pi-anthropic-auth3.4.2 tests cover OAuth shaping, API-key pass-through, payload and successful SSE response hooks/signals, one bounded version-floor retry, public-stream credential redaction and debug suppression even with upstream debug env enabled. Default-off/exact-env/HA-fallback checks gate credentials/runtime/transport/inference and HTTP auth while Codex remains unchanged. The actual browser module `/login anthropic` works before session/login readiness, opens protected auth and bypasses durable input/session-storage admission; server interception retains owner/Origin/CSRF.
+
+These fake-HTTP/provider fixtures are **not** real Anthropic login, account entitlement or included-usage/extra-billing proof or live Claude inference. Independent delegated review was unavailable due to provider authentication/scope failures; parent inspected the diff and ran the gates. No external security audit is claimed. Production-container and installation evidence must be recorded separately.
+
 ### Verified baseline
 
 - Target Node 24.21.0 typecheck and production TypeScript build pass.

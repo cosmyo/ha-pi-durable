@@ -139,6 +139,8 @@ export async function configuredModels(
   modelId: string;
 }> {
   if (config.provider !== "offline") {
+    if (config.provider === "anthropic" && config.anthropicAuthEnabled !== true)
+      throw new Error("anthropic_auth_disabled");
     if (config.provider === "openai") {
       if (!config.apiKey.startsWith("sk-"))
         throw new Error("api_key_auth_required");

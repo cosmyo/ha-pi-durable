@@ -66,7 +66,11 @@ async function bootstrap() {
   $("provider").textContent = status.provider;
   provider = status.provider;
   $("account").textContent =
-    provider === "local" ? "Local model" : "ChatGPT login";
+    provider === "local"
+      ? "Local model"
+      : provider === "anthropic"
+        ? "Anthropic login"
+        : "ChatGPT login";
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
@@ -145,9 +149,10 @@ function controls() {
     selectedKind === "workspace"
       ? "Isolated coding workspace · no HA or network access"
       : homeSafety;
-  $("message").disabled =
-    !selected || busy || !!saved || sending || !inferenceReady;
-  $("send").disabled = $("message").disabled;
+  $("message").disabled = busy || !!saved || sending;
+  const loginCommand = /^\/login(?:\s|$)/.test($("message").value.trim());
+  $("send").disabled =
+    $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
   $("stop").disabled = !selected || !busy;
   $("model-choice").disabled =
     !selected ||
@@ -170,7 +175,7 @@ function controls() {
   for (const button of document.querySelectorAll(
     ".canvas-question, .home-starters button",
   ))
-    button.disabled = $("message").disabled || selectedKind !== "home";
+    button.disabled = $("send").disabled || selectedKind !== "home";
 }
 function draftQuestion(content) {
   if ($("message").disabled || selectedKind !== "home") return;
@@ -362,9 +367,29 @@ async function sendSaved() {
 }
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (!selected || busy || sending || pending()) return;
+  if (busy || sending || pending()) return;
   const content = $("message").value.trim();
   if (!content) return;
+  if (/^\/login\b/.test(content)) {
+    const command = /^\/login(?:\s+(anthropic|openai-codex))?$/.exec(content);
+    const loginProvider =
+      provider === "anthropic" ? "anthropic" : "openai-codex";
+    if (
+      !command ||
+      (command[1] && command[1] !== loginProvider) ||
+      provider === "local"
+    ) {
+      feedback(
+        "Use /login with the subscription provider selected in App configuration.",
+      );
+      return;
+    }
+    $("message").value = "";
+    openAccount();
+    void startLogin();
+    return;
+  }
+  if (!selected || !inferenceReady) return;
   try {
     sessionStorage.setItem(
       `hearth:pending:${selected}`,
@@ -375,7 +400,10 @@ $("composer").addEventListener("submit", (event) => {
     feedback("Browser session storage unavailable; input was not sent.");
   }
 });
-$("message").addEventListener("input", fitComposer);
+$("message").addEventListener("input", () => {
+  fitComposer();
+  controls();
+});
 $("retry").addEventListener("click", () => {
   void sendSaved();
 });
@@ -475,16 +503,31 @@ async function refreshAccount() {
       prompt = login?.prompt;
     loginId = login?.id ?? "";
     const pending = !!login && ["starting", "waiting"].includes(login.state);
+    const anthropic = status.provider === "anthropic";
+    $("account-title").textContent = status.providerName;
+    $("account-details").textContent = anthropic
+      ? "Experimental Pi Anthropic OAuth with pi-anthropic-auth 3.4.2 compatibility. Credentials stay in the controller, never the coding workspace. Provider terms apply; third-party usage may incur extra per-token billing. Login does not guarantee included Claude plan usage."
+      : "Official Pi OAuth. Credentials stay in the controller, never the coding workspace. Your subscription's limits apply. API-key billing is separate.";
+    $("account-config").textContent =
+      `Select provider ${status.provider} in App configuration. Signing out removes only this App's credential; it does not revoke your account.`;
+    $("login-url").textContent = anthropic
+      ? "Continue at Anthropic"
+      : "Continue at OpenAI";
+    $("login-redirect").placeholder = anthropic
+      ? "Paste code#state or final callback URL"
+      : "Paste final localhost:1455 redirect URL";
     $("account-status").textContent = status.configured
       ? "Subscription connected."
       : login?.state === "failed"
-        ? "Login failed. Retry, or choose the other method; device-code access may need enabling in your OpenAI account."
+        ? anthropic
+          ? "Login failed. Retry using Copy code login (headless)."
+          : "Login failed. Retry, or choose the other method; device-code access may need enabling in your OpenAI account."
         : login?.state === "cancelled"
           ? "Login cancelled."
           : prompt?.type === "select"
             ? "Choose how to sign in."
             : pending
-              ? "Waiting for you to finish at OpenAI. Do not share the code or redirect URL."
+              ? `Waiting for you to finish at ${anthropic ? "Anthropic" : "OpenAI"}. Do not share the code or redirect URL.`
               : "Not signed in.";
     $("account-token").textContent = status.configured
       ? [
@@ -501,7 +544,9 @@ async function refreshAccount() {
     $("login-start").disabled = pending;
     $("login-start").textContent = status.configured
       ? "Sign in again"
-      : "Sign in with ChatGPT";
+      : anthropic
+        ? "Sign in with Anthropic"
+        : "Sign in with ChatGPT";
     renderLoginPrompt(prompt);
     $("login-url").hidden = !login?.url;
     if (login?.url) $("login-url").href = login.url;
@@ -591,7 +636,7 @@ $("local-close").addEventListener("click", () => $("local-dialog").close());
 $("local-dialog").addEventListener("close", () => {
   $("local-key").value = "";
 });
-$("account").addEventListener("click", () => {
+function openAccount() {
   if (provider === "local") {
     $("local-dialog").showModal();
     void refreshLocal();
@@ -603,20 +648,22 @@ $("account").addEventListener("click", () => {
   accountTimer = setInterval(() => {
     void refreshAccount();
   }, 2000);
-});
+}
+$("account").addEventListener("click", openAccount);
 $("account-dialog").addEventListener("close", () => {
   clearInterval(accountTimer);
   $("login-redirect").value = "";
 });
 $("account-close").addEventListener("click", () => $("account-dialog").close());
-$("login-start").addEventListener("click", async () => {
+async function startLogin() {
   try {
     await api("auth/login", {});
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
   }
-});
+}
+$("login-start").addEventListener("click", startLogin);
 $("login-answer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const value = $("login-redirect").value;
@@ -650,7 +697,7 @@ $("login-verify").addEventListener("click", async () => {
 $("login-logout").addEventListener("click", async () => {
   if (
     !window.confirm(
-      "Remove this App's local ChatGPT credential? This does not revoke your OpenAI account.",
+      `Remove this App's local ${provider === "anthropic" ? "Anthropic" : "ChatGPT"} credential? This does not revoke your provider account.`,
     )
   )
     return;

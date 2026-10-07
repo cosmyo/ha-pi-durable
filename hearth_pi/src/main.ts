@@ -16,11 +16,12 @@ try {
     subscription,
     runtime: native,
     secrets,
-  } = await Subscription.open(config.dataDir, [
-    config.apiKey,
-    config.haToken,
-    config.password,
-  ]);
+  } = await Subscription.open(
+    config.dataDir,
+    [config.apiKey, config.haToken, config.password],
+    config.provider === "anthropic" ? "anthropic" : "openai-codex",
+    config.provider !== "anthropic" || config.anthropicAuthEnabled === true,
+  );
   const { models, provider, modelId } = await configuredModels(
     config,
     native,

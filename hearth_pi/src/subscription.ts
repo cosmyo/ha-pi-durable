@@ -8,17 +8,23 @@ import type {
   CredentialStore,
 } from "@earendil-works/pi-ai";
 import { Serial, insist, text } from "./safety.js";
+import { anthropicAuthEnabled } from "./features.js";
 
-const provider = "openai-codex";
-// Subscription OAuth is offered only where the provider permits third-party
-// apps. Claude Free/Pro/Max OAuth is deliberately absent: Anthropic's terms
-// forbid third-party apps from offering Claude.ai login or routing requests
-// through subscription credentials. Claude would need a Console API key.
-const official = {
-  name: "ChatGPT / Codex",
-  origin: "https://auth.openai.com",
-  redirect: { origin: "http://localhost:1455", path: "/auth/callback" },
-};
+export type SubscriptionProvider = "openai-codex" | "anthropic";
+const providers = {
+  "openai-codex": {
+    name: "ChatGPT / Codex",
+    origin: "https://auth.openai.com",
+    redirect: { origin: "http://localhost:1455", path: "/auth/callback" },
+    methods: ["browser", "device_code"],
+  },
+  anthropic: {
+    name: "Anthropic / Claude (experimental)",
+    origin: "https://claude.ai",
+    redirect: { origin: "http://localhost:53692", path: "/callback" },
+    methods: ["browser", "copy_code"],
+  },
+} as const;
 // One controller/store owner; never mounted into the workspace container.
 export class PrivateCredentials implements CredentialStore {
   private serial = new Serial();
@@ -28,8 +34,25 @@ export class PrivateCredentials implements CredentialStore {
   constructor(
     readonly path: string,
     seeds: string[] = [],
+    readonly provider: SubscriptionProvider = "openai-codex",
   ) {
     this.secrets = seeds.filter(Boolean);
+  }
+  private validate(
+    value: Credential,
+  ): asserts value is Extract<Credential, { type: "oauth" }> {
+    insist(
+      value.type === "oauth" &&
+        typeof value.access === "string" &&
+        value.access.length > 0 &&
+        value.access.length <= 12000 &&
+        typeof value.refresh === "string" &&
+        value.refresh.length > 0 &&
+        value.refresh.length <= 12000 &&
+        Number.isFinite(value.expires) &&
+        value.expires > 0,
+      "invalid_credentials",
+    );
   }
   private remember(value: Credential | undefined) {
     if (value?.type === "oauth")
@@ -37,7 +60,7 @@ export class PrivateCredentials implements CredentialStore {
         if (s && !this.secrets.includes(s)) this.secrets.push(s);
   }
   async read(id: string): Promise<Credential | undefined> {
-    if (id !== provider) return undefined;
+    if (id !== this.provider) return undefined;
     const stat = await lstat(this.path).catch((e) => {
       if (e.code === "ENOENT") return undefined;
       throw e;
@@ -54,32 +77,27 @@ export class PrivateCredentials implements CredentialStore {
       "unsafe_credentials",
     );
     const value = JSON.parse(await readFile(this.path, "utf8")) as Credential;
-    insist(
-      value.type === "oauth" &&
-        typeof value.access === "string" &&
-        typeof value.refresh === "string" &&
-        Number.isFinite(value.expires),
-      "invalid_credentials",
-    );
+    this.validate(value);
     this.remember(value);
     this.expires = value.expires;
     return value;
   }
   async list() {
-    return (await this.read(provider))
-      ? [{ providerId: provider, type: "oauth" as const }]
+    return (await this.read(this.provider))
+      ? [{ providerId: this.provider, type: "oauth" as const }]
       : [];
   }
   async modify(
     id: string,
     fn: (current: Credential | undefined) => Promise<Credential | undefined>,
   ) {
-    insist(id === provider, "unsupported_credentials");
+    insist(id === this.provider, "unsupported_credentials");
     return this.serial.run(async () => {
       const current = await this.read(id),
         next = await fn(current);
       if (!next) return current;
       insist(next.type === "oauth", "oauth_required");
+      this.validate(next);
       this.remember(next);
       const temp = `${this.path}.${randomUUID()}.tmp`;
       await writeFile(temp, JSON.stringify(next), { mode: 0o600, flag: "wx" });
@@ -90,7 +108,7 @@ export class PrivateCredentials implements CredentialStore {
     });
   }
   async delete(id: string) {
-    insist(id === provider);
+    insist(id === this.provider);
     await this.serial.run(async () => {
       const { unlink } = await import("node:fs/promises");
       await unlink(this.path).catch((e) => {
@@ -119,6 +137,8 @@ type Login = {
   state: "starting" | "waiting" | "connected" | "cancelled" | "failed";
   url: string;
   userCode: string;
+  method?: string;
+  expectedState?: string;
   prompt?: Prompt;
   answer?: (value: string) => void;
   done: Promise<void>;
@@ -139,11 +159,26 @@ export class Subscription {
     private readonly credential: { expires: number | undefined } = {
       expires: undefined,
     },
+    readonly provider: SubscriptionProvider = "openai-codex",
+    readonly enabled: boolean = provider !== "anthropic" ||
+      anthropicAuthEnabled(),
   ) {}
-  static async open(dataDir: string, seeds: string[]) {
+  static async open(
+    dataDir: string,
+    seeds: string[],
+    provider: SubscriptionProvider = "openai-codex",
+    enabled: boolean = provider !== "anthropic" || anthropicAuthEnabled(),
+  ) {
+    insist(provider !== "anthropic" || enabled, "anthropic_auth_disabled", 403);
     const credentials = new PrivateCredentials(
-      join(dataDir, "chatgpt-oauth.json"),
+      join(
+        dataDir,
+        provider === "anthropic"
+          ? "anthropic-oauth.json"
+          : "chatgpt-oauth.json",
+      ),
       seeds,
+      provider,
     );
     // Explicit storage; no ~/.pi discovery, project resources, custom endpoints or catalog fetch.
     const runtime = await ModelRuntime.create({
@@ -154,23 +189,28 @@ export class Subscription {
       refreshOnCreate: false,
       allowModelNetwork: false,
     });
+    if (provider === "anthropic") {
+      const { registerAnthropicOAuth } = await import("./anthropic.js");
+      await registerAnthropicOAuth(runtime);
+    }
     // Static provider: initialize auth metadata only. No remote catalogs, token exchange or model requests.
     await runtime.refresh({ providers: [provider], allowNetwork: false });
     await credentials.read(provider);
     return {
-      subscription: new Subscription(runtime, credentials),
+      subscription: new Subscription(runtime, credentials, provider, enabled),
       runtime,
       secrets: credentials.secrets,
     };
   }
   status(owner: string) {
     const login = this.login?.owner === owner ? this.login : undefined;
-    const configured = this.runtime.hasConfiguredAuth(provider);
+    const configured =
+      this.enabled && this.runtime.hasConfiguredAuth(this.provider);
     return {
       configured,
       subscription: true,
-      provider,
-      providerName: official.name,
+      provider: this.provider,
+      providerName: providers[this.provider].name,
       ...(configured && this.credential.expires
         ? { tokenExpires: this.credential.expires }
         : {}),
@@ -197,11 +237,14 @@ export class Subscription {
    * up front answers that selection immediately.
    */
   start(owner: string, method?: unknown) {
+    insist(this.enabled, "anthropic_auth_disabled", 403);
     insist(
-      method === undefined || method === "device_code" || method === "browser",
+      method === undefined ||
+        providers[this.provider].methods.some((m) => m === method),
       "invalid_login_method",
     );
     return this.operation.run(async () => {
+      const official = providers[this.provider];
       insist(
         !this.login ||
           ["connected", "failed", "cancelled"].includes(this.login.state),
@@ -231,12 +274,14 @@ export class Subscription {
           );
           if (prompt.type === "select" && method !== undefined) {
             insist(prompt.options.some((o) => o.id === method));
+            login.method = method as string;
             return method as string;
           }
           insist(
             prompt.type === "select" ||
               method === undefined ||
-              method === "browser",
+              method === "browser" ||
+              method === "copy_code",
             "unexpected_auth_prompt",
           );
           login.prompt =
@@ -278,7 +323,18 @@ export class Subscription {
             const url = new URL(
               event.type === "auth_url" ? event.url : event.verificationUri,
             );
-            insist(url.origin === official.origin, "unexpected_login_origin");
+            insist(
+              url.origin === official.origin && !url.username && !url.password,
+              "unexpected_login_origin",
+            );
+            if (this.provider === "anthropic") {
+              insist(
+                url.pathname === "/oauth/authorize" &&
+                  url.searchParams.get("state"),
+                "unexpected_login_url",
+              );
+              login.expectedState = url.searchParams.get("state")!;
+            }
             login.url = url.href;
             login.userCode =
               event.type === "device_code" ? short(event.userCode, 64) : "";
@@ -288,7 +344,7 @@ export class Subscription {
         },
       };
       login.done = this.runtime
-        .login(provider, "oauth", interaction)
+        .login(this.provider, "oauth", interaction)
         .then(
           () => {
             login.state = "connected";
@@ -304,6 +360,7 @@ export class Subscription {
           login.userCode = "";
           login.prompt = undefined;
           login.answer = undefined;
+          login.expectedState = undefined;
         });
       return this.status(owner);
     });
@@ -326,14 +383,46 @@ export class Subscription {
         login.prompt.options.some((o) => o.id === entered),
         "invalid_login_method",
       );
-    } else {
-      const url = new URL(entered);
-      // Browser fallback must include state, which the official Pi flow validates against its PKCE transaction.
+      login.method = entered;
+    } else if (
+      this.provider === "anthropic" &&
+      login.method === "copy_code" &&
+      !entered.includes("://")
+    ) {
+      // Require the complete code#state, not a bare code. Bind to this login's
+      // native Pi PKCE transaction before forwarding to the token exchange.
+      const match = /^([A-Za-z0-9._~-]{1,2048})#([A-Za-z0-9_-]{1,256})$/.exec(
+        entered,
+      );
       insist(
-        url.origin === official.redirect.origin &&
-          url.pathname === official.redirect.path &&
+        match && login.expectedState && match[2] === login.expectedState,
+        "authorization_code_state_required",
+      );
+    } else {
+      const official = providers[this.provider];
+      insist(URL.canParse(entered), "redirect_url_required");
+      const url = new URL(entered);
+      const redirect =
+        this.provider === "anthropic" && login.method === "copy_code"
+          ? {
+              origin: "https://platform.claude.com",
+              path: "/oauth/code/callback",
+            }
+          : official.redirect;
+      // Browser fallback must include state; Pi also checks its PKCE transaction.
+      insist(
+        url.origin === redirect.origin &&
+          url.pathname === redirect.path &&
+          !url.username &&
+          !url.password &&
+          !url.hash &&
+          url.searchParams.getAll("code").length === 1 &&
+          url.searchParams.getAll("state").length === 1 &&
           url.searchParams.get("code") &&
-          url.searchParams.get("state"),
+          url.searchParams.get("state") &&
+          (this.provider !== "anthropic" ||
+            (login.expectedState &&
+              url.searchParams.get("state") === login.expectedState)),
         "redirect_url_required",
       );
     }
@@ -358,15 +447,16 @@ export class Subscription {
    * derived token is discarded; only success and the expiry are reported.
    */
   verify(owner: string) {
+    insist(this.enabled, "anthropic_auth_disabled", 403);
     return this.operation.run(async () => {
       insist(
-        this.runtime.hasConfiguredAuth(provider),
+        this.runtime.hasConfiguredAuth(this.provider),
         "subscription_login_required",
         409,
       );
       const signal = AbortSignal.timeout(30000);
       const ok = await this.runtime
-        .getAuth(provider, { signal })
+        .getAuth(this.provider, { signal })
         .then((auth) => !!auth?.auth.apiKey)
         .catch(() => false);
       this.check = { at: Date.now(), ok };
@@ -382,7 +472,7 @@ export class Subscription {
         insist(this.login.owner === owner, "login_in_progress", 409);
       this.login?.abort.abort();
       await this.login?.done;
-      await this.runtime.logout(provider);
+      await this.runtime.logout(this.provider);
       this.login = undefined;
       this.check = undefined;
       return this.status(owner);

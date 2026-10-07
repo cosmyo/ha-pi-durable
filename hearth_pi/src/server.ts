@@ -72,8 +72,11 @@ export function appServer(
       options.secrets ?? [config.apiKey, config.haToken, config.password],
     );
   const ready = (owner: string) =>
-    config.provider === "openai-codex"
-      ? !!options.subscription?.status(owner).configured
+    config.provider === "openai-codex" || config.provider === "anthropic"
+      ? (config.provider !== "anthropic" ||
+          config.anthropicAuthEnabled === true) &&
+        options.subscription?.provider === config.provider &&
+        !!options.subscription.status(owner).configured
       : config.provider === "local"
         ? !!options.local?.configured
         : true;
@@ -126,6 +129,7 @@ export function appServer(
         return json(res, 200, {
           csrf: boundary.bootstrap(req, res, owner),
           provider: config.provider,
+          anthropicAuthEnabled: config.anthropicAuthEnabled === true,
           defaultThinkingLevel: runtime.defaultThinkingLevel,
           model:
             config.provider === "offline"
@@ -162,12 +166,23 @@ export function appServer(
         );
       }
       if (path.startsWith("/api/auth/")) {
+        insist(
+          config.provider !== "anthropic" ||
+            config.anthropicAuthEnabled === true,
+          "anthropic_auth_disabled",
+          403,
+        );
         const subscription = options.subscription;
         insist(subscription, "subscription_unavailable", 503);
         if (req.method === "GET" && path === "/api/auth/status")
           return json(res, 200, subscription.status(owner));
         if (req.method === "POST" && path === "/api/auth/login") {
-          const v = object(await body(req), ["method"]);
+          const v = object(await body(req), ["method", "provider"]);
+          insist(
+            v.provider === undefined || v.provider === subscription.provider,
+            "configured_login_provider_required",
+            409,
+          );
           return json(res, 202, await subscription.start(owner, v.method));
         }
         if (req.method === "POST" && path === "/api/auth/answer") {
@@ -369,9 +384,32 @@ export function appServer(
           );
         }
         if (req.method === "POST" && operation === "inputs") {
+          const v = object(await body(req), ["requestId", "content"]);
+          const content = text(v.content, 16000);
+          if (/^\/login\b/.test(content.trim())) {
+            const command = /^\/login(?:\s+(anthropic|openai-codex))?$/.exec(
+              content.trim(),
+            );
+            insist(command, "invalid_login_command");
+            insist(
+              config.provider !== "anthropic" ||
+                config.anthropicAuthEnabled === true,
+              "anthropic_auth_disabled",
+              403,
+            );
+            const subscription = options.subscription;
+            insist(subscription, "subscription_unavailable", 503);
+            insist(
+              !command[1] || command[1] === subscription.provider,
+              "configured_login_provider_required",
+              409,
+            );
+            return json(res, 202, { auth: await subscription.start(owner) });
+          }
           insist(
-            config.provider !== "openai-codex" ||
-              options.subscription?.status(owner).configured,
+            (config.provider !== "openai-codex" &&
+              config.provider !== "anthropic") ||
+              ready(owner),
             "subscription_login_required",
             403,
           );
@@ -380,7 +418,6 @@ export function appServer(
             "local_endpoint_required",
             403,
           );
-          const v = object(await body(req), ["requestId", "content"]);
           return json(res, 202, {
             submissionId: await runtime.submit(
               owner,

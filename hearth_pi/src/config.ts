@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { resolve } from "node:path";
 import { insist, object, text, entityPattern } from "./safety.js";
+import { anthropicAuthEnabled } from "./features.js";
 
 export const MAX_ENTITIES = 10000;
 
@@ -24,9 +25,10 @@ export type Config = {
   password: string;
   authorizedUsers: string[];
   dataDir: string;
-  provider: "offline" | "openai" | "openai-codex" | "local";
+  provider: "offline" | "openai" | "openai-codex" | "anthropic" | "local";
   model: string;
   thinkingLevel?: ModelThinkingLevel;
+  anthropicAuthEnabled?: boolean;
   workspaceEnabled?: boolean;
   policy: Policy;
   haToken: string;
@@ -55,6 +57,7 @@ export async function loadConfig(): Promise<Config> {
           "model",
           "openai_api_key",
           "workspace_enabled",
+          "anthropic_auth_enabled",
         ])
       : {};
   const port =
@@ -101,7 +104,15 @@ export async function loadConfig(): Promise<Config> {
     provider === "offline" ||
       provider === "openai" ||
       provider === "openai-codex" ||
+      provider === "anthropic" ||
       provider === "local",
+  );
+  const anthropicOption = options.anthropic_auth_enabled ?? false;
+  insist(typeof anthropicOption === "boolean");
+  const anthropicEnabled = anthropicAuthEnabled(anthropicOption);
+  insist(
+    provider !== "anthropic" || anthropicEnabled,
+    "anthropic_auth_disabled",
   );
   const workspaceEnabled = options.workspace_enabled ?? false;
   insist(typeof workspaceEnabled === "boolean");
@@ -141,13 +152,16 @@ export async function loadConfig(): Promise<Config> {
           ? "faux"
           : provider === "openai-codex"
             ? "gpt-6.1-sol"
-            : provider === "local"
-              ? ""
-              : "gpt-4.1-mini"),
+            : provider === "anthropic"
+              ? "claude-sonnet-5"
+              : provider === "local"
+                ? ""
+                : "gpt-4.1-mini"),
       100,
       provider === "local" ? 0 : 1,
     ),
     thinkingLevel,
+    anthropicAuthEnabled: anthropicEnabled,
     workspaceEnabled,
     policy: { enabled, services, entities },
     haToken: process.env.SUPERVISOR_TOKEN ?? "",

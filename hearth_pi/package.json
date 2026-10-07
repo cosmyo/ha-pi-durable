@@ -17,7 +17,9 @@
     "@earendil-works/chord": "1.0.1",
     "@earendil-works/pi-ai": "1.0.1",
     "@earendil-works/pi-coding-agent": "1.0.1",
-    "@earendil-works/pi-durable": "1.0.1"
+    "@earendil-works/pi-durable": "1.0.1",
+    "@gotgenes/pi-anthropic-auth": "3.4.2",
+    "jiti": "2.7.0"
   },
   "devDependencies": {
     "@types/node": "24.10.1",

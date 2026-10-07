@@ -32,6 +32,7 @@ options:
   allowed_entities: []
   public_origin: "https://home.example"
   provider: offline
+  anthropic_auth_enabled: false
   model: ""
   openai_api_key: ""
   workspace_enabled: false
@@ -44,7 +45,8 @@ schema:
   allowed_entities:
     - str
   public_origin: str
-  provider: list(offline|openai|openai-codex|local)
+  provider: list(offline|openai|openai-codex|anthropic|local)
+  anthropic_auth_enabled: bool
   model: str
   openai_api_key: password
   workspace_enabled: bool

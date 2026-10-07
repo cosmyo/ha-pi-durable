@@ -2,6 +2,8 @@
 
 ## Unreleased — installation, Home companion, permissions and model selection
 
+Default-off Anthropic `/login` feature flag with native Pi headless copy-code auth, private per-provider tokens and pinned pi-anthropic-auth 3.4.2 transport compatibility. HA option fallback allows deliberate installation opt-in without changing provider/scope/permissions. Experimental third-party subscription terms/extra-billing warnings; not a live Claude inference claim.
+
 One-click repository link and App-store/sidebar setup instructions. Native Home canvas over exact approved entities; Read-only (default) / Ask / explicitly acknowledged Full access Home permissions for exact light/switch policies; durable per-session model/thinking selector; a UI-connected private-network local model endpoint (`provider: local`); ChatGPT login follows Pi's interactive `/login` steps with token expiry and **Check connection**. Bounded exact-entity scopes and pagination support larger homes. A compact phone/companion-app layout keeps the conversation on screen, with Home permissions and model settings opened on demand. Empty scope still denies all, service actions remain disabled by default, and Code-worker provisioning is still separate. The App version remains 0.2.0 until a tagged release.
 
 ## 0.2.0 — experimental subscription/coding preview
