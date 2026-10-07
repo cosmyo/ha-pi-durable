@@ -481,6 +481,12 @@ dialog select {
 dialog .actions {
   margin-top: 18px;
 }
+#login-choice {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+}
 #login-code {
   color: var(--warm);
   font-size: 1.3rem;

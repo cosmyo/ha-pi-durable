@@ -72,10 +72,12 @@ The authenticated session picker lists only chat models from the already configu
 ## ChatGPT subscription login
 
 1. Select `provider: openai-codex`; leave `model` empty or choose an appropriate catalog model. Restart **only this App** after option changes.
-2. Open **ChatGPT login → Sign in with ChatGPT**. Device-code mode is recommended for remote HA. Complete the login/consent in your own OpenAI browser session; account eligibility and provider limits apply. Device-code login may need enabling in OpenAI's account security settings.
-3. Browser fallback uses the official Pi PKCE flow. If localhost:1455 cannot reach HA, paste the **complete final redirect URL with code and state** into the protected password field, not chat. The official flow verifies state. No callback port is publicly exposed.
-4. Wait for **Subscription connected**. Access/refresh tokens stay in private controller `/data`, never in browser responses, model context or coding storage. Login state is owner-bound, temporary and cancellable. No personal Pi credentials/resources are automatically imported.
+2. Open **ChatGPT login → Sign in with ChatGPT**. Like Pi's interactive `/login`, the dialog shows whichever step Pi's own login flow is waiting on: first Pi's method choice (**Browser login** or **Device code login (headless)**), then the OpenAI link and code. Device code is recommended for remote HA. Complete the login/consent in your own OpenAI browser session; account eligibility and provider limits apply. Device-code login may need enabling in OpenAI's account security settings.
+3. Browser login uses the official Pi PKCE flow. If localhost:1455 cannot reach HA, paste the **complete final redirect URL with code and state** into the protected password field, not chat. The official flow verifies state. No callback port is publicly exposed.
+4. Wait for **Subscription connected**. The dialog shows the access token's expiry time, never the token. Pi refreshes it automatically before model requests; **Check connection** asks Pi to resolve auth the same way (refreshing only if it is close to expiry) and records OK/failed. If a check fails, choose **Sign in again**. Access/refresh tokens stay in private controller `/data`, never in browser responses, model context or coding storage. Login state is owner-bound, temporary and cancellable. No personal Pi credentials/resources are automatically imported.
 5. Local sign-out removes this App's credential; it does not revoke the OpenAI account or retroactively undo requests already sent. Backups containing credentials must be protected.
+
+Claude subscription (Free/Pro/Max) login is intentionally not offered: Anthropic does not permit third-party apps to offer Claude.ai login or route requests through subscription credentials. Claude support would require a Claude Console API key.
 
 OAuth is an account authorization step performed by the human, not a model tool. Never share codes, redirect URLs, tokens, options or SQLite in issues/videos. A synthetic test is not a successful live login.
 

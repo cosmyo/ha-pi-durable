@@ -32,18 +32,18 @@
         not revoke your account.
       </p>
       <p id="account-status" role="status"></p>
-      <label for="login-method">Login method</label>
-      <select id="login-method">
-        <option value="device_code">Device code (recommended for HA)</option>
-        <option value="browser">Browser / pasted redirect URL</option>
-      </select>
+      <p id="account-token" class="muted"></p>
       <button id="login-start" type="button">Sign in with ChatGPT</button>
+      <fieldset id="login-choice" hidden>
+        <legend id="login-prompt"></legend>
+        <div id="login-options" class="actions"></div>
+      </fieldset>
       <a id="login-url" target="_blank" rel="noopener noreferrer" hidden
         >Continue at OpenAI</a
       >
       <code id="login-code"></code>
       <form id="login-answer" autocomplete="off" hidden>
-        <label class="sr-only" for="login-redirect"
+        <label id="login-redirect-label" for="login-redirect"
           >Final localhost redirect URL</label
         >
         <input
@@ -58,6 +58,7 @@
       </form>
       <div class="actions">
         <button id="login-cancel" type="button" hidden>Cancel login</button>
+        <button id="login-verify" type="button" hidden>Check connection</button>
         <button id="login-logout" type="button" hidden>Sign out locally</button>
         <button id="account-close" type="button">Close</button>
       </div>

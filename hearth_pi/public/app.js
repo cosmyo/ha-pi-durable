@@ -404,26 +404,79 @@ async function decide(proposal, decision) {
     feedback(error.message);
   }
 }
+let loginPromptSignature = "";
+const when = (ms) => new Date(ms).toLocaleString();
+// Mirrors Pi's interactive /login: show whichever step Pi is waiting on.
+function renderLoginPrompt(prompt) {
+  const choice = prompt?.type === "select" ? prompt : null,
+    signature = JSON.stringify(choice);
+  $("login-choice").hidden = !choice;
+  if (signature === loginPromptSignature) return;
+  loginPromptSignature = signature;
+  $("login-prompt").textContent = choice?.message ?? "";
+  $("login-options").replaceChildren(
+    ...(choice?.options ?? []).map((option) => {
+      const button = node("button", option.label);
+      button.type = "button";
+      if (option.description) button.title = option.description;
+      button.addEventListener("click", async () => {
+        try {
+          await api("auth/answer", { id: loginId, value: option.id });
+          await refreshAccount();
+        } catch (e) {
+          $("account-status").textContent = e.message;
+        }
+      });
+      return button;
+    }),
+  );
+}
 async function refreshAccount() {
   try {
     const status = await api("auth/status"),
-      login = status.login;
+      login = status.login,
+      prompt = login?.prompt;
     loginId = login?.id ?? "";
     const pending = !!login && ["starting", "waiting"].includes(login.state);
     $("account-status").textContent = status.configured
       ? "Subscription connected."
       : login?.state === "failed"
-        ? "Login failed. Retry or use browser login; device-code access may need enabling in your OpenAI account."
-        : pending
-          ? "Waiting for you to finish at OpenAI. Do not share the code or redirect URL."
-          : "Not signed in.";
+        ? "Login failed. Retry, or choose the other method; device-code access may need enabling in your OpenAI account."
+        : login?.state === "cancelled"
+          ? "Login cancelled."
+          : prompt?.type === "select"
+            ? "Choose how to sign in."
+            : pending
+              ? "Waiting for you to finish at OpenAI. Do not share the code or redirect URL."
+              : "Not signed in.";
+    $("account-token").textContent = status.configured
+      ? [
+          status.tokenExpires
+            ? `Access token valid until ${when(status.tokenExpires)}; Pi refreshes it automatically.`
+            : "",
+          status.lastCheck
+            ? `Last check ${when(status.lastCheck.at)}: ${status.lastCheck.ok ? "OK" : "failed — sign in again"}.`
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : "";
     $("login-start").disabled = pending;
+    $("login-start").textContent = status.configured
+      ? "Sign in again"
+      : "Sign in with ChatGPT";
+    renderLoginPrompt(prompt);
     $("login-url").hidden = !login?.url;
     if (login?.url) $("login-url").href = login.url;
     else $("login-url").removeAttribute("href");
     $("login-code").textContent = login?.userCode ?? "";
-    $("login-answer").hidden = !login?.manual;
+    $("login-answer").hidden = prompt?.type !== "manual_code";
+    $("login-redirect-label").textContent =
+      prompt?.type === "manual_code"
+        ? prompt.message
+        : "Final localhost redirect URL";
     $("login-cancel").hidden = !pending;
+    $("login-verify").hidden = !status.configured || pending;
     $("login-logout").hidden = !status.configured;
     await bootstrap();
   } catch {
@@ -446,7 +499,7 @@ $("account-dialog").addEventListener("close", () => {
 $("account-close").addEventListener("click", () => $("account-dialog").close());
 $("login-start").addEventListener("click", async () => {
   try {
-    await api("auth/login", { method: $("login-method").value });
+    await api("auth/login", {});
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
@@ -469,6 +522,17 @@ $("login-cancel").addEventListener("click", async () => {
     await refreshAccount();
   } catch (e) {
     $("account-status").textContent = e.message;
+  }
+});
+$("login-verify").addEventListener("click", async () => {
+  $("login-verify").disabled = true;
+  try {
+    await api("auth/verify", {});
+    await refreshAccount();
+  } catch (e) {
+    $("account-status").textContent = e.message;
+  } finally {
+    $("login-verify").disabled = false;
   }
 });
 $("login-logout").addEventListener("click", async () => {

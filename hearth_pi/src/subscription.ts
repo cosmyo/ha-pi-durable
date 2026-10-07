@@ -10,10 +10,21 @@ import type {
 import { Serial, insist, text } from "./safety.js";
 
 const provider = "openai-codex";
+// Subscription OAuth is offered only where the provider permits third-party
+// apps. Claude Free/Pro/Max OAuth is deliberately absent: Anthropic's terms
+// forbid third-party apps from offering Claude.ai login or routing requests
+// through subscription credentials. Claude would need a Console API key.
+const official = {
+  name: "ChatGPT / Codex",
+  origin: "https://auth.openai.com",
+  redirect: { origin: "http://localhost:1455", path: "/auth/callback" },
+};
 // One controller/store owner; never mounted into the workspace container.
 export class PrivateCredentials implements CredentialStore {
   private serial = new Serial();
   readonly secrets: string[];
+  /** Non-secret expiry of the stored token, for status display only. */
+  expires: number | undefined;
   constructor(
     readonly path: string,
     seeds: string[] = [],
@@ -31,7 +42,10 @@ export class PrivateCredentials implements CredentialStore {
       if (e.code === "ENOENT") return undefined;
       throw e;
     });
-    if (!stat) return undefined;
+    if (!stat) {
+      this.expires = undefined;
+      return undefined;
+    }
     insist(
       stat.isFile() &&
         !stat.isSymbolicLink() &&
@@ -48,6 +62,7 @@ export class PrivateCredentials implements CredentialStore {
       "invalid_credentials",
     );
     this.remember(value);
+    this.expires = value.expires;
     return value;
   }
   async list() {
@@ -70,6 +85,7 @@ export class PrivateCredentials implements CredentialStore {
       await writeFile(temp, JSON.stringify(next), { mode: 0o600, flag: "wx" });
       await rename(temp, this.path);
       await chmod(this.path, 0o600);
+      this.expires = next.expires;
       return next;
     });
   }
@@ -80,10 +96,21 @@ export class PrivateCredentials implements CredentialStore {
       await unlink(this.path).catch((e) => {
         if (e.code !== "ENOENT") throw e;
       });
+      this.expires = undefined;
     });
   }
 }
 
+// The pending Pi auth prompt, relayed to the authenticated owner like Pi's
+// interactive /login dialog. Only static Pi prompt text and option ids leave
+// the controller; tokens, raw progress and provider errors never do.
+type Prompt =
+  | {
+      type: "select";
+      message: string;
+      options: { id: string; label: string; description?: string }[];
+    }
+  | { type: "manual_code"; message: string };
 type Login = {
   id: string;
   owner: string;
@@ -92,19 +119,26 @@ type Login = {
   state: "starting" | "waiting" | "connected" | "cancelled" | "failed";
   url: string;
   userCode: string;
-  manual: boolean;
+  prompt?: Prompt;
   answer?: (value: string) => void;
   done: Promise<void>;
   timer: NodeJS.Timeout;
 };
+type Check = { at: number; ok: boolean };
+const short = (value: string | undefined, max = 200) =>
+  (value ?? "").slice(0, max);
 export class Subscription {
   private login?: Login;
+  private check?: Check;
   private operation = new Serial();
   constructor(
     readonly runtime: Pick<
       ModelRuntime,
-      "login" | "logout" | "hasConfiguredAuth"
+      "login" | "logout" | "hasConfiguredAuth" | "getAuth"
     >,
+    private readonly credential: { expires: number | undefined } = {
+      expires: undefined,
+    },
   ) {}
   static async open(dataDir: string, seeds: string[]) {
     const credentials = new PrivateCredentials(
@@ -122,17 +156,25 @@ export class Subscription {
     });
     // Static provider: initialize auth metadata only. No remote catalogs, token exchange or model requests.
     await runtime.refresh({ providers: [provider], allowNetwork: false });
+    await credentials.read(provider);
     return {
-      subscription: new Subscription(runtime),
+      subscription: new Subscription(runtime, credentials),
       runtime,
       secrets: credentials.secrets,
     };
   }
   status(owner: string) {
     const login = this.login?.owner === owner ? this.login : undefined;
+    const configured = this.runtime.hasConfiguredAuth(provider);
     return {
-      configured: this.runtime.hasConfiguredAuth(provider),
+      configured,
       subscription: true,
+      provider,
+      providerName: official.name,
+      ...(configured && this.credential.expires
+        ? { tokenExpires: this.credential.expires }
+        : {}),
+      ...(configured && this.check ? { lastCheck: this.check } : {}),
       ...(login
         ? {
             login: {
@@ -141,15 +183,22 @@ export class Subscription {
               expires: login.expires,
               url: login.url,
               userCode: login.userCode,
-              manual: login.manual,
+              // Compatibility with the 0.2.0 browser fallback field.
+              manual: login.prompt?.type === "manual_code",
+              ...(login.prompt ? { prompt: login.prompt } : {}),
             },
           }
         : {}),
     };
   }
-  start(owner: string, method: unknown) {
+  /**
+   * Start Pi's own provider login, as Pi's interactive /login does. With no
+   * method the owner answers Pi's method selection in the UI; a method given
+   * up front answers that selection immediately.
+   */
+  start(owner: string, method?: unknown) {
     insist(
-      method === "device_code" || method === "browser",
+      method === undefined || method === "device_code" || method === "browser",
       "invalid_login_method",
     );
     return this.operation.run(async () => {
@@ -167,7 +216,6 @@ export class Subscription {
         state: "starting",
         url: "",
         userCode: "",
-        manual: false,
         done: Promise.resolve(),
         timer: undefined!,
       };
@@ -177,15 +225,34 @@ export class Subscription {
       const interaction: AuthInteraction = {
         signal: login.abort.signal,
         prompt: async (prompt) => {
-          if (prompt.type === "select") {
-            insist(prompt.options.some((o) => o.id === method));
-            return method;
-          }
           insist(
-            method === "browser" && prompt.type === "manual_code",
+            prompt.type === "select" || prompt.type === "manual_code",
             "unexpected_auth_prompt",
           );
-          login.manual = true;
+          if (prompt.type === "select" && method !== undefined) {
+            insist(prompt.options.some((o) => o.id === method));
+            return method as string;
+          }
+          insist(
+            prompt.type === "select" ||
+              method === undefined ||
+              method === "browser",
+            "unexpected_auth_prompt",
+          );
+          login.prompt =
+            prompt.type === "select"
+              ? {
+                  type: "select",
+                  message: short(prompt.message),
+                  options: prompt.options.slice(0, 8).map((o) => ({
+                    id: short(o.id, 64),
+                    label: short(o.label),
+                    ...(o.description
+                      ? { description: short(o.description) }
+                      : {}),
+                  })),
+                }
+              : { type: "manual_code", message: short(prompt.message) };
           login.state = "waiting";
           return new Promise<string>((resolve, reject) => {
             const signal = prompt.signal
@@ -193,13 +260,14 @@ export class Subscription {
               : login.abort.signal;
             const cancel = () => {
               login.answer = undefined;
+              login.prompt = undefined;
               reject(new Error("login_cancelled"));
             };
             signal.addEventListener("abort", cancel, { once: true });
             login.answer = (value) => {
               signal.removeEventListener("abort", cancel);
               login.answer = undefined;
-              login.manual = false;
+              login.prompt = undefined;
               resolve(value);
             };
             if (signal.aborted) cancel();
@@ -210,12 +278,10 @@ export class Subscription {
             const url = new URL(
               event.type === "auth_url" ? event.url : event.verificationUri,
             );
-            insist(
-              url.origin === "https://auth.openai.com",
-              "unexpected_login_origin",
-            );
+            insist(url.origin === official.origin, "unexpected_login_origin");
             login.url = url.href;
-            login.userCode = event.type === "device_code" ? event.userCode : "";
+            login.userCode =
+              event.type === "device_code" ? short(event.userCode, 64) : "";
             login.state = "waiting";
           }
           // Never forward raw provider progress/error messages, credentials or token responses.
@@ -226,6 +292,7 @@ export class Subscription {
         .then(
           () => {
             login.state = "connected";
+            this.check = { at: Date.now(), ok: true };
           },
           () => {
             login.state = login.abort.signal.aborted ? "cancelled" : "failed";
@@ -235,7 +302,7 @@ export class Subscription {
           clearTimeout(login.timer);
           login.url = "";
           login.userCode = "";
-          login.manual = false;
+          login.prompt = undefined;
           login.answer = undefined;
         });
       return this.status(owner);
@@ -247,21 +314,29 @@ export class Subscription {
       login?.owner === owner &&
         login.id === id &&
         login.answer &&
+        login.prompt &&
         !login.abort.signal.aborted &&
         login.expires > Date.now(),
       "login_not_pending",
       409,
     );
     const entered = text(value, 4096);
-    const url = new URL(entered);
-    // Browser fallback must include state, which the official Pi flow validates against its PKCE transaction.
-    insist(
-      url.origin === "http://localhost:1455" &&
-        url.pathname === "/auth/callback" &&
-        url.searchParams.get("code") &&
-        url.searchParams.get("state"),
-      "redirect_url_required",
-    );
+    if (login.prompt.type === "select") {
+      insist(
+        login.prompt.options.some((o) => o.id === entered),
+        "invalid_login_method",
+      );
+    } else {
+      const url = new URL(entered);
+      // Browser fallback must include state, which the official Pi flow validates against its PKCE transaction.
+      insist(
+        url.origin === official.redirect.origin &&
+          url.pathname === official.redirect.path &&
+          url.searchParams.get("code") &&
+          url.searchParams.get("state"),
+        "redirect_url_required",
+      );
+    }
     login.answer(entered);
     return { accepted: true };
   }
@@ -277,6 +352,27 @@ export class Subscription {
       return this.status(owner);
     });
   }
+  /**
+   * Ask Pi to resolve request auth exactly as a model call would: it refreshes
+   * the token under the credential lock when it is close to expiry. The
+   * derived token is discarded; only success and the expiry are reported.
+   */
+  verify(owner: string) {
+    return this.operation.run(async () => {
+      insist(
+        this.runtime.hasConfiguredAuth(provider),
+        "subscription_login_required",
+        409,
+      );
+      const signal = AbortSignal.timeout(30000);
+      const ok = await this.runtime
+        .getAuth(provider, { signal })
+        .then((auth) => !!auth?.auth.apiKey)
+        .catch(() => false);
+      this.check = { at: Date.now(), ok };
+      return this.status(owner);
+    });
+  }
   logout(owner: string) {
     return this.operation.run(async () => {
       if (
@@ -288,6 +384,7 @@ export class Subscription {
       await this.login?.done;
       await this.runtime.logout(provider);
       this.login = undefined;
+      this.check = undefined;
       return this.status(owner);
     });
   }

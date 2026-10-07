@@ -2,6 +2,7 @@
 
 ## Unreleased — installation, Home companion, permissions and model selection
 
+- ChatGPT login dialog follows Pi's interactive `/login`: Pi's own method selection is relayed to the owner, then the device code or browser step. Shows token expiry (never the token) and adds **Check connection**, which resolves auth through Pi and refreshes near expiry. Claude subscription OAuth is deliberately not offered (Anthropic terms).
 - Official one-click My Home Assistant repository link, manual App-store/sidebar instructions and complete safe configuration example. Home mode needs no operator shell setup; the optional Code worker remains a separate installation.
 - Native Home canvas (`ha_build_view`): assistant-selected structure over exact approved entities, controller-read values and atomic durable canvas/receipt with explicit refresh.
 - Home permissions: Read-only (default), Ask (exact human approval) and explicitly acknowledged Full access for the configured exact light/switch policy. Unknown outcomes block autonomous reissue until human reconciliation; no automatic retry.

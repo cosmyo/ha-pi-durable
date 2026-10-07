@@ -167,6 +167,10 @@ export function appServer(
           const v = object(await body(req), ["id"]);
           return json(res, 200, await subscription.cancel(owner, v.id));
         }
+        if (req.method === "POST" && path === "/api/auth/verify") {
+          object(await body(req), []);
+          return json(res, 200, await subscription.verify(owner));
+        }
         if (req.method === "POST" && path === "/api/auth/logout") {
           object(await body(req), []);
           return json(res, 200, await subscription.logout(owner));

@@ -128,6 +128,7 @@ test("OAuth flow is owner-bound, cancellable and does not return credential/erro
   let connected = false,
     resolveLogin!: () => void;
   const service = new Subscription({
+    getAuth: async () => undefined,
     hasConfiguredAuth: () => connected,
     logout: async () => {
       connected = false;
@@ -189,6 +190,7 @@ test("OAuth flow is owner-bound, cancellable and does not return credential/erro
 test("headless browser fallback rejects code without redirect state and wrong owner", async () => {
   let received = "";
   const service = new Subscription({
+    getAuth: async () => undefined,
     hasConfiguredAuth: () => false,
     logout: async () => {},
     login: async (_p, _t, interaction) => {
@@ -227,4 +229,111 @@ test("headless browser fallback rejects code without redirect state and wrong ow
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(received, /state=synthetic-state/);
   await service.close();
+});
+
+test("Pi /login-style flow relays Pi's own method selection to the owner", async () => {
+  let selected = "";
+  const service = new Subscription({
+    getAuth: async () => undefined,
+    hasConfiguredAuth: () => !!selected,
+    logout: async () => {},
+    login: async (_p, _t, interaction) => {
+      selected = await interaction.prompt({
+        type: "select",
+        message: "Select OpenAI Codex login method:",
+        options: [
+          { id: "browser", label: "Browser login (default)" },
+          { id: "device_code", label: "Device code login (headless)" },
+        ],
+      });
+      interaction.notify({
+        type: "device_code",
+        userCode: "SYNTH-CODE",
+        verificationUri: "https://auth.openai.com/codex/device",
+      });
+      return credential;
+    },
+  });
+  await service.start("owner");
+  await new Promise((resolve) => setImmediate(resolve));
+  const pending = service.status("owner").login!;
+  assert.equal(pending.state, "waiting");
+  assert.deepEqual(
+    pending.prompt?.type === "select" &&
+      pending.prompt.options.map((o) => o.id),
+    ["browser", "device_code"],
+  );
+  assert(!service.status("other").login);
+  assert.throws(
+    () => service.answer("other", pending.id, "device_code"),
+    /login_not_pending/,
+  );
+  assert.throws(
+    () => service.answer("owner", pending.id, "api_key"),
+    /invalid_login_method/,
+  );
+  service.answer("owner", pending.id, "device_code");
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(selected, "device_code");
+  assert.equal(service.status("owner").login?.state, "connected");
+  assert.equal(service.status("owner").login?.prompt, undefined);
+  await service.close();
+});
+
+test("verify refreshes a near-expiry token through real Pi and reports only metadata", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-verify-oauth-")),
+    previous = globalThis.fetch;
+  const token = (n: string) =>
+    `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url")}.${n}`;
+  let refreshes = 0,
+    fail = false;
+  globalThis.fetch = (async (url, init) => {
+    assert.equal(String(url), "https://auth.openai.com/oauth/token");
+    assert.match(String(init?.body), /grant_type=refresh_token/);
+    refreshes++;
+    if (fail) return new Response("synthetic-refresh-error", { status: 400 });
+    return Response.json({
+      access_token: token("synthetic-rotated-access"),
+      refresh_token: "synthetic-rotated-refresh",
+      expires_in: 3600,
+    });
+  }) as typeof fetch;
+  try {
+    const store = new PrivateCredentials(join(dir, "chatgpt-oauth.json"));
+    await store.modify("openai-codex", async () => ({
+      ...credential,
+      access: token("synthetic-old-access"),
+      expires: Date.now() + 60000,
+    }));
+    const { subscription } = await Subscription.open(dir, []);
+    const before = subscription.status("owner").tokenExpires!;
+    const checked = await subscription.verify("owner");
+    assert.equal(refreshes, 1);
+    assert.equal(checked.lastCheck?.ok, true);
+    assert(checked.tokenExpires! > before + 30 * 60000);
+    assert.doesNotMatch(JSON.stringify(checked), /synthetic-(rotated|old)/);
+    // A still-valid token is not refreshed again.
+    await subscription.verify("owner");
+    assert.equal(refreshes, 1);
+    await store.modify(
+      "openai-codex",
+      async (current) =>
+        ({
+          ...current!,
+          expires: Date.now() + 1000,
+        }) as Credential,
+    );
+    fail = true;
+    const failed = await subscription.verify("owner");
+    assert.equal(failed.lastCheck?.ok, false);
+    assert.doesNotMatch(JSON.stringify(failed), /synthetic-refresh-error/);
+    await subscription.logout("owner");
+    await assert.rejects(
+      subscription.verify("owner"),
+      /subscription_login_required/,
+    );
+  } finally {
+    globalThis.fetch = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
 });
