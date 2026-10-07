@@ -105,10 +105,31 @@ button:disabled {
 }
 button:focus-visible,
 select:focus-visible,
-textarea:focus-visible,
 summary:focus-visible {
   outline: 3px solid var(--warm);
   outline-offset: 3px;
+}
+/* The composer itself shows focus, so the textarea needs no inner box. */
+#composer textarea:focus-visible {
+  outline: none;
+}
+#composer:focus-within {
+  border-color: var(--warm);
+  box-shadow: 0 0 0 2px #ffc58e55;
+}
+dialog textarea:focus-visible {
+  outline: 3px solid var(--warm);
+}
+/* A selected session with no messages yet gets a quiet hint, not a void. */
+#messages:empty::before {
+  content: "Ask about your home, or tap a starter above. Replies and action reviews appear here.";
+  display: block;
+  max-width: 420px;
+  margin: 6vh auto;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.6;
 }
 nav {
   overflow: auto;
@@ -358,94 +379,6 @@ footer {
 [hidden] {
   display: none !important;
 }
-@media (max-width: 720px) {
-  header {
-    padding: 12px 16px;
-    gap: 10px;
-  }
-  header img {
-    width: 36px;
-    height: 36px;
-  }
-  header p {
-    font-size: 0.65rem;
-    max-width: 180px;
-  }
-  header > .pill {
-    font-size: 0.6rem;
-    padding: 4px 7px;
-  }
-  main {
-    display: flex;
-    flex-direction: column;
-  }
-  aside {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-    padding: 10px 16px;
-    gap: 8px;
-    flex-shrink: 0;
-    max-height: 140px;
-  }
-  .aside-note {
-    display: none;
-  }
-  nav {
-    flex-direction: row;
-    overflow-x: auto;
-    flex-shrink: 0;
-  }
-  .session {
-    white-space: nowrap;
-    max-width: 220px;
-    text-overflow: ellipsis;
-    overflow: hidden;
-    flex-shrink: 0;
-    font-size: 0.8rem;
-    padding: 7px 12px;
-  }
-  .section-head button {
-    min-height: 36px;
-    padding: 6px 12px;
-  }
-  .conversation {
-    padding: 14px 16px 10px;
-    flex: 1;
-  }
-  .conversation-head h2 {
-    font-size: 0.92rem;
-    overflow-wrap: anywhere;
-  }
-  .conversation-head button {
-    font-size: 0.76rem;
-    white-space: nowrap;
-  }
-  .scroll-area {
-    padding: 18px 0;
-  }
-  .message {
-    max-width: 94%;
-    padding: 12px 14px;
-  }
-  .action-card {
-    padding: 16px;
-  }
-  form {
-    flex-wrap: wrap;
-  }
-  #retry {
-    flex-basis: 100%;
-  }
-  footer {
-    font-size: 0.65rem;
-  }
-  .welcome {
-    margin: 4vh auto;
-  }
-  .welcome h3 {
-    font-size: 1.85rem;
-  }
-}
 dialog {
   background: var(--panel);
   color: var(--text);
@@ -609,4 +542,395 @@ dialog .actions {
   border-radius: 8px;
   margin: 12px 0;
   padding: 10px 12px;
+}
+.compact-only {
+  display: none;
+}
+#home-surface.collapsed .canvas-disclosure {
+  display: none;
+}
+#home-surface.collapsed .home-starters {
+  margin-bottom: 0;
+}
+
+/* Compact layout: phones, the HA companion app and short landscape screens.
+   Keep in sync with COMPACT_QUERY in app.js. The conversation owns the space;
+   permissions and model settings open on demand. */
+@media (max-width: 720px), (max-height: 560px) {
+  body {
+    overflow: hidden;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0
+      env(safe-area-inset-left);
+  }
+  button {
+    min-height: 40px;
+    padding: 8px 12px;
+  }
+  select,
+  input,
+  textarea,
+  #home-mode,
+  .model-picker select {
+    /* 16px stops iOS Safari from zooming on focus. */
+    font-size: 16px;
+  }
+  .compact-only {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  header {
+    padding: 8px 12px;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  header img {
+    width: 30px;
+    height: 30px;
+  }
+  header > div {
+    display: none;
+  }
+  header > .pill {
+    margin-left: 0;
+    margin-right: auto;
+    font-size: 0.68rem;
+    padding: 4px 8px;
+    white-space: nowrap;
+  }
+  header button {
+    font-size: 0.8rem;
+    min-height: 36px;
+    padding: 6px 10px;
+    white-space: nowrap;
+  }
+  #permissions-toggle {
+    color: var(--teal);
+  }
+  #permissions-toggle[aria-expanded="true"],
+  #model-toggle[aria-expanded="true"],
+  #canvas-toggle[aria-expanded="true"] {
+    border-color: var(--teal);
+    background: #30423b;
+  }
+  #home-permissions {
+    display: none;
+    padding: 10px 12px;
+    max-height: 45dvh;
+    overflow: auto;
+    background: var(--panel);
+  }
+  body.show-permissions #home-permissions {
+    display: flex;
+  }
+  #home-permissions > label {
+    flex-basis: 100%;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  #home-mode {
+    flex: 1 1 100%;
+  }
+  #home-permissions button {
+    flex: 1 1 auto;
+    font-size: 0.85rem;
+  }
+  #home-permissions p {
+    font-size: 0.74rem;
+    line-height: 1.5;
+  }
+  main {
+    display: flex;
+    flex-direction: column;
+  }
+  aside {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    flex-shrink: 0;
+  }
+  .aside-note,
+  .section-head h2 {
+    display: none;
+  }
+  .section-head {
+    order: 2;
+    flex-shrink: 0;
+    gap: 6px;
+  }
+  .section-head button {
+    min-height: 36px;
+    padding: 6px 8px;
+    font-size: 0.75rem;
+    white-space: nowrap;
+  }
+  nav {
+    flex-direction: row;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 6px;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    /* Fade the trailing edge so a clipped chip reads as "scroll for more". */
+    -webkit-mask-image: linear-gradient(90deg, #000 85%, transparent);
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+    padding-right: 24px;
+  }
+  nav::-webkit-scrollbar {
+    display: none;
+  }
+  .session {
+    flex-shrink: 0;
+    max-width: 160px;
+    min-height: 36px;
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    border-radius: 18px;
+  }
+  .conversation {
+    flex: 1;
+    padding: 8px 12px 0;
+  }
+  .conversation-head {
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+  .conversation-head > div:first-child {
+    min-width: 0;
+    flex: 1;
+  }
+  .conversation-head h2,
+  .safety {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conversation-head h2 {
+    font-size: 0.95rem;
+  }
+  .safety {
+    font-size: 0.7rem;
+    margin: 2px 0 0;
+  }
+  .conversation-head .actions {
+    flex-wrap: nowrap;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .conversation-head button {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+  /* Stop appears only while a task can actually be stopped. */
+  #stop:disabled {
+    display: none;
+  }
+  .model-picker {
+    display: none;
+    gap: 8px;
+    padding: 10px 0;
+    max-height: 45dvh;
+    overflow: auto;
+  }
+  body.show-model .model-picker {
+    display: flex;
+  }
+  .model-picker select {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+  .model-picker label {
+    flex-basis: 100%;
+    color: var(--muted);
+  }
+  #apply-model,
+  #active-model {
+    flex-basis: 100%;
+  }
+  .model-picker p {
+    font-size: 0.72rem;
+    line-height: 1.5;
+  }
+  .scroll-area {
+    padding: 12px 0;
+    overscroll-behavior: contain;
+  }
+  #home-surface {
+    padding: 12px;
+    margin-bottom: 14px;
+    border-radius: 14px;
+  }
+  .home-starters {
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: nowrap;
+  }
+  .home-starters button {
+    flex: 1 1 0;
+    min-width: 0;
+    font-size: 0.76rem;
+    line-height: 1.3;
+  }
+  .canvas-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+    gap: 8px;
+  }
+  .canvas-card {
+    padding: 10px;
+  }
+  .canvas-card h5 {
+    margin-bottom: 4px;
+  }
+  .canvas-value {
+    font-size: 1.35rem;
+  }
+  .canvas-card code {
+    font-size: 0.64rem;
+    padding: 4px 0;
+    color: var(--muted);
+  }
+  .canvas-card p {
+    font-size: 0.64rem;
+    line-height: 1.4;
+    margin: 4px 0 8px;
+  }
+  .canvas-card .canvas-question {
+    min-height: 34px;
+    padding: 4px 10px;
+    font-size: 0.72rem;
+  }
+  .canvas-heading p {
+    margin: 4px 0;
+  }
+  .canvas-section h4 {
+    margin: 12px 0 8px;
+  }
+  .welcome {
+    margin: 2vh auto;
+  }
+  .welcome h3 {
+    font-size: 1.5rem;
+  }
+  .welcome p {
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+  .message {
+    max-width: 92%;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .message pre {
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+  .message h3 {
+    margin-bottom: 4px;
+  }
+  .message.tool {
+    max-width: 100%;
+  }
+  .message.tool pre {
+    max-height: 140px;
+  }
+  .action-card {
+    padding: 14px;
+  }
+  .action-card .actions button {
+    flex: 1 1 auto;
+  }
+  #feedback {
+    min-height: 0;
+    padding: 4px 2px;
+  }
+  #feedback:empty {
+    display: none;
+  }
+  form {
+    padding: 6px 6px 6px 10px;
+    gap: 6px;
+    border-radius: 22px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+  }
+  textarea {
+    resize: none;
+    min-height: 40px;
+    max-height: 140px;
+    padding: 8px 2px;
+    line-height: 1.4;
+  }
+  textarea::placeholder {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #send {
+    border-radius: 18px;
+    padding: 8px 14px;
+  }
+  #retry {
+    flex-basis: 100%;
+  }
+  footer {
+    font-size: 0.65rem;
+    padding: 6px 2px max(6px, env(safe-area-inset-bottom));
+  }
+  footer span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  dialog {
+    max-width: 100vw;
+    width: 100%;
+    max-height: 92dvh;
+    margin: auto 0 0;
+    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+    border-radius: 18px 18px 0 0;
+    overflow: auto;
+  }
+  dialog .actions button {
+    flex: 1 1 auto;
+  }
+}
+@media (max-height: 560px) and (min-width: 721px) {
+  /* Landscape phones: sessions stay beside the chat to save height. */
+  main {
+    display: grid;
+    grid-template-columns: 200px minmax(0, 1fr);
+  }
+  aside {
+    flex-direction: column;
+    align-items: stretch;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+    padding: 8px;
+    min-height: 0;
+  }
+  .section-head {
+    order: 0;
+  }
+  nav {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+  .session {
+    max-width: none;
+  }
+  footer {
+    display: none;
+  }
 }

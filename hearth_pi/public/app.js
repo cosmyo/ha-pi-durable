@@ -6,13 +6,17 @@ import {
 } from "./render.js";
 const $ = (id) => document.getElementById(id);
 const base = new URL("./", window.location.href);
+// Phones, the HA companion app and short landscape screens use a compact
+// layout: secondary panels start collapsed so the conversation keeps the space.
+const COMPACT_QUERY = "(max-width: 720px), (max-height: 560px)";
+const compact = () => !!window.matchMedia?.(COMPACT_QUERY).matches;
 let csrf = "",
   selected = null,
   stream = null,
   busy = false,
   actionSignature = "",
   canvasSignature = "",
-  canvasOpen = true,
+  canvasOpen = !compact(),
   sending = false,
   inferenceReady = true,
   selectedKind = "home",
@@ -73,6 +77,13 @@ function updatePermissions(value) {
   if (!value) return;
   permissions = value;
   $("home-mode").value = value.effectiveMode;
+  $("permissions-mode").textContent = value.blocked
+    ? "Paused"
+    : value.effectiveMode === "full"
+      ? "Full access"
+      : value.effectiveMode === "ask"
+        ? "Ask"
+        : "Read-only";
   homeSafety = `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
   $("permission-summary").textContent =
     `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
@@ -154,6 +165,7 @@ function controls() {
   $("home-surface").hidden = selectedKind === "workspace";
   $("canvas-toggle").hidden = selectedKind === "workspace";
   $("home-canvas").hidden = !canvasOpen;
+  $("home-surface").classList.toggle("collapsed", !canvasOpen);
   $("canvas-toggle").setAttribute("aria-expanded", String(canvasOpen));
   for (const button of document.querySelectorAll(
     ".canvas-question, .home-starters button",
@@ -163,6 +175,7 @@ function controls() {
 function draftQuestion(content) {
   if ($("message").disabled || selectedKind !== "home") return;
   $("message").value = content;
+  fitComposer();
   $("message").focus();
   feedback(
     "Question drafted. Review and press Send; no request has been admitted yet.",
@@ -182,6 +195,23 @@ $("canvas-toggle").addEventListener("click", () => {
   canvasOpen = !canvasOpen;
   controls();
 });
+// Compact-layout disclosure panels. Wide layouts always show both panels.
+function panelToggle(button, className) {
+  $(button).addEventListener("click", () => {
+    const open = document.body.classList.toggle(className);
+    $(button).setAttribute("aria-expanded", String(open));
+  });
+}
+panelToggle("permissions-toggle", "show-permissions");
+panelToggle("model-toggle", "show-model");
+// Grow the composer with its content instead of reserving rows up front.
+function fitComposer() {
+  const box = $("message");
+  if (!box.style) return;
+  box.style.height = "auto";
+  if (box.scrollHeight)
+    box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
+}
 function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
@@ -318,6 +348,7 @@ async function sendSaved() {
     sessionStorage.removeItem(`hearth:pending:${id}`);
     if (selected === id) {
       $("message").value = "";
+      fitComposer();
       feedback("Input durably admitted.");
     }
   } catch (error) {
@@ -344,6 +375,7 @@ $("composer").addEventListener("submit", (event) => {
     feedback("Browser session storage unavailable; input was not sent.");
   }
 });
+$("message").addEventListener("input", fitComposer);
 $("retry").addEventListener("click", () => {
   void sendSaved();
 });

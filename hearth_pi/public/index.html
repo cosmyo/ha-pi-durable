@@ -2,8 +2,12 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#121c1e" />
     <title>Hearth Pi — a durable AI agent for Home Assistant</title>
     <link rel="icon" href="./icon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="./app.css" />
@@ -17,6 +21,16 @@
         <p>Your home companion · powered by Pi Durable</p>
       </div>
       <span class="pill" id="connection" role="status">Connecting</span>
+      <button
+        id="permissions-toggle"
+        class="compact-only"
+        type="button"
+        aria-controls="home-permissions"
+        aria-expanded="false"
+        aria-label="Home permissions"
+      >
+        ◈ <span id="permissions-mode">Read-only</span>
+      </button>
       <button id="account" type="button">ChatGPT login</button>
     </header>
     <dialog id="account-dialog" aria-labelledby="account-title">
@@ -151,6 +165,15 @@
           </div>
           <div class="actions">
             <button
+              id="model-toggle"
+              class="compact-only"
+              type="button"
+              aria-controls="model-picker"
+              aria-expanded="false"
+            >
+              Model
+            </button>
+            <button
               id="canvas-toggle"
               type="button"
               aria-controls="home-canvas"
@@ -161,7 +184,7 @@
             <button id="stop" type="button" disabled>Stop task</button>
           </div>
         </div>
-        <div class="model-picker" aria-label="Session model">
+        <div id="model-picker" class="model-picker" aria-label="Session model">
           <label for="model-choice">Model for next input</label>
           <select id="model-choice" disabled></select>
           <label for="thinking-choice">Thinking</label>
@@ -234,7 +257,7 @@
             id="message"
             placeholder="What would you like to understand?"
             maxlength="4000"
-            rows="2"
+            rows="1"
             required
             disabled
           ></textarea

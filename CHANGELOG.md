@@ -10,6 +10,7 @@
 - Durable per-session model and thinking selector from the configured provider's local registry; Codex default `gpt-6.1-sol` with medium thinking when `model` is empty.
 - Raise bounded exact-entity configuration and search pagination beyond 500, aligned with the 10,000-state bound. Defaults still deny all entities; no wildcard grant.
 - Show configured entity count in Home-mode safety text without exposing entity IDs in bootstrap.
+- Compact phone / HA companion-app layout: the conversation keeps the screen. Home permissions and the model picker open on demand from a header **◈ mode** chip and a **Model** button, sessions become a one-row chip strip, the Home view starts collapsed, Stop shows only while a task runs, the composer auto-grows, dialogs become bottom sheets, and iOS safe areas/zoom-on-focus are handled. Short landscape screens use the same compact rules. Wide layouts are unchanged; no permission, approval or model semantics changed.
 
 ## 0.2.0 — subscription and isolated coding preview
 
