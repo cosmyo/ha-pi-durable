@@ -166,7 +166,12 @@ export function appServer(
   const world = new WorldStore(runtime, actions.engine.ha);
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
-  const perOwner = new Map<string, number>();
+  // Oldest-first per-owner stream stoppers; a new stream over the limit
+  // evicts stream [0] (the oldest) instead of being refused, so a prior
+  // chat's EventSource left open by a slow-closing proxy cannot starve a
+  // newly opened one.
+  const perOwnerStreams = new Map<string, Array<() => void>>();
+  const OWNER_STREAM_LIMIT = 4;
   const rates = new Map<string, { count: number; until: number }>();
   let largeBodies = 0;
   const stringify = (data: unknown) =>
@@ -573,11 +578,7 @@ export function appServer(
             await runtime.snapshot(owner, id, config.policy.entities),
           );
         if (req.method === "GET" && operation === "events") {
-          insist(
-            streams.size < 20 && (perOwner.get(owner) ?? 0) < 2,
-            "stream_limit",
-            429,
-          );
+          insist(streams.size < 20, "stream_limit", 429);
           const watch = await conversation.watch(ctx);
           const proposals = await runtime.harness.watchDoc(
             Proposals,
@@ -608,8 +609,13 @@ export function appServer(
             await permissions.stop();
             return;
           }
+          const ownerStreams = perOwnerStreams.get(owner) ?? [];
+          while (ownerStreams.length >= OWNER_STREAM_LIMIT) {
+            const evict = ownerStreams.shift();
+            evict?.();
+          }
+          perOwnerStreams.set(owner, ownerStreams);
           streams.add(res);
-          perOwner.set(owner, (perOwner.get(owner) ?? 0) + 1);
           let ended = false;
           let sending = false;
           let dirty = false;
@@ -618,13 +624,19 @@ export function appServer(
             ended = true;
             streams.delete(res);
             sessionStreams.get(id)?.delete(stop);
-            perOwner.set(owner, Math.max(0, (perOwner.get(owner) ?? 1) - 1));
+            const owned = perOwnerStreams.get(owner);
+            if (owned) {
+              const at = owned.indexOf(stop);
+              if (at !== -1) owned.splice(at, 1);
+            }
             clearInterval(heartbeat);
+            if (!res.writableEnded) res.end();
             void watch.stop();
             void proposals.stop();
             void canvas.stop();
             void permissions.stop();
           };
+          ownerStreams.push(stop);
           const forSession = sessionStreams.get(id) ?? new Set();
           forSession.add(stop);
           sessionStreams.set(id, forSession);

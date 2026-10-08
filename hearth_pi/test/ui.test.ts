@@ -3,11 +3,12 @@ import assert from "node:assert/strict";
 import { parseHTML } from "linkedom";
 import { readFile } from "node:fs/promises";
 
-// The server rejects a session title over 80 chars (runtime.ts: text(title,
-// 80)) instead of truncating it. Before this test's fix, typing an ordinary
-// long title into the "New chat" prompt silently failed new-chat with a raw
-// "invalid_request" error instead of creating a session.
-test("new-chat title longer than the server's bound is clamped client-side instead of failing with invalid_request", async () => {
+// Before this test's fix, the "New chat" drawer/header action opened a
+// native `window.prompt("Session title")`, which iOS Safari renders as a
+// system modal under HA ingress and which interrupts the flow Claude-style
+// clients avoid. New chat must create immediately with a default title and
+// never call prompt(); renaming is a separate, later action.
+test("new chat creates immediately with a default title, never opens a native prompt, and focuses the composer", async () => {
   const { window, document } = parseHTML(
     await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   );
@@ -18,10 +19,6 @@ test("new-chat title longer than the server's bound is clamped client-side inste
     EventSource: globalThis.EventSource,
     sessionStorage: globalThis.sessionStorage,
   };
-  const SERVER_TITLE_MAX = 80;
-  const overlongTitle =
-    "Why does the living room sensor keep reporting unusually high humidity readings during the afternoon";
-  assert(overlongTitle.length > SERVER_TITLE_MAX);
   const requests: { method: string; path: string; body?: unknown }[] = [];
   let created = false;
   Object.defineProperty(window, "location", {
@@ -39,7 +36,9 @@ test("new-chat title longer than the server's bound is clamped client-side inste
       },
     });
   }
-  window.prompt = () => overlongTitle;
+  window.prompt = () => {
+    throw new Error("native prompt() must not be used to create a new chat");
+  };
   try {
     Object.assign(globalThis, {
       window,
@@ -71,19 +70,10 @@ test("new-chat title longer than the server's bound is clamped client-side inste
         if (path.endsWith("/sessions") && method === "GET")
           return Response.json({
             items: created
-              ? [{ id: 9, owner: "owner", title: body, kind: "home" }]
+              ? [{ id: 9, owner: "owner", title: body?.title, kind: "home" }]
               : [],
           });
         if (path.endsWith("/sessions") && method === "POST") {
-          // Mirrors the server's real text(title, 80) bound (safety.ts/runtime.ts):
-          // a title over the max is rejected, never silently truncated server-side.
-          if (
-            typeof body?.title !== "string" ||
-            body.title.length > SERVER_TITLE_MAX
-          )
-            return new Response(JSON.stringify({ error: "invalid_request" }), {
-              status: 400,
-            });
           created = true;
           return new Response(JSON.stringify({ id: 9 }), { status: 201 });
         }
@@ -104,6 +94,10 @@ test("new-chat title longer than the server's bound is clamped client-side inste
         .href
     );
     await new Promise((resolve) => setTimeout(resolve, 20));
+    let composerFocused = false;
+    document.getElementById("message")!.focus = () => {
+      composerFocused = true;
+    };
     document
       .getElementById("new-chat-icon")!
       .dispatchEvent(new window.Event("click"));
@@ -113,13 +107,16 @@ test("new-chat title longer than the server's bound is clamped client-side inste
     );
     assert(createCall, "expected a POST /api/sessions call");
     const sentTitle = (createCall!.body as { title: string }).title;
-    assert.equal(sentTitle, overlongTitle.slice(0, SERVER_TITLE_MAX));
-    assert(sentTitle.length <= SERVER_TITLE_MAX);
-    assert(created, "session creation should have succeeded, not 400ed");
+    assert.equal(sentTitle, "A thoughtful home");
+    assert(created, "session creation should have succeeded immediately");
+    assert(
+      composerFocused,
+      "composer should be focused after creating a new chat",
+    );
     assert.equal(
       document.getElementById("feedback")!.textContent,
       "",
-      "no invalid_request error should have reached the user",
+      "no error should have reached the user",
     );
   } finally {
     Object.assign(globalThis, previous);
@@ -373,6 +370,66 @@ test("assistant markdown renders as DOM elements and never interprets HTML", asy
     assert(chat.textContent!.includes("<script>alert(3)</script>"));
     // User text is shown verbatim, not parsed as markdown.
     assert(chat.textContent!.includes("**not markdown for user input**"));
+  } finally {
+    delete (globalThis as { document?: unknown }).document;
+  }
+});
+
+// Regression for a live-install evidence screenshot: a GFM table rendered
+// as a raw pipe-delimited wall of text instead of an actual table.
+test("assistant markdown renders a GFM table as a scrollable DOM table, not raw pipes", async () => {
+  const { document } = parseHTML(
+    '<html><body><div id="chat"></div></body></html>',
+  );
+  Object.defineProperty(globalThis, "document", {
+    value: document,
+    configurable: true,
+  });
+  try {
+    const { renderMessages } = await import(
+      new URL("../public/render.js", import.meta.url).href
+    );
+    const chat = document.getElementById("chat")!;
+    const markdown = [
+      "| Room | **Status** | Temp |",
+      "| --- | :---: | ---: |",
+      "| Study | `on` | 21 |",
+      "| Hall | off | 19 |",
+    ].join("\n");
+    renderMessages(chat, {
+      view: {
+        entries: [
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: markdown }],
+              },
+            ],
+          },
+        ],
+        docs: { "pi.live": {} },
+      },
+    });
+    const wrap = chat.querySelector(".md-table-wrap")!;
+    assert(wrap, "table wrapper present");
+    const table = wrap.querySelector("table.md-table")!;
+    assert(table, "table element present");
+    const headers = [...table.querySelectorAll("thead th")].map(
+      (th) => th.textContent,
+    );
+    assert.deepEqual(headers, ["Room", "Status", "Temp"]);
+    assert.equal(table.querySelector("thead th strong")!.textContent, "Status");
+    const rows = [...table.querySelectorAll("tbody tr")].map((tr) =>
+      [...tr.querySelectorAll("td")].map((td) => td.textContent),
+    );
+    assert.deepEqual(rows, [
+      ["Study", "on", "21"],
+      ["Hall", "off", "19"],
+    ]);
+    assert.equal(table.querySelector("tbody td code")!.textContent, "on");
+    // Never raw pipes in the rendered text.
+    assert(!chat.textContent!.includes("| Room |"));
   } finally {
     delete (globalThis as { document?: unknown }).document;
   }

@@ -47,6 +47,84 @@ function inline(parent, text) {
   if (last < text.length)
     parent.append(document.createTextNode(text.slice(last)));
 }
+// GFM table row cells: split on unescaped `|`, trimming the leading/
+// trailing empty cell produced by a `| a | b |`-style outer pipe.
+function tableCells(line) {
+  const trimmed = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  const cells = [];
+  let cell = "";
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (ch === "\\" && trimmed[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (ch === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += ch;
+    }
+  }
+  cells.push(cell.trim());
+  return cells;
+}
+const TABLE_ALIGN_ROW = /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/;
+const TABLE_MAX_COLUMNS = 12;
+const TABLE_MAX_ROWS = 200;
+// Looks like a GFM table: a header row immediately followed by a
+// dashes-and-colons alignment row with a matching column count.
+function tableAt(lines, i) {
+  if (!lines[i]?.includes("|") || !TABLE_ALIGN_ROW.test(lines[i + 1] ?? ""))
+    return null;
+  const header = tableCells(lines[i]);
+  const aligns = tableCells(lines[i + 1]);
+  if (header.length < 1 || aligns.length !== header.length) return null;
+  return { header, aligns };
+}
+function renderTable(lines, start) {
+  const { header, aligns } = tableAt(lines, start);
+  const columns = Math.min(header.length, TABLE_MAX_COLUMNS);
+  const align = (i) => {
+    const spec = aligns[i] ?? "";
+    if (/^:-+:$/.test(spec)) return "center";
+    if (/^-+:$/.test(spec)) return "right";
+    if (/^:-+$/.test(spec)) return "left";
+    return "";
+  };
+  const table = node("table", "", "md-table");
+  const thead = node("thead");
+  const headRow = node("tr");
+  for (let c = 0; c < columns; c++) {
+    const th = node("th");
+    const a = align(c);
+    if (a) th.style.textAlign = a;
+    inline(th, header[c] ?? "");
+    headRow.append(th);
+  }
+  thead.append(headRow);
+  table.append(thead);
+  const tbody = node("tbody");
+  let i = start + 2;
+  let rows = 0;
+  for (; i < lines.length && lines[i].includes("|") && lines[i].trim(); i++) {
+    if (rows >= TABLE_MAX_ROWS) continue;
+    rows++;
+    const cells = tableCells(lines[i]);
+    const tr = node("tr");
+    for (let c = 0; c < columns; c++) {
+      const td = node("td");
+      const a = align(c);
+      if (a) td.style.textAlign = a;
+      inline(td, cells[c] ?? "");
+      tr.append(td);
+    }
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  const wrap = node("div", "", "md-table-wrap");
+  wrap.append(table);
+  return { wrap, next: i };
+}
 export function renderMarkdown(text) {
   const root = node("div", "", "md");
   const lines = String(text).split("\n");
@@ -66,6 +144,13 @@ export function renderMarkdown(text) {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    if (tableAt(lines, i)) {
+      flush();
+      const { wrap, next } = renderTable(lines, i);
+      root.append(wrap);
+      i = next - 1;
+      continue;
+    }
     if (/^```/.test(line.trim())) {
       flush();
       const body = [];

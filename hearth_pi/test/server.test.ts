@@ -399,3 +399,81 @@ test("HTTP API: Basic auth, browser-bound CSRF/Origin, strict validation, protec
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Regression for a live-install evidence screenshot: switching to a new
+// chat and sending a message showed "Reconnecting\u2026" forever. Through HA
+// ingress a previous chat's EventSource can be left open by the proxy past
+// the client's own close(), so a strict per-owner refusal starved a newly
+// opened stream. The owner must instead keep a small number of streams and
+// evict the oldest one (ending it) rather than refusing the newest.
+test("SSE events: a 5th stream for the same owner evicts (ends) the oldest instead of being refused", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-sse-evict-"));
+  const { faux: _faux, models, model } = offline();
+  const runtime = await Runtime.open(dir, models, model);
+  const cfg = { ...config, dataDir: dir };
+  const app = appServer(
+    cfg,
+    runtime,
+    new Actions(runtime, new HAClient(cfg.haToken, cfg.policy)),
+  );
+  await new Promise<void>((resolve) =>
+    app.server.listen(0, "127.0.0.1", resolve),
+  );
+  const address = app.server.address();
+  assert(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  cfg.origin = base;
+  const authorization = `Basic ${Buffer.from(`hearth:${cfg.password}`).toString("base64")}`;
+  const fetchAPI = (path: string, init: RequestInit = {}) =>
+    fetch(`${base}${path}`, {
+      ...init,
+      headers: { authorization, ...init.headers },
+    });
+  const controllers: AbortController[] = [];
+  try {
+    const id = await runtime.create(
+      "local-admin",
+      "Evict me",
+      "evict-create-1",
+    );
+    const open = async () => {
+      const abort = new AbortController();
+      controllers.push(abort);
+      const response = await fetchAPI(`/api/sessions/${id}/events`, {
+        signal: abort.signal,
+      });
+      assert.equal(response.status, 200);
+      const reader = response.body!.getReader();
+      const frame = await reader.read();
+      assert.match(Buffer.from(frame.value!).toString(), /event: snapshot/);
+      return reader;
+    };
+    const readers = [];
+    for (let n = 0; n < 4; n++) readers.push(await open());
+    // A 5th stream for the same owner must still succeed (200, an immediate
+    // snapshot), not be refused with 429.
+    const fifth = await open();
+    readers.push(fifth);
+    // The oldest (1st) stream is evicted: its reader observes the server
+    // ending the response instead of hanging as "Reconnecting\u2026" forever.
+    const closed = await Promise.race([
+      readers[0]!.read().then((frame) => frame.done === true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4000)),
+    ]);
+    assert.equal(closed, true, "oldest stream should be ended by eviction");
+    // The newer streams (2nd..5th) are left open, unaffected by the eviction.
+    for (const reader of readers.slice(1)) {
+      const result = await Promise.race([
+        reader.read().then(() => "frame"),
+        new Promise<string>((resolve) =>
+          setTimeout(() => resolve("timeout"), 200),
+        ),
+      ]);
+      assert.equal(result, "timeout", "newer stream should remain open");
+    }
+  } finally {
+    for (const abort of controllers) abort.abort();
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

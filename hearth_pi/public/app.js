@@ -52,6 +52,8 @@ let csrf = "",
   messageSignature = "",
   selected = null,
   stream = null,
+  reconnectTimer = null,
+  reconnectAttempt = 0,
   busy = false,
   actionSignature = "",
   canvasSignature = "",
@@ -105,9 +107,19 @@ function paintSettingsSummary() {
   $("settings-summary").textContent =
     `${permissionModeLabel} \u00b7 ${accountSummaryText}`;
 }
-function setConnection(text) {
-  $("connection").textContent = text;
-  $("connection").hidden = text === "Connected";
+// The connection status line can show a manual "Retry" action alongside its
+// text (e.g. while reconnecting): built from DOM nodes only, never raw HTML.
+function setConnection(text, onRetry) {
+  const el = $("connection");
+  el.replaceChildren(document.createTextNode(text));
+  if (onRetry) {
+    el.append(document.createTextNode(" \u00b7 "));
+    const retry = node("button", "Retry", "connection-retry");
+    retry.type = "button";
+    retry.addEventListener("click", onRetry);
+    el.append(retry);
+  }
+  el.hidden = text === "Connected";
 }
 async function api(path, payload) {
   const response = await fetch(new URL(`api/${path}`, base), {
@@ -695,7 +707,69 @@ async function listSessions() {
 document.addEventListener("click", (event) => {
   if (!event.target.closest?.(".session-menu-wrap")) closeSessionMenus();
 });
+function clearReconnect() {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+// Reopen the live stream for a session: through HA ingress a proxy can hold
+// the old EventSource's TCP connection open past our own stream.close(), so
+// a reconnect always re-fetches the snapshot itself (not just the stream's
+// own on-connect snapshot) before subscribing again, in case a reply
+// arrived while disconnected.
+async function openStream(id) {
+  if (selected !== id) return;
+  clearReconnect();
+  stream?.close();
+  try {
+    const state = await api(`sessions/${id}/snapshot`);
+    if (selected !== id) return;
+    snapshot(state);
+  } catch {
+    // Best-effort: the stream's own snapshot-on-connect is the primary path.
+  }
+  if (selected !== id) return;
+  stream = new EventSource(new URL(`api/sessions/${id}/events`, base));
+  stream.onopen = () => {
+    if (selected === id) {
+      reconnectAttempt = 0;
+      setConnection("Connected");
+    }
+  };
+  stream.addEventListener("snapshot", (event) => {
+    if (selected === id) {
+      try {
+        snapshot(JSON.parse(event.data));
+      } catch {
+        feedback("Invalid snapshot; reconnect this session.");
+        stream.close();
+      }
+    }
+  });
+  stream.onerror = () => {
+    if (selected === id) {
+      stream?.close();
+      scheduleReconnect(id);
+    }
+  };
+}
+// Exponential backoff with jitter (1s, 2s, 4s, \u2026 capped at 30s, \u00b150%
+// jitter) so a flaky ingress proxy does not hammer the server, while a
+// visible "Reconnecting\u2026 \u00b7 Retry" always lets the owner force an
+// immediate attempt.
+function scheduleReconnect(id) {
+  clearReconnect();
+  const attempt = reconnectAttempt++;
+  const delayBase = Math.min(30000, 1000 * 2 ** attempt);
+  const jittered = Math.round(delayBase * (0.5 + Math.random()));
+  setConnection("Reconnecting\u2026", () => {
+    if (selected === id) void openStream(id);
+  });
+  reconnectTimer = setTimeout(() => {
+    if (selected === id) void openStream(id);
+  }, jittered);
+}
 async function select(session) {
+  clearReconnect();
   stream?.close();
   selected = session.id;
   selectedKind = session.kind ?? "home";
@@ -716,6 +790,7 @@ async function select(session) {
   feedback("");
   controls();
   const id = selected;
+  reconnectAttempt = 0;
   try {
     void loadFeedback(id);
     const state = await api(`sessions/${id}/snapshot`);
@@ -724,7 +799,10 @@ async function select(session) {
     await listSessions();
     stream = new EventSource(new URL(`api/sessions/${id}/events`, base));
     stream.onopen = () => {
-      if (selected === id) setConnection("Connected");
+      if (selected === id) {
+        reconnectAttempt = 0;
+        setConnection("Connected");
+      }
     };
     stream.addEventListener("snapshot", (event) => {
       if (selected === id) {
@@ -737,7 +815,10 @@ async function select(session) {
       }
     });
     stream.onerror = () => {
-      if (selected === id) setConnection("Reconnecting…");
+      if (selected === id) {
+        stream?.close();
+        scheduleReconnect(id);
+      }
     };
   } catch (error) {
     feedback(error.message);
@@ -1010,13 +1091,15 @@ $("retry").addEventListener("click", () => {
 // Without this, an ordinary long title silently fails new-chat with a raw
 // "invalid_request" error instead of creating a session.
 const SESSION_TITLE_MAX = 80;
+// New chat creates immediately with a calm default title instead of a
+// native prompt() interrupting the flow; renaming (when available) happens
+// from the session's own … menu or title, never on creation.
+const DEFAULT_SESSION_TITLE = {
+  workspace: "A private coding workspace",
+  home: "A thoughtful home",
+};
 async function newSession(kind) {
-  const typed = window.prompt(
-    "Session title",
-    kind === "workspace" ? "A private coding workspace" : "A thoughtful home",
-  );
-  const title = typed?.trim().slice(0, SESSION_TITLE_MAX);
-  if (!title) return;
+  const title = DEFAULT_SESSION_TITLE[kind] ?? DEFAULT_SESSION_TITLE.home;
   try {
     const result = await api("sessions", {
       title,
@@ -1028,6 +1111,7 @@ async function newSession(kind) {
     await select({ id: result.id, title, kind });
     await listSessions();
     if (compact()) closeDrawer();
+    $("message").focus();
   } catch (error) {
     feedback(error.message);
   }
@@ -1096,6 +1180,7 @@ async function deleteSession(id, title) {
   try {
     await api(`sessions/${id}/delete`, { confirm: true });
     if (selected === id) {
+      clearReconnect();
       stream?.close();
       stream = null;
     }
@@ -2502,6 +2587,7 @@ try {
   );
 }
 window.addEventListener("pagehide", () => {
+  clearReconnect();
   stream?.close();
   clearInterval(accountTimer);
 });

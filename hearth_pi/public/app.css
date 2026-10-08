@@ -330,6 +330,17 @@ button.primary {
   color: var(--warm);
   background: #2a2520;
   border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.connection-retry {
+  font-size: 0.74rem;
+  padding: 2px 8px;
+  min-height: 28px;
+  color: var(--warm);
+  border-color: var(--warm);
+  background: transparent;
 }
 
 /* --------------------------- Conversation ----------------------------- */
@@ -1204,7 +1215,16 @@ dialog .actions {
   }
   #drawer {
     position: fixed;
-    inset: var(--sa-top) auto var(--sa-bottom) var(--sa-left);
+    top: var(--sa-top);
+    left: var(--sa-left);
+    /* A fixed-position element sized by a bottom inset is measured against
+       the browser's large/layout viewport, not the visually visible one: in
+       iOS Safari (not the HA companion iframe) that left the drawer footer
+       (Today/Apps/Settings) sitting under Safari's floating bottom toolbar
+       and untappable. Sizing with the dynamic-viewport height instead keeps
+       the whole drawer, including its footer, inside what is actually on
+       screen, matching the composer's dvh-based body height. */
+    height: calc(100dvh - var(--sa-top));
     width: min(85vw, 320px);
     z-index: 40;
     transform: translateX(-100%);
@@ -1215,6 +1235,12 @@ dialog .actions {
        squeezed to zero height, which left Today/Apps/Settings unreachable
        without this. */
     overflow-y: auto;
+  }
+  .drawer-footer {
+    /* Clears the home indicator (env safe-area) plus Safari's floating
+       bottom toolbar, consistent with the composer/dialog safe-area
+       padding below. */
+    padding-bottom: max(16px, calc(var(--sa-bottom) + 12px));
   }
   @media (prefers-reduced-motion: no-preference) {
     #drawer {
@@ -1407,6 +1433,33 @@ dialog .actions {
   overflow-x: auto;
   white-space: pre;
   margin: 0 0 0.6em;
+}
+/* GFM tables scroll horizontally inside their own container, never the
+   page, so a wide table on a narrow phone never pushes the chat sideways. */
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 0.6em;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.md-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.md-table th,
+.md-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+.md-table thead th {
+  color: var(--warm);
+  background: #0f1a1b;
+}
+.md-table tbody tr:last-child td {
+  border-bottom: none;
 }
 .message .tool-call {
   font-family: ui-monospace, monospace;
