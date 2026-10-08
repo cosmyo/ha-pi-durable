@@ -880,6 +880,12 @@ dialog .actions {
   #topbar {
     padding: 8px 10px;
   }
+  /* #drawer-toggle ("\u2039 Chats") renders wider than #new-chat-icon alone,
+     which pushes .topbar-title's flex-centered text off-center. Reserve the
+     same minimum width on both sides so the title centers correctly. */
+  #new-chat-icon {
+    min-width: 75px;
+  }
   .conversation {
     padding: 0 10px 10px;
   }
@@ -987,5 +993,86 @@ dialog .actions {
   #login-copy-row button,
   #login-url {
     min-height: 44px;
+  }
+}
+
+/* Assistant markdown (built from DOM nodes in render.js). */
+.md {
+  font-size: 0.93rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.md > :first-child {
+  margin-top: 0;
+}
+.md > :last-child {
+  margin-bottom: 0;
+}
+.md p,
+.md ul,
+.md ol {
+  margin: 0 0 0.6em;
+}
+.md ul,
+.md ol {
+  padding-left: 1.3em;
+}
+.md li + li {
+  margin-top: 0.2em;
+}
+.md .md-h {
+  font-size: 0.98rem;
+  margin: 0.8em 0 0.3em;
+  color: var(--warm);
+}
+.md code {
+  display: inline;
+  padding: 0.05em 0.35em;
+  border-radius: 5px;
+  background: #0f1a1b;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+.md .md-code {
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  background: #0f1a1b;
+  border-radius: 8px;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0 0 0.6em;
+}
+.message .tool-call {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+  margin: 0 0 6px;
+}
+/* Touch targets: keep compact controls visually small but give them a 44px
+   hit area on phones. */
+@media (max-width: 720px), (max-height: 560px) {
+  .session-menu-toggle,
+  .chip,
+  .model-chip,
+  #canvas-toggle,
+  .canvas-question,
+  #permissions-toggle {
+    position: relative;
+  }
+  .session-menu-toggle::after,
+  .chip::after,
+  .model-chip::after,
+  #canvas-toggle::after,
+  .canvas-question::after,
+  #permissions-toggle::after {
+    content: "";
+    position: absolute;
+    inset: -6px -2px;
+    min-height: 44px;
+  }
+  #permissions-toggle::after {
+    inset: -10px -4px;
   }
 }

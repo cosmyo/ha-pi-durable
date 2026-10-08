@@ -16,6 +16,109 @@ export function messageText(message) {
     .filter(Boolean)
     .join("\n");
 }
+// Minimal markdown for assistant prose, built from DOM nodes only (never an
+// HTML string): headings, paragraphs, bullet/numbered lists, fenced code,
+// inline code, bold and italic. Everything else stays literal text. Links
+// and images are deliberately not supported.
+function inline(parent, text) {
+  const pattern =
+    /(`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\s][^*\n]*\*|_[^_\s][^_\n]*_)/g;
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    if (match.index > last)
+      parent.append(document.createTextNode(text.slice(last, match.index)));
+    const token = match[0];
+    if (token.startsWith("`")) parent.append(node("code", token.slice(1, -1)));
+    else if (token.startsWith("**") || token.startsWith("__"))
+      parent.append(node("strong", token.slice(2, -2)));
+    else parent.append(node("em", token.slice(1, -1)));
+    last = match.index + token.length;
+  }
+  if (last < text.length)
+    parent.append(document.createTextNode(text.slice(last)));
+}
+export function renderMarkdown(text) {
+  const root = node("div", "", "md");
+  const lines = String(text).split("\n");
+  let paragraph = [],
+    list = null;
+  const flush = () => {
+    if (paragraph.length) {
+      const p = node("p");
+      paragraph.forEach((line, i) => {
+        if (i) p.append(node("br"));
+        inline(p, line);
+      });
+      root.append(p);
+      paragraph = [];
+    }
+    list = null;
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^```/.test(line.trim())) {
+      flush();
+      const body = [];
+      for (i++; i < lines.length && !/^```/.test(lines[i].trim()); i++)
+        body.push(lines[i]);
+      root.append(node("pre", body.join("\n"), "md-code"));
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line);
+    if (heading) {
+      flush();
+      const h = node(`h${Math.min(heading[1].length + 3, 6)}`, "", "md-h");
+      inline(h, heading[2]);
+      root.append(h);
+      continue;
+    }
+    const item = /^\s*(?:([-*+])|(\d+)[.)])\s+(.*)$/.exec(line);
+    if (item) {
+      if (paragraph.length) flush();
+      const kind = item[1] ? "ul" : "ol";
+      if (!list || list.tagName.toLowerCase() !== kind) {
+        list = node(kind);
+        root.append(list);
+      }
+      const li = node("li");
+      inline(li, item[3]);
+      list.append(li);
+      continue;
+    }
+    if (!line.trim()) {
+      flush();
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) {
+      const li = list.lastElementChild;
+      li.append(node("br"));
+      inline(li, line.trim());
+      continue;
+    }
+    list = null;
+    paragraph.push(line);
+  }
+  flush();
+  return root;
+}
+function assistantBody(message) {
+  if (typeof message.content === "string")
+    return [renderMarkdown(message.content)];
+  const parts = [];
+  for (const block of message.content ?? []) {
+    if (block.type === "text" && block.text)
+      parts.push(renderMarkdown(block.text));
+    else if (block.type === "toolCall")
+      parts.push(
+        node(
+          "pre",
+          `${block.name} ${JSON.stringify(block.arguments)}`,
+          "tool-call",
+        ),
+      );
+  }
+  return parts;
+}
 export function renderMessages(container, snapshot) {
   const fragment = document.createDocumentFragment();
   for (const entry of snapshot.view.entries) {
@@ -35,7 +138,12 @@ export function renderMessages(container, snapshot) {
         `message ${message.role === "user" ? "user" : message.role === "toolResult" ? "tool" : "assistant"}`,
       );
       article.append(node("h3", role));
-      if (value) article.append(node("pre", value));
+      if (value)
+        article.append(
+          ...(message.role === "assistant"
+            ? assistantBody(message)
+            : [node("pre", value)]),
+        );
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         article.append(
           node(
@@ -56,7 +164,7 @@ export function renderMessages(container, snapshot) {
     const article = node("article", "", "message assistant live");
     article.append(
       node("h3", "Hearth Pi · committed partial"),
-      node("pre", messageText(live.generation.message)),
+      ...assistantBody(live.generation.message),
     );
     fragment.append(article);
   }

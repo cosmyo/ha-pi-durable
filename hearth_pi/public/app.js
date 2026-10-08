@@ -615,11 +615,16 @@ $("message").addEventListener("input", () => {
 $("retry").addEventListener("click", () => {
   void sendSaved();
 });
+// Matches the server's own session-title bound (runtime.ts: text(title, 80)).
+// Without this, an ordinary long title silently fails new-chat with a raw
+// "invalid_request" error instead of creating a session.
+const SESSION_TITLE_MAX = 80;
 async function newSession(kind) {
-  const title = window.prompt(
+  const typed = window.prompt(
     "Session title",
     kind === "workspace" ? "A private coding workspace" : "A thoughtful home",
   );
+  const title = typed?.trim().slice(0, SESSION_TITLE_MAX);
   if (!title) return;
   try {
     const result = await api("sessions", {
