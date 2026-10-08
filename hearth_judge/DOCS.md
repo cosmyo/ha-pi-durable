@@ -1,4 +1,4 @@
-# Hearth Judge: installation and configuration (experimental 0.1.1)
+# Hearth Judge: installation and configuration (experimental 0.1.2)
 
 Hearth Judge runs a small open-weight language model on your Home Assistant host itself, behind the official `ghcr.io/ggml-org/llama.cpp` server, and serves it as a generic OpenAI-compatible `/v1/chat/completions` endpoint. It exists so [Hearth Pi's optional risk judge](../hearth_pi/DOCS.md#run-the-risk-judge-on-your-home-assistant-host) can run entirely on-host instead of calling a cloud model — your owner request and the exact proposed action never leave the Home Assistant host. It is **not** a chat assistant, has no Home Assistant or Supervisor API access, and is reachable only from other add-ons on the internal `hassio` network, never from the LAN, the Internet or the HA UI.
 

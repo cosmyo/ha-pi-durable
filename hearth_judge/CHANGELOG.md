@@ -1,5 +1,9 @@
 # Add-on changelog
 
+## 0.1.2 — answer without thinking
+
+- Fix: Qwen3-class models spent the judge's small output budget on hidden reasoning and returned empty content. llama-server now runs with `--reasoning-budget 0` and `enable_thinking: false`.
+
 ## 0.1.1 — read options as root
 
 - Fix: Supervisor writes `/data/options.json` readable by root only, so 0.1.0 exited at start. Options are now read before dropping privileges; the optional API key is passed to llama-server through a 0600 file (`--api-key-file`) instead of the command line.

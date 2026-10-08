@@ -116,6 +116,10 @@ ARGS=(
   --metrics
   --jinja
   --temp 0
+  # The judge must answer, not think: Qwen3-class models otherwise spend the
+  # small output budget on hidden reasoning and return empty content.
+  --reasoning-budget 0
+  --chat-template-kwargs '{"enable_thinking":false}'
 )
 if [ -s "$KEY_FILE" ]; then
   ARGS+=(--api-key-file "$KEY_FILE")

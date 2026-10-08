@@ -217,6 +217,7 @@ const judgeRun = await read("hearth_judge/run.sh");
 // passed by a 0600 file, never on llama-server's command line.
 assert.doesNotMatch(judgeRun, /--api-key "/);
 assert.match(judgeRun, /--api-key-file/);
+assert.match(judgeRun, /--reasoning-budget 0/);
 // Verifies, never trusts, the downloaded model; refuses to start without a
 // pinned hash; never opens the Web UI; hardcodes the single-slot design so
 // the cached policy prefix stays valid (not an owner-configurable option).
