@@ -314,6 +314,7 @@ test("endpoint judge: private URL only, JSON schema with fallback, cache_prompt,
   for (const body of bodies) {
     assert.equal(body.cache_prompt, true);
     assert.equal(body.max_tokens, 60);
+    assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
     assert.equal(body.tools, undefined);
     const messages = body.messages as { role: string; content: string }[];
     assert.equal(messages[0]!.content, JUDGE_SYSTEM_PROMPT);
@@ -398,4 +399,39 @@ test("the judge sees only the text of a message with attached images", async () 
   );
   assert.equal(requestText(undefined), "");
   assert.doesNotMatch(JSON.stringify(requestText(content)), /CANARY/);
+});
+
+test("endpoint judge drops chat_template_kwargs once for a server that rejects it", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const fetcher = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    bodies.push(body);
+    if (body.response_format || body.chat_template_kwargs)
+      return new Response("unsupported", { status: 400 });
+    return Response.json({
+      choices: [
+        { message: { content: '{"aligned":false,"reason":"other target"}' } },
+      ],
+    });
+  }) as unknown as typeof fetch;
+  const adapter = new EndpointJudge(
+    "http://192.168.1.50:8080",
+    "",
+    "m",
+    fetcher,
+    async () => ["192.168.1.50"],
+  );
+  const service = new RiskJudgeService(
+    "endpoint/m",
+    () => ({ adapter, model: adapter.id }),
+    1000,
+    (v) => v,
+  );
+  const first = await service.evaluate(request());
+  assert.equal(first.verdict, "misaligned");
+  assert.equal(bodies.length, 3, "schema+kwargs, kwargs only, then plain");
+  assert.equal(bodies[2]!.chat_template_kwargs, undefined);
+  bodies.length = 0;
+  await service.evaluate(request());
+  assert.equal(bodies.length, 1, "remembers what the server supports");
 });

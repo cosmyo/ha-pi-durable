@@ -266,6 +266,10 @@ type Resolve = (host: string) => Promise<string[]>;
 export class EndpointJudge implements JudgeAdapter {
   readonly id: string;
   private schemaSupported = true;
+  // Ask reasoning models (Qwen3-class on llama.cpp, vLLM, SGLang…) to answer
+  // without hidden thinking, which otherwise consumes the small max_tokens
+  // and leaves the content empty. Dropped once if a server rejects it.
+  private noThinkingSupported = true;
   constructor(
     private url: string,
     private apiKey: string,
@@ -289,7 +293,7 @@ export class EndpointJudge implements JudgeAdapter {
         content: judgeUserMessage(input.request, input.action, input.level),
       },
     ];
-    const send = (schema: boolean) =>
+    const send = (schema: boolean, noThinking: boolean) =>
       this.fetcher(`${base}/v1/chat/completions`, {
         method: "POST",
         redirect: "error",
@@ -306,6 +310,9 @@ export class EndpointJudge implements JudgeAdapter {
           temperature: 0,
           stream: false,
           cache_prompt: true,
+          ...(noThinking
+            ? { chat_template_kwargs: { enable_thinking: false } }
+            : {}),
           ...(schema
             ? {
                 response_format: {
@@ -320,15 +327,19 @@ export class EndpointJudge implements JudgeAdapter {
             : {}),
         }),
       });
-    let response = await send(this.schemaSupported);
-    if (
-      this.schemaSupported &&
-      (response.status === 400 || response.status === 422)
-    ) {
+    const rejected = (r: Response) => r.status === 400 || r.status === 422;
+    let response = await send(this.schemaSupported, this.noThinkingSupported);
+    if (this.schemaSupported && rejected(response)) {
       // Server without JSON-schema output: plain JSON plus strict parsing.
       await response.body?.cancel();
       this.schemaSupported = false;
-      response = await send(false);
+      response = await send(false, this.noThinkingSupported);
+    }
+    if (this.noThinkingSupported && rejected(response)) {
+      // Server that refuses chat-template arguments.
+      await response.body?.cancel();
+      this.noThinkingSupported = false;
+      response = await send(false, false);
     }
     if (!response.ok) {
       await response.body?.cancel();
