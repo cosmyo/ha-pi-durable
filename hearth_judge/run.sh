@@ -15,21 +15,43 @@ MODEL_DIR=/data/models
 SLOT_DIR=/data/slots
 RUN_USER=ubuntu
 
+KEY_FILE=/data/run/api_key
+
+# Supervisor writes /data/options.json root-only (0600), so the options are
+# read here as root and handed to the unprivileged half through the
+# environment; the optional API key goes into a 0600 file owned by the
+# non-root user (llama-server --api-key-file), never onto a command line.
 if [ "$(id -u)" = "0" ]; then
-  mkdir -p "$MODEL_DIR" "$SLOT_DIR"
-  chown -R "$RUN_USER:$RUN_USER" "$MODEL_DIR" "$SLOT_DIR"
+  if [ ! -f "$OPTIONS_FILE" ]; then
+    echo "hearth_judge: $OPTIONS_FILE is missing; refusing to start." >&2
+    exit 1
+  fi
+  mkdir -p "$MODEL_DIR" "$SLOT_DIR" /data/run
+  chown -R "$RUN_USER:$RUN_USER" "$MODEL_DIR" "$SLOT_DIR" /data/run
+  chmod 0700 /data/run
+  API_KEY=$(jq -r '.api_key // ""' "$OPTIONS_FILE")
+  rm -f "$KEY_FILE"
+  if [ -n "$API_KEY" ]; then
+    (umask 077 && printf '%s' "$API_KEY" >"$KEY_FILE")
+    chown "$RUN_USER:$RUN_USER" "$KEY_FILE"
+  fi
+  unset API_KEY
+  HJ_MODEL=$(jq -r '.model // empty' "$OPTIONS_FILE")
+  HJ_THREADS=$(jq -r '.threads // 3' "$OPTIONS_FILE")
+  HJ_CTX_SIZE=$(jq -r '.ctx_size // 2048' "$OPTIONS_FILE")
+  export HJ_MODEL HJ_THREADS HJ_CTX_SIZE
   exec gosu "$RUN_USER" "$0" "$@"
 fi
 
-if [ ! -f "$OPTIONS_FILE" ]; then
-  echo "hearth_judge: $OPTIONS_FILE is missing; refusing to start." >&2
-  exit 1
-fi
-
-MODEL_KEY=$(jq -r '.model // empty' "$OPTIONS_FILE")
-THREADS=$(jq -r '.threads // 3' "$OPTIONS_FILE")
-CTX_SIZE=$(jq -r '.ctx_size // 2048' "$OPTIONS_FILE")
-API_KEY=$(jq -r '.api_key // ""' "$OPTIONS_FILE")
+MODEL_KEY=${HJ_MODEL:-}
+THREADS=${HJ_THREADS:-3}
+CTX_SIZE=${HJ_CTX_SIZE:-2048}
+case "$THREADS$CTX_SIZE" in
+  *[!0-9]*)
+    echo "hearth_judge: threads/ctx_size must be integers; refusing to start." >&2
+    exit 1
+    ;;
+esac
 
 if [ -z "$MODEL_KEY" ]; then
   echo "hearth_judge: no 'model' option set; refusing to start." >&2
@@ -95,9 +117,9 @@ ARGS=(
   --jinja
   --temp 0
 )
-if [ -n "$API_KEY" ]; then
-  ARGS+=(--api-key "$API_KEY")
+if [ -s "$KEY_FILE" ]; then
+  ARGS+=(--api-key-file "$KEY_FILE")
 fi
 
-echo "hearth_judge: starting llama-server (model=$MODEL_KEY threads=$THREADS ctx_size=$CTX_SIZE parallel=1, API key $([ -n "$API_KEY" ] && echo set || echo unset))."
+echo "hearth_judge: starting llama-server (model=$MODEL_KEY threads=$THREADS ctx_size=$CTX_SIZE parallel=1, API key $([ -s "$KEY_FILE" ] && echo set || echo unset))."
 exec /app/llama-server "${ARGS[@]}"

@@ -6,7 +6,7 @@
 # only adds jq (options.json parsing), gosu (drop to the existing non-root
 # "ubuntu" user before running llama-server) and our run.sh.
 FROM ghcr.io/ggml-org/llama.cpp:server@sha256:33868c035b21dc63f7c60b7438774283fd99215bc319114eb03de5df4ce7cd6b
-ARG BUILD_VERSION=0.1.0
+ARG BUILD_VERSION=0.1.1
 ARG BUILD_ARCH
 LABEL io.hass.name="Hearth Judge" \
       io.hass.description="Experimental local risk-judge server for Hearth Pi (llama.cpp, CPU-only)" \

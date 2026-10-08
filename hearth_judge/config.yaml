@@ -1,5 +1,5 @@
 name: Hearth Judge
-version: "0.1.0"
+version: "0.1.1"
 slug: hearth_judge
 url: https://github.com/cosmyo/ha-pi-durable
 description: Experimental local risk-judge server for Hearth Pi (llama.cpp, CPU-only)
