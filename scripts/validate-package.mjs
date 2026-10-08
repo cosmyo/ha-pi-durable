@@ -23,8 +23,6 @@ for (const field of [
   "ports",
   "webui",
   "image",
-  "hassio_api",
-  "hassio_role",
   "auth_api",
   "docker_api",
   "host_network",
@@ -35,6 +33,12 @@ for (const field of [
   "devices",
 ])
   assert(!Object.hasOwn(config, field), `Unexpected permission ${field}`);
+// Supervisor's own REST API, with the "manager" role only: never "admin".
+// Needed for admin access mode (owner opt-in in App configuration); Scoped
+// mode still never registers or calls a Supervisor tool (src/ha.ts,
+// src/admin.ts enforce this at the policy level, not the manifest).
+assert.equal(config.hassio_api, true);
+assert.equal(config.hassio_role, "manager");
 assert.deepEqual(config.map, [
   { type: "addon_config", read_only: false, path: "/workspace_link" },
 ]);

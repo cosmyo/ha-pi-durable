@@ -7,6 +7,7 @@ import {
 import type { Action, ToggleAction } from "./documents.js";
 import { adminAction, adminAttributes } from "./admin.js";
 import { ADMIN_PROMPT, AdminOps, adminTools } from "./ha-admin.js";
+export { DispatchFailed } from "./ha-admin.js";
 import { riskTargets, type EntityFacts, type RiskContext } from "./risk.js";
 import { HomeActions } from "./home-actions.js";
 export { Actions } from "./home-actions.js";

@@ -1,5 +1,6 @@
-// Synthetic Home Assistant REST + WebSocket (incl. a fake Core "supervisor/api"
-// proxy) and a real durable harness driven by the offline faux provider.
+// Synthetic Home Assistant REST + WebSocket, a fake Supervisor REST API
+// (http://supervisor, bearer token, {result,data,message} envelope) and a
+// real durable harness driven by the offline faux provider.
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -103,21 +104,35 @@ const SERVICES = [
 
 export type Write = { method: string; url: string; body: unknown };
 export type Frame = Record<string, unknown>;
+// One call Hearth made to Supervisor's own REST API (http://supervisor/...).
+export type SupervisorCall = {
+  method: string;
+  path: string;
+  body: unknown;
+};
+// A fake Supervisor response for one endpoint: a plain object means HTTP 200
+// with a {result:"ok",data} envelope (or raw text for a "/…/logs" path);
+// {status, body} controls the HTTP status and raw response body exactly, for
+// testing non-2xx, non-JSON, oversize and redirect handling.
+// {networkError: true} makes the transport itself throw, simulating a
+// connection failure after the request was sent.
+export type SupervisorReply =
+  | Record<string, unknown>
+  | { status: number; body?: string; redirect?: boolean }
+  | { networkError: true };
 
 export function fakeAdminHA(
   options: {
     access?: "admin" | "scoped";
     writeStatus?: number;
-    supervisor?: (
-      endpoint: string,
-      method: string,
-    ) => { success: boolean; result?: unknown };
+    supervisor?: (endpoint: string, method: string) => SupervisorReply | void;
     policy?: Policy;
     selfSlug?: string;
   } = {},
 ) {
   const writes: Write[] = [];
   const frames: Frame[] = [];
+  const supervisorCalls: SupervisorCall[] = [];
   const configs: Record<string, unknown> = {
     "automation/porch_lights": {
       id: "porch_lights",
@@ -126,45 +141,100 @@ export function fakeAdminHA(
       action: [{ action: "light.turn_on" }],
     },
   };
+  const SUPERVISOR_LOGS = `line one\ntoken=supersecretvalue123 Bearer abcdefghijklmnop ${TOKEN}\nline three`;
+  const supervisorDefault = (endpoint: string): Record<string, unknown> =>
+    /^\/addons\/[^/]+\/info$/.test(endpoint)
+      ? {
+          name: "Mosquitto broker",
+          slug: "core_mosquitto",
+          version: "6.4.0",
+          state: "started",
+          update_available: false,
+          options: {
+            logins: [{ username: "mqtt", password: "ADDON_OPTION_CANARY" }],
+          },
+          schema: { logins: "list" },
+          network: { "1883/tcp": 1883 },
+          ingress_entry: "/api/hassio_ingress/INGRESS_CANARY",
+          homeassistant: { version: "OBJECT_LEAF_CANARY" },
+        }
+      : { endpoint, ok: true };
+  const fakeSupervisorFetch = (
+    endpoint: string,
+    method: string,
+    body: unknown,
+  ): Response => {
+    supervisorCalls.push({ method, path: endpoint, body });
+    const reply = options.supervisor?.(endpoint, method);
+    if (reply && "networkError" in reply && reply.networkError)
+      throw new Error("ECONNRESET");
+    if (reply && "status" in reply && typeof reply.status === "number") {
+      const body = typeof reply.body === "string" ? reply.body : "";
+      if (reply.redirect)
+        return new Response(body, {
+          status: reply.status,
+          headers: { location: "https://attacker.example/" },
+        });
+      return new Response(body, { status: reply.status });
+    }
+    if (endpoint.endsWith("/logs"))
+      return new Response(SUPERVISOR_LOGS, {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    return Response.json({
+      result: "ok",
+      data: reply ?? supervisorDefault(endpoint),
+    });
+  };
   const transport = (async (url: string | URL, init?: RequestInit) => {
-    const path = String(url).replace("http://supervisor/core/api/", "");
+    const full = String(url);
     const method = init?.method ?? "GET";
-    if (method !== "GET") {
-      writes.push({
-        method,
-        url: path,
-        body: init?.body ? JSON.parse(String(init.body)) : undefined,
-      });
-      return new Response("[]", { status: options.writeStatus ?? 200 });
+    if (full.startsWith("http://supervisor/core/api/")) {
+      const path = full.replace("http://supervisor/core/api/", "");
+      if (method !== "GET") {
+        writes.push({
+          method,
+          url: path,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response("[]", { status: options.writeStatus ?? 200 });
+      }
+      if (path === "states") return Response.json(STATES);
+      if (path.startsWith("states/")) {
+        const id = decodeURIComponent(path.slice(7));
+        const state = STATES.find((s) => s.entity_id === id);
+        return state
+          ? Response.json(state)
+          : Response.json({ message: "not found" }, { status: 404 });
+      }
+      if (path === "services") return Response.json(SERVICES);
+      if (path === "config")
+        return Response.json({
+          version: "2099.1.0",
+          location_name: "Example Home",
+          time_zone: "UTC",
+          latitude: 1.23,
+          components: ["a", "b"],
+          state: "RUNNING",
+        });
+      const config = /^config\/(automation|script|scene)\/config\/(.+)$/.exec(
+        path,
+      );
+      if (config) {
+        const value = configs[`${config[1]}/${decodeURIComponent(config[2]!)}`];
+        return value
+          ? Response.json(value)
+          : Response.json({ message: "not found" }, { status: 404 });
+      }
+      return Response.json({ message: "unknown" }, { status: 404 });
     }
-    if (path === "states") return Response.json(STATES);
-    if (path.startsWith("states/")) {
-      const id = decodeURIComponent(path.slice(7));
-      const state = STATES.find((s) => s.entity_id === id);
-      return state
-        ? Response.json(state)
-        : Response.json({ message: "not found" }, { status: 404 });
+    if (full.startsWith("http://supervisor/")) {
+      const endpoint = full.slice("http://supervisor".length);
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return fakeSupervisorFetch(endpoint, method, body);
     }
-    if (path === "services") return Response.json(SERVICES);
-    if (path === "config")
-      return Response.json({
-        version: "2099.1.0",
-        location_name: "Example Home",
-        time_zone: "UTC",
-        latitude: 1.23,
-        components: ["a", "b"],
-        state: "RUNNING",
-      });
-    const config = /^config\/(automation|script|scene)\/config\/(.+)$/.exec(
-      path,
-    );
-    if (config) {
-      const value = configs[`${config[1]}/${decodeURIComponent(config[2]!)}`];
-      return value
-        ? Response.json(value)
-        : Response.json({ message: "not found" }, { status: 404 });
-    }
-    return Response.json({ message: "unknown" }, { status: 404 });
+    throw new Error(`unexpected transport url ${full}`);
   }) as typeof fetch;
   const socket: SocketFactory = () => {
     const s: SocketLike = {
@@ -180,35 +250,6 @@ export function fakeAdminHA(
             return emit({
               type: m.access_token === TOKEN ? "auth_ok" : "auth_invalid",
             });
-          if (m.type === "supervisor/api") {
-            const reply = options.supervisor?.(
-              String(m.endpoint),
-              String(m.method),
-            ) ?? {
-              success: true,
-              result: String(m.endpoint).endsWith("/logs")
-                ? `line one\ntoken=supersecretvalue123 Bearer abcdefghijklmnop ${TOKEN}\nline three`
-                : /^\/addons\/[^/]+\/info$/.test(String(m.endpoint))
-                  ? {
-                      name: "Mosquitto broker",
-                      slug: "core_mosquitto",
-                      version: "6.4.0",
-                      state: "started",
-                      update_available: false,
-                      options: {
-                        logins: [
-                          { username: "mqtt", password: "ADDON_OPTION_CANARY" },
-                        ],
-                      },
-                      schema: { logins: "list" },
-                      network: { "1883/tcp": 1883 },
-                      ingress_entry: "/api/hassio_ingress/INGRESS_CANARY",
-                      homeassistant: { version: "OBJECT_LEAF_CANARY" },
-                    }
-                  : { endpoint: m.endpoint, ok: true },
-            };
-            return emit({ id: m.id, type: "result", ...reply });
-          }
           const result =
             m.type === "config/entity_registry/list"
               ? [
@@ -255,7 +296,7 @@ export function fakeAdminHA(
           selfSlug: options.selfSlug ?? "abc123_hearth_pi",
         });
   const ha = new HAClient(TOKEN, policy, transport, [], socket);
-  return { ha, writes, frames, configs };
+  return { ha, writes, frames, supervisorCalls, configs };
 }
 
 export async function adminHarness(

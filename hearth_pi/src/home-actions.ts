@@ -17,6 +17,7 @@ import {
   type Proposal,
 } from "./documents.js";
 import type { HAClient } from "./ha.js";
+import { DispatchFailed } from "./ha.js";
 import type { Runtime } from "./runtime.js";
 import { Serial, digest, insist, text } from "./safety.js";
 import { classifyAction, confirmationWord, maxRisk } from "./risk.js";
@@ -774,17 +775,27 @@ export class HomeActions {
       // Invoke exactly one POST before releasing the same gate used by revocation.
       const post = this.ha.dispatch(proposal.action, signal);
       send = (async () => {
-        let status: "accepted" | "unknown" = "unknown";
+        let status: "accepted" | "unknown" | "failed" = "unknown";
+        let failure = "";
         try {
           await post;
           if (!signal.aborted) status = "accepted";
-        } catch {
-          /* Never retry. */
+        } catch (error) {
+          // A DispatchFailed proposal was definitely refused before it could
+          // have any side effect (Supervisor only, today): it is done, not a
+          // barrier, and never retried either way.
+          if (error instanceof DispatchFailed) {
+            status = "failed";
+            failure = error.message;
+          }
+          /* Otherwise: never retry. */
         }
         await runtime.harness.commit(async (tx) => {
           const item = (await tx.doc(Proposals, sessionId)).items[proposal.id]!;
           if (item.status === "dispatching") {
             item.status = status;
+            if (status === "failed")
+              item.resolution = runtime.redact(failure.slice(0, 300));
             (await tx.doc(HomePermissions)).actionRevision++;
           }
         }, ctx);

@@ -1,6 +1,6 @@
 // Admin access mode end to end: the real durable harness driven by the offline
 // faux provider, synthetic HA REST/WebSocket fakes and a fake Core
-// "supervisor/api" proxy.
+// Supervisor REST API (http://supervisor).
 import { test } from "node:test";
 import { rm } from "node:fs/promises";
 import assert from "node:assert/strict";
@@ -214,8 +214,8 @@ test("admin Full access: low auto-runs; medium only with an agreeing judge; high
     );
     const done = (await f.receipts()).find((r) => r.id === reboot!.id);
     assert.equal(done?.status, "accepted");
-    const frame = f.frames.filter((m) => m.type === "supervisor/api").at(-1)!;
-    assert.deepEqual([frame.endpoint, frame.method], ["/host/reboot", "post"]);
+    const call = f.supervisorCalls.at(-1)!;
+    assert.deepEqual([call.path, call.method], ["/host/reboot", "POST"]);
     // Home World / app toggles are classified too (low → runs in Full).
     const pressed = await f.ha.actions.press(
       "owner",
@@ -304,16 +304,15 @@ test("admin Ask: every kind becomes an exact pending proposal; config/registry/s
     assert.equal(addon?.risk?.level, "medium");
     await f.ha.actions.decide("owner", f.id, addon!.id, addon!.hash, "approve");
     assert.equal(
-      f.frames.filter(
-        (m) =>
-          m.type === "supervisor/api" &&
-          m.endpoint === "/addons/core_mosquitto/restart",
+      f.supervisorCalls.filter(
+        (c) => c.path === "/addons/core_mosquitto/restart",
       ).length,
       1,
     );
     // Rejected before any proposal or HA request.
     const before = (await f.receipts()).length;
     const framesBefore = f.frames.length;
+    const supervisorCallsBefore = f.supervisorCalls.length;
     const writesBefore = f.writes.length;
     for (const [tool, args] of [
       ["supervisor_propose", { method: "POST", path: "/host/exec" }],
@@ -336,6 +335,7 @@ test("admin Ask: every kind becomes an exact pending proposal; config/registry/s
       await f.run(tool, args as Record<string, unknown>);
     assert.equal((await f.receipts()).length, before);
     assert.equal(f.frames.length, framesBefore);
+    assert.equal(f.supervisorCalls.length, supervisorCallsBefore);
     assert.equal(f.writes.length, writesBefore);
     // Self-protection: stopping Hearth's own add-on is critical.
     const self = await f.run("supervisor_propose", {
@@ -356,7 +356,8 @@ test("new action kinds keep the installation-wide unknown-outcome barrier and ar
   const f = await adminHarness({
     supervisor: (endpoint) => {
       if (endpoint === "/addons/core_samba/restart") calls++;
-      return { success: false, result: null };
+      // 5xx: Supervisor's handler may have started before failing. Unknown.
+      return { status: 503 };
     },
   });
   try {
@@ -408,6 +409,54 @@ test("new action kinds keep the installation-wide unknown-outcome barrier and ar
     assert.equal(g.writes.length, 1);
   } finally {
     await g.close();
+  }
+});
+
+test('a Supervisor mutation Supervisor rejected before any side effect is "failed", not "unknown": it never blocks later actions and is never retried', async () => {
+  let calls = 0;
+  const f = await adminHarness({
+    supervisor: (endpoint) => {
+      if (endpoint === "/addons/core_samba/restart") calls++;
+      // A definite 4xx (e.g. the add-on slug no longer exists): Supervisor's
+      // token/role/shape checks all run before its handler, so nothing ran.
+      return { status: 404 };
+    },
+  });
+  try {
+    await f.mode("full");
+    const addon = await f.run("supervisor_propose", {
+      method: "POST",
+      path: "/addons/core_samba/restart",
+    });
+    await f.ha.actions.decide("owner", f.id, addon!.id, addon!.hash, "approve");
+    const after = (await f.receipts()).find((r) => r.id === addon!.id);
+    assert.equal(after?.status, "failed");
+    assert.match(after!.resolution, /404/);
+    assert.equal(calls, 1);
+    // Unlike "unknown", a definite failure is done: it never blocks later
+    // actions and cannot be "resolve"d (nothing to reconcile).
+    const settings = await f.ha.actions.settings("owner");
+    assert.equal(settings.blocked, false);
+    const low = await f.run("ha_call_service", light);
+    assert.equal(low?.status, "accepted");
+    await assert.rejects(
+      f.ha.actions.decide("owner", f.id, addon!.id, addon!.hash, "approve"),
+      /proposal_already_decided/,
+    );
+    await assert.rejects(
+      f.ha.actions.decide(
+        "owner",
+        f.id,
+        addon!.id,
+        addon!.hash,
+        "resolve",
+        "n/a",
+      ),
+      /not_unknown/,
+    );
+    assert.equal(calls, 1, "never retried");
+  } finally {
+    await f.close();
   }
 });
 
@@ -597,17 +646,16 @@ test("HTTP: a critical proposal is approved only with CSRF and the typed confirm
       confirm: "abcd",
     });
     assert.equal(wrong.status, 400);
-    assert.equal(f.frames.filter((m) => m.type === "supervisor/api").length, 0);
+    assert.equal(f.supervisorCalls.length, 0);
     const ok = await post(`/api/sessions/${sessionId}/actions`, {
       ...decision,
       confirm: "abcd1234",
     });
     assert.equal(ok.status, 200);
-    const frame = f.frames.filter((m) => m.type === "supervisor/api");
-    assert.equal(frame.length, 1);
+    assert.equal(f.supervisorCalls.length, 1);
     assert.deepEqual(
-      [frame[0]!.endpoint, frame[0]!.method],
-      ["/backups/abcd1234", "delete"],
+      [f.supervisorCalls[0]!.path, f.supervisorCalls[0]!.method],
+      ["/backups/abcd1234", "DELETE"],
     );
     const snap = await (
       await fetch(`${base}/api/sessions/${sessionId}/snapshot`, {

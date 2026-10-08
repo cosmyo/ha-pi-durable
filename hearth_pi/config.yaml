@@ -17,6 +17,15 @@ panel_icon: mdi:fire
 panel_title: Hearth Pi
 panel_admin: true
 homeassistant_api: true
+# Admin access mode (owner opt-in, see access_mode below) needs Supervisor's
+# own REST API for add-on/backup/host actions: Core's "supervisor/api"
+# WebSocket command rejects the add-on's Supervisor-proxied connection, so
+# Hearth calls http://supervisor directly instead. Manifest permissions are
+# fixed at install time for every installation; Scoped mode still never
+# registers or calls a Supervisor tool (policy-level, src/ha.ts). See
+# DOCS.md "Admin access mode" and docs/security.md for what "manager" allows.
+hassio_api: true
+hassio_role: manager
 backup: cold
 breaking_versions:
   - "0.2.0"

@@ -1,10 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { loadConfig, selfSlug } from "../src/config.js";
-import { adminAction, redactLog, supervisorReadAllowed } from "../src/admin.js";
+import {
+  adminAction,
+  redactLog,
+  supervisorReadAllowed,
+  SUPERVISOR_MUTATIONS,
+  SUPERVISOR_READS,
+} from "../src/admin.js";
 import { HA_WEBSOCKET_TYPES } from "../src/ha-websocket.js";
 import { HA_ADMIN_WEBSOCKET_TYPES } from "../src/ha-admin.js";
-import { haExtension } from "../src/ha.js";
+import { DispatchFailed, haExtension } from "../src/ha.js";
 import { fakeAdminHA, TOKEN } from "./admin-fixtures.js";
 
 const big = "x".repeat(40000);
@@ -189,15 +195,39 @@ test("scoped mode: admin tools absent, admin actions refused, read-only WebSocke
   await assert.rejects(ha.supervisorRead("/addons"), /admin_mode_required/);
   await assert.rejects(ha.adminRead("states", "", 0), /admin_mode_required/);
   await assert.rejects(ha.state("lock.front_door"), /entity_not_allowed/);
+  // supervisor/api is never sent anywhere, over Core or otherwise: Supervisor
+  // is reached directly over its own REST API, not through Core's WebSocket.
   assert(!(HA_WEBSOCKET_TYPES as readonly string[]).includes("supervisor/api"));
-  assert(HA_ADMIN_WEBSOCKET_TYPES.includes("supervisor/api"));
+  assert(!HA_ADMIN_WEBSOCKET_TYPES.includes("supervisor/api"));
   // The prompt has no admin text in scoped mode.
   const extension = haExtension(ha);
   assert.doesNotMatch(JSON.stringify(extension.sections ?? []), /ADMIN ACCESS/);
 });
 
-test("admin mode reads every entity, registries and config; supervisor reads go over Core's supervisor/api", async () => {
-  const { ha, frames } = fakeAdminHA();
+test("scoped mode never reaches Supervisor's REST API, even though the add-on token has the manager role", async () => {
+  const { ha, supervisorCalls } = fakeAdminHA({ access: "scoped" });
+  // The client itself refuses before any network call: scoped policy, not a
+  // network-level restriction, is what keeps Supervisor out of reach.
+  await assert.rejects(ha.supervisorRead("/addons"), /admin_mode_required/);
+  assert.throws(
+    () =>
+      ha.action({ kind: "supervisor", method: "POST", path: "/core/restart" }),
+    /admin_mode_required/,
+  );
+  await assert.rejects(
+    ha.dispatch({ kind: "supervisor", method: "POST", path: "/core/restart" }),
+    /admin_mode_required/,
+  );
+  assert.equal(supervisorCalls.length, 0, "no Supervisor REST call was made");
+  assert.equal(
+    haExtension(ha).tools!.some((t) => t.name.startsWith("supervisor_")),
+    false,
+    "no Supervisor tool is registered in scoped mode",
+  );
+});
+
+test("admin mode reads every entity, registries and config; supervisor reads go directly to Supervisor's own REST API", async () => {
+  const { ha, frames, supervisorCalls } = fakeAdminHA();
   const names = haExtension(ha).tools!.map((t) => t.name);
   for (const name of ["ha_admin_read", "ha_call_service", "supervisor_propose"])
     assert(names.includes(name));
@@ -226,17 +256,20 @@ test("admin mode reads every entity, registries and config; supervisor reads go 
   };
   assert.deepEqual(services.items, ["lock.lock", "lock.unlock"]);
 
-  frames.length = 0;
+  assert.equal(
+    frames.some((f) => f.type === "supervisor/api"),
+    false,
+  );
   await assert.rejects(
     ha.supervisorRead("/host/exec"),
     /supervisor_endpoint_not_allowed/,
   );
-  assert.equal(frames.length, 0, "refused before any frame is sent");
+  assert.equal(supervisorCalls.length, 0, "refused before any HTTP call");
   const info = await ha.supervisorRead("/addons");
   assert.equal((info as { truncated: boolean }).truncated, false);
-  const sent = frames.find((f) => f.type === "supervisor/api")!;
-  assert.equal(sent.endpoint, "/addons");
-  assert.equal(sent.method, "get");
+  const sent = supervisorCalls.at(-1)!;
+  assert.equal(sent.path, "/addons");
+  assert.equal(sent.method, "GET");
   const logs = (await ha.supervisorRead("/core/logs")) as {
     log: { text: string };
   };
@@ -245,6 +278,13 @@ test("admin mode reads every entity, registries and config; supervisor reads go 
     new RegExp(`supersecretvalue123|abcdefghijklmnop|${TOKEN}`),
   );
   assert.match(logs.log.text, /line three/);
+  // Jobs: a background mutation's progress can be checked by id or listed.
+  const jobs = await ha.supervisorRead("/jobs/info");
+  assert.equal((jobs as { truncated: boolean }).truncated, false);
+  const job = await ha.supervisorRead(
+    "/jobs/12345678-1234-1234-1234-123456789abc",
+  );
+  assert.equal((job as { truncated: boolean }).truncated, false);
 });
 
 test("access_mode and risk judge options are configuration-only and validated", async (t) => {
@@ -380,5 +420,206 @@ test("review P1/P2: Supervisor info never carries add-on options/secrets; WS pro
   assert.deepEqual(
     Object.keys((await scoped.ha.state("sensor.big")).attributes),
     ["friendly_name"],
+  );
+});
+
+test("every allowlisted Supervisor endpoint is reachable with the add-on's manager Supervisor role, never admin", () => {
+  // A literal copy of ROLE_MANAGER's v1 path pattern from
+  // supervisor/api/middleware/security.py (home-assistant/supervisor),
+  // verified against the upstream source. If Supervisor ever narrows this
+  // role, this test and the allowlist above must be revisited together;
+  // Hearth must never request hassio_role: admin.
+  const MANAGER_ROLE = new RegExp(
+    "^(?:" +
+      "|/.+/info" +
+      "|/addons(?:/[a-z0-9_-]{1,64}/(?!security).+|/reload)?" +
+      "|/audio/.+" +
+      "|/auth/cache" +
+      "|/available_updates" +
+      "|/backups.*" +
+      "|/cli/.+" +
+      "|/core/.+" +
+      "|/dns/.+" +
+      "|/docker/.+" +
+      "|/jobs/.+" +
+      "|/hardware/.+" +
+      "|/homeassistant/.+" +
+      "|/host/.+" +
+      "|/mounts.*" +
+      "|/multicast/.+" +
+      "|/network/.+" +
+      "|/observer/.+" +
+      "|/os/(?!datadisk/wipe|ssh/authorized_keys).+" +
+      "|/refresh_updates" +
+      "|/resolution/.+" +
+      "|/security/.+" +
+      "|/snapshots.*" +
+      "|/store.*" +
+      "|/supervisor/.+" +
+      "|/time/.+" +
+      ")$",
+  );
+  const reads = [
+    "/addons",
+    "/addons/core_samba/info",
+    "/addons/core_samba/logs",
+    "/addons/core_samba/stats",
+    "/backups",
+    "/backups/abcd1234/info",
+    "/core/info",
+    "/core/logs",
+    "/supervisor/info",
+    "/supervisor/logs",
+    "/os/info",
+    "/host/info",
+    "/network/info",
+    "/resolution/info",
+    "/jobs/info",
+    "/jobs/12345678-1234-1234-1234-123456789abc",
+    "/store",
+    "/store/addons",
+  ];
+  const mutations = [
+    "/addons/core_samba/start",
+    "/addons/core_samba/stop",
+    "/addons/core_samba/restart",
+    "/addons/core_samba/options",
+    "/addons/core_samba/uninstall",
+    "/addons/core_samba/update",
+    "/store/addons/core_samba/install",
+    "/store/addons/core_samba/update",
+    "/backups/new/full",
+    "/backups/new/partial",
+    "/backups/abcd1234/restore/full",
+    "/backups/abcd1234/restore/partial",
+    "/backups/abcd1234",
+    "/core/restart",
+    "/core/update",
+    "/supervisor/update",
+    "/os/update",
+    "/host/reboot",
+    "/host/shutdown",
+  ];
+  for (const path of reads)
+    assert(
+      SUPERVISOR_READS.some((p) => p.test(path)),
+      `not actually allowlisted as a read: ${path}`,
+    );
+  for (const path of mutations)
+    assert(
+      SUPERVISOR_MUTATIONS.some((m) => m.path.test(path)),
+      `not actually allowlisted as a mutation: ${path}`,
+    );
+  for (const path of [...reads, ...mutations])
+    assert(MANAGER_ROLE.test(path), `needs more than manager: ${path}`);
+  // The few paths the manager role excludes (add-on protection mode, OS
+  // datadisk wipe, SSH authorized_keys) are never in Hearth's allowlists.
+  for (const excluded of [
+    "/addons/core_samba/security",
+    "/os/datadisk/wipe",
+    "/os/ssh/authorized_keys",
+  ]) {
+    assert(!MANAGER_ROLE.test(excluded), excluded);
+    assert(
+      !SUPERVISOR_READS.some((p) => p.test(excluded)) &&
+        !SUPERVISOR_MUTATIONS.some((m) => m.path.test(excluded)),
+      excluded,
+    );
+  }
+});
+
+test("Supervisor REST transport: no redirects, oversize/non-JSON refused, 401/403 are clear errors for reads (never unknown), 4xx before send is a definite failure for mutations, 5xx/network errors stay unknown", async () => {
+  // Reads: a clear, final error carrying the real status, never "unknown"
+  // (a GET has no side effect to reconcile).
+  const unauthorized = fakeAdminHA({ supervisor: () => ({ status: 401 }) });
+  await assert.rejects(
+    unauthorized.ha.supervisorRead("/addons"),
+    (error: unknown) =>
+      error instanceof Error &&
+      /supervisor_read_failed/.test(error.message) &&
+      (error as { status?: number }).status === 401,
+  );
+  const forbidden = fakeAdminHA({ supervisor: () => ({ status: 403 }) });
+  await assert.rejects(
+    forbidden.ha.supervisorRead("/addons"),
+    (error: unknown) => (error as { status?: number }).status === 403,
+  );
+  // Reads: an upstream redirect is refused outright, never followed.
+  const redirected = fakeAdminHA({
+    supervisor: () => ({ status: 302, redirect: true }),
+  });
+  await assert.rejects(
+    redirected.ha.supervisorRead("/addons"),
+    /supervisor_read_failed/,
+  );
+  // Reads: a non-JSON 200 body is refused, not silently passed through.
+  const notJson = fakeAdminHA({
+    supervisor: () => ({ status: 200, body: "not json at all" }),
+  });
+  await assert.rejects(
+    notJson.ha.supervisorRead("/addons"),
+    /supervisor_read_failed/,
+  );
+  // Reads: an oversize body is refused, not buffered without bound.
+  const oversize = fakeAdminHA({
+    supervisor: () => ({
+      status: 200,
+      body: `{"result":"ok","data":"${"x".repeat(5 * 1024 * 1024)}"}`,
+    }),
+  });
+  await assert.rejects(
+    oversize.ha.supervisorRead("/addons"),
+    /supervisor_response_limit/,
+  );
+  const restart = {
+    kind: "supervisor" as const,
+    method: "POST" as const,
+    path: "/addons/core_samba/restart",
+  };
+  // Mutations: a definite 4xx before Supervisor's handler ran is "failed",
+  // not "unknown": nothing happened, so there is nothing to reconcile.
+  const rejected = fakeAdminHA({ supervisor: () => ({ status: 404 }) });
+  await assert.rejects(
+    rejected.ha.dispatch(restart),
+    (error: unknown) => error instanceof DispatchFailed && error.status === 404,
+  );
+  // Mutations: an upstream redirect is also a definite failure: nothing
+  // reached Supervisor's own handler, so it is not "unknown" either.
+  const mutationRedirect = fakeAdminHA({
+    supervisor: () => ({ status: 307, redirect: true }),
+  });
+  await assert.rejects(
+    mutationRedirect.ha.dispatch(restart),
+    (error: unknown) => error instanceof DispatchFailed,
+  );
+  // Mutations: 400 is Supervisor's generic APIError, also raised part-way
+  // through an operation, so it stays unknown (never a definite "failed").
+  const apiError = fakeAdminHA({ supervisor: () => ({ status: 400 }) });
+  await assert.rejects(
+    apiError.ha.dispatch(restart),
+    (error: unknown) =>
+      !(error instanceof DispatchFailed) &&
+      error instanceof Error &&
+      error.message === "dispatch_outcome_unknown",
+  );
+  // Mutations: 5xx may mean Supervisor's handler started before failing:
+  // unknown (the generic Error), not DispatchFailed.
+  const serverError = fakeAdminHA({ supervisor: () => ({ status: 503 }) });
+  await assert.rejects(
+    serverError.ha.dispatch(restart),
+    (error: unknown) =>
+      !(error instanceof DispatchFailed) &&
+      error instanceof Error &&
+      error.message === "dispatch_outcome_unknown",
+  );
+  // Mutations: a network failure after the request is sent is unknown too,
+  // never a DispatchFailed.
+  const network = fakeAdminHA({ supervisor: () => ({ networkError: true }) });
+  await assert.rejects(
+    network.ha.dispatch(restart),
+    (error: unknown) =>
+      !(error instanceof DispatchFailed) &&
+      error instanceof Error &&
+      error.message === "dispatch_outcome_unknown",
   );
 });

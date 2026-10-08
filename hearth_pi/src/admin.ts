@@ -1,6 +1,12 @@
 // Admin access mode: strict validation of every admin action kind, the
 // Supervisor endpoint allowlists and log redaction. Nothing here dispatches;
 // HAClient does, and only for actions admitted by the Home permissions broker.
+// Supervisor endpoints are reached directly over its own REST API
+// (http://supervisor/<path>, Authorization: Bearer $SUPERVISOR_TOKEN) rather
+// than through Home Assistant Core: Core's "supervisor/api" WebSocket command
+// rejects the add-on's Supervisor-proxied connection with {"code":
+// "unauthorized"} because it is not an HA admin user (verified against a real
+// Home Assistant 2026.9 / current Supervisor install).
 import type { AdminAction, JsonObject, ServiceTarget } from "./documents.js";
 import { entityPattern, insist, object, text } from "./safety.js";
 
@@ -206,8 +212,12 @@ function wsAction(v: Record<string, unknown>): AdminAction {
   return { kind: "ws", type, payload };
 }
 
-// Supervisor REST paths reachable through Core's "supervisor/api" proxy.
-// Reads are tools; mutations are broker proposals.
+// Supervisor REST paths reachable directly over http://supervisor, with the
+// add-on token's "manager" Supervisor role (config.yaml hassio_api/
+// hassio_role). Reads are tools; mutations are broker proposals. Every path
+// here is covered by the "manager" role per Supervisor's own
+// api/middleware/security.py ADDONS_ROLE_ACCESS (verified against the
+// upstream source); none of Hearth's allowlisted endpoints need "admin".
 export const SUPERVISOR_READS: readonly RegExp[] = [
   /^\/addons$/,
   new RegExp(`^/addons/${SLUG}/(info|logs|stats)$`),
@@ -215,32 +225,71 @@ export const SUPERVISOR_READS: readonly RegExp[] = [
   new RegExp(`^/backups/${SLUG}/info$`),
   /^\/(core|supervisor)\/(info|logs)$/,
   /^\/(os|host|network|resolution)\/info$/,
+  // Background job status for the mutations below that queue a job instead
+  // of blocking (see SUPERVISOR_MUTATIONS' `background`).
+  /^\/jobs\/info$/,
+  /^\/jobs\/[0-9a-fA-F-]{8,64}$/,
   /^\/store$/,
   /^\/store\/addons$/,
 ];
 export const SUPERVISOR_MUTATIONS: readonly {
   method: "POST" | "DELETE";
   path: RegExp;
+  // Supervisor's own ceiling for this operation (ha-admin.ts aborts and
+  // treats the outcome as unknown past it, never retried).
+  timeoutMs: number;
+  // Ask Supervisor to queue a job and return immediately instead of holding
+  // the HTTP request open for the full ceiling above; only set where
+  // Supervisor's endpoint documents a `background` option.
+  background?: boolean;
 }[] = [
   {
     method: "POST",
-    path: new RegExp(
-      `^/addons/${SLUG}/(start|stop|restart|update|uninstall|options)$`,
-    ),
+    path: new RegExp(`^/addons/${SLUG}/(start|stop|restart|options)$`),
+    timeoutMs: 60000,
+  },
+  {
+    method: "POST",
+    path: new RegExp(`^/addons/${SLUG}/uninstall$`),
+    timeoutMs: 120000,
+  },
+  {
+    // Deprecated by Supervisor in favour of /store/addons/<slug>/update, but
+    // still served; kept so existing proposals and docs stay valid.
+    method: "POST",
+    path: new RegExp(`^/addons/${SLUG}/update$`),
+    timeoutMs: 900000,
+    background: true,
   },
   {
     method: "POST",
     path: new RegExp(`^/store/addons/${SLUG}/(install|update)$`),
+    timeoutMs: 900000,
+    background: true,
   },
-  { method: "POST", path: /^\/backups\/new\/(full|partial)$/ },
+  {
+    method: "POST",
+    path: /^\/backups\/new\/(full|partial)$/,
+    timeoutMs: 600000,
+    background: true,
+  },
   {
     method: "POST",
     path: new RegExp(`^/backups/${SLUG}/restore/(full|partial)$`),
+    timeoutMs: 600000,
+    background: true,
   },
-  { method: "DELETE", path: new RegExp(`^/backups/${SLUG}$`) },
-  { method: "POST", path: /^\/core\/(restart|update)$/ },
-  { method: "POST", path: /^\/(supervisor|os)\/update$/ },
-  { method: "POST", path: /^\/host\/(reboot|shutdown)$/ },
+  {
+    method: "DELETE",
+    path: new RegExp(`^/backups/${SLUG}$`),
+    timeoutMs: 30000,
+  },
+  { method: "POST", path: /^\/core\/restart$/, timeoutMs: 60000 },
+  // Core/OS/Supervisor updates have no documented `background` option: they
+  // block for the full ceiling.
+  { method: "POST", path: /^\/core\/update$/, timeoutMs: 900000 },
+  { method: "POST", path: /^\/(supervisor|os)\/update$/, timeoutMs: 900000 },
+  { method: "POST", path: /^\/host\/(reboot|shutdown)$/, timeoutMs: 30000 },
 ];
 export function supervisorReadAllowed(path: unknown): string {
   const value = text(path, 120);
@@ -400,6 +449,10 @@ const ADDON_INFO: Shape = [
   "build",
   "homeassistant",
 ];
+// A background job queued by a mutation whose `timeoutMs` entry sets
+// `background: true` above; let the model check its progress instead of
+// holding the original request open.
+const JOB: Shape = ["name", "reference", "uuid", "progress", "stage", "done"];
 const BACKUP: Shape = [
   "slug",
   "name",
@@ -514,6 +567,8 @@ const SUPERVISOR_SHAPES: readonly [RegExp, Shape][] = [
       ["suggestions", ["type", "context", "reference"]],
     ],
   ],
+  [/^\/jobs\/info$/, ["ignore_conditions", ["jobs", JOB]]],
+  [/^\/jobs\/[0-9a-fA-F-]{8,64}$/, JOB],
   [
     /^\/store$/,
     [
