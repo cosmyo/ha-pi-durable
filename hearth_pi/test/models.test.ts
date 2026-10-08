@@ -508,3 +508,50 @@ test("proactive refresh: a near-expiry ChatGPT/Codex token is rotated before the
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("attached image data does not count against the text context budget", async () => {
+  const { contextBytes, imageBytes, CONTEXT_LIMITS } = await import(
+    "../src/models.js"
+  );
+  const photo = "A".repeat(600000);
+  const transcript = {
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Set up my home view from this plan" },
+          { type: "image", data: photo, mimeType: "image/jpeg" },
+        ],
+        timestamp: 0,
+      },
+    ],
+  };
+  assert.ok(contextBytes(transcript) < 1000);
+  assert.equal(imageBytes(transcript), photo.length);
+  assert.ok(imageBytes(transcript) < CONTEXT_LIMITS.imageBytes);
+  const { faux, models, model } = offline();
+  const guarded = safeModels(models, ["synthetic-secret"]);
+  const selected = models.getModel(model.provider, model.modelId)!;
+  faux.setResponses([fauxAssistantMessage("I can see the plan.")]);
+  const result = await guarded
+    .streamSimple(selected, transcript as never)
+    .result();
+  assert.notEqual(result.stopReason, "error");
+  // Images beyond the per-request backstop still stop the request.
+  const huge = {
+    messages: [
+      {
+        role: "user",
+        content: Array.from({ length: 5 }, () => ({
+          type: "image",
+          data: "B".repeat(4 * 1024 * 1024),
+          mimeType: "image/jpeg",
+        })),
+        timestamp: 0,
+      },
+    ],
+  };
+  const stopped = await guarded.streamSimple(selected, huge as never).result();
+  assert.equal(stopped.stopReason, "error");
+  assert.match(String(stopped.errorMessage), /too many or too large images/);
+});

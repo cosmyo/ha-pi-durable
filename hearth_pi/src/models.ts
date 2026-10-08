@@ -55,9 +55,38 @@ export function providerFailure(raw: string | undefined): string {
   return "Provider request failed; check server configuration.";
 }
 
+// Text context and attached images are budgeted separately: an image's
+// base64 data must not count against the text budget (one photo alone would
+// exceed it), and images have their own cap (images.ts already bounds each
+// image, message and conversation; this is the per-request backstop).
+export const CONTEXT_LIMITS = Object.freeze({
+  textBytes: 262144,
+  imageBytes: 16 * 1024 * 1024,
+});
+const isImage = (v: unknown): v is { type: "image"; data: string } =>
+  !!v &&
+  typeof v === "object" &&
+  (v as { type?: unknown }).type === "image" &&
+  typeof (v as { data?: unknown }).data === "string";
+export function contextBytes(transcript: unknown): number {
+  return Buffer.byteLength(
+    JSON.stringify(transcript, (_key, value: unknown) =>
+      isImage(value) ? { type: "image" } : value,
+    ),
+  );
+}
+export function imageBytes(transcript: unknown): number {
+  let total = 0;
+  JSON.stringify(transcript, (_key, value: unknown) => {
+    if (isImage(value)) total += value.data.length;
+    return value;
+  });
+  return total;
+}
 const STOP_TEXT: Record<string, string> = {
   turn_budget: "eight model turns per message reached",
   context_budget: "conversation context too large",
+  image_budget: "too many or too large images in this conversation",
   output_limit: "a single model event was too large",
   unsupported_or_excessive_tools: "too many tool calls in one turn",
   wrapper_error: "unexpected failure",
@@ -65,6 +94,7 @@ const STOP_TEXT: Record<string, string> = {
 const STOP_CODES = new Set([
   "turn_budget",
   "context_budget",
+  "image_budget",
   "output_limit",
   "unsupported_or_excessive_tools",
 ]);
@@ -101,8 +131,10 @@ export function safeModels(
             .filter((m) => m.role === "assistant").length >= 8
         )
           throw new Error("turn_budget");
-        if (Buffer.byteLength(JSON.stringify(transcript)) > 262144)
+        if (contextBytes(transcript) > CONTEXT_LIMITS.textBytes)
           throw new Error("context_budget");
+        if (imageBytes(transcript) > CONTEXT_LIMITS.imageBytes)
+          throw new Error("image_budget");
         const signal = options?.signal
           ? AbortSignal.any([options.signal, abort.signal])
           : abort.signal;
