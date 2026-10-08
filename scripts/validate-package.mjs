@@ -47,6 +47,11 @@ assert.deepEqual(config.options.authorized_user_ids, []);
 assert.deepEqual(config.options.allowed_entities, []);
 assert.deepEqual(config.options.allowed_services, []);
 assert.equal(config.options.service_actions_enabled, false);
+// Admin access mode is owner opt-in and never needs a Supervisor role.
+assert.equal(config.options.access_mode, "scoped");
+assert.equal(config.schema.access_mode, "list(scoped|admin)");
+assert.equal(config.options.risk_judge_model, "auto");
+assert.equal(config.schema.risk_judge_api_key, "password");
 assert.deepEqual(
   Object.keys(config.options).sort(),
   Object.keys(config.schema).sort(),

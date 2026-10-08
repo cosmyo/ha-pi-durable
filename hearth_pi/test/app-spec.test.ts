@@ -595,6 +595,26 @@ test("ToggleAction only for configured light/switch services", () => {
   assert.match(hit.message, /switch\.turn_off/);
   expectError(add("light.hall", []), "action_not_in_scope");
 });
+test("admin access mode: ToggleAction may bind the admin control domains, each press classified by the broker", () => {
+  const add = (entity: string, adminControls?: readonly string[]) => {
+    const spec = laundry() as Mutable;
+    spec.scope.entities.push(entity);
+    spec.elements.toggle = { type: "ToggleAction", props: { entity } };
+    spec.elements.main.children.push("toggle");
+    return validateSpec(spec, {
+      ...context,
+      readable: [...context.readable, entity],
+      services: [],
+      ...(adminControls ? { adminControls } : {}),
+    });
+  };
+  const admin = ["light", "switch", "fan", "cover", "lock"];
+  assert(add("fan.purifier", admin).ok);
+  assert(add("lock.front_door", admin).ok);
+  expectError(add("sensor.power", admin), "entity_domain");
+  // Scoped mode is unchanged: light/switch with configured services only.
+  expectError(add("fan.purifier"), "entity_domain");
+});
 test("HistoryChart is bounded to 2 per app, 3 entities and 48 hours", () => {
   const chart = (hours: number, entities: string[]) => ({
     type: "HistoryChart",

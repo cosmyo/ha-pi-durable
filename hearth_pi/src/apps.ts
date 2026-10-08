@@ -98,6 +98,7 @@ export function validationContext(ha: HAClient): ValidationContext {
   return {
     readable: ha.policy.entities,
     services: ha.policy.services,
+    ...(ha.admin ? { adminControls: ADMIN_CONTROL_DOMAINS } : {}),
     redact: (value) => ha.sanitize(value),
   };
 }
@@ -543,7 +544,79 @@ export async function pool<T>(
   );
 }
 
-export type ToggleControl = { enabled: boolean; mode: string; reason: string };
+export type ToggleControl = {
+  enabled: boolean;
+  mode: string;
+  reason: string;
+  // Admin mode: the button text for the service this press would send.
+  label?: string;
+};
+// Admin access mode: the entity domains Home World and app controls can
+// operate, and the service a press sends from the entity's current state.
+// Every press is a risk-classified service action (lock: high, cover: medium,
+// fan/light/switch: low) through the same Home permissions broker.
+export const ADMIN_CONTROL_DOMAINS: readonly string[] = [
+  "light",
+  "switch",
+  "fan",
+  "climate",
+  "cover",
+  "media_player",
+  "automation",
+  "input_boolean",
+  "humidifier",
+  "vacuum",
+  "lock",
+];
+export function adminControl(
+  entityId: string,
+  state: string | undefined,
+): { service: string; label: string } | undefined {
+  const domain = entityId.split(".")[0]!;
+  if (!ADMIN_CONTROL_DOMAINS.includes(domain) || !state) return undefined;
+  const onOff = (on: boolean) =>
+    on
+      ? { service: "turn_off", label: "Turn off" }
+      : { service: "turn_on", label: "Turn on" };
+  switch (domain) {
+    case "cover":
+      return state === "closed"
+        ? { service: "open_cover", label: "Open" }
+        : state === "open"
+          ? { service: "close_cover", label: "Close" }
+          : undefined;
+    case "lock":
+      return state === "locked"
+        ? { service: "unlock", label: "Unlock" }
+        : state === "unlocked"
+          ? { service: "lock", label: "Lock" }
+          : undefined;
+    case "vacuum":
+      return state === "cleaning"
+        ? { service: "return_to_base", label: "Return to dock" }
+        : ["docked", "idle", "paused"].includes(state)
+          ? { service: "start", label: "Start" }
+          : undefined;
+    case "media_player":
+      return ["off", "standby"].includes(state)
+        ? onOff(false)
+        : ["on", "playing", "paused", "idle", "buffering"].includes(state)
+          ? onOff(true)
+          : undefined;
+    case "climate":
+      return state === "off"
+        ? onOff(false)
+        : ["heat", "cool", "heat_cool", "auto", "dry", "fan_only"].includes(
+              state,
+            )
+          ? onOff(true)
+          : undefined;
+    default:
+      return state === "on" || state === "off"
+        ? onOff(state === "on")
+        : undefined;
+  }
+}
 // Whether a person may press an on/off control for one light/switch entity
 // right now (shared by app ToggleActions and Home World devices).
 export function toggleControl(
@@ -553,6 +626,29 @@ export function toggleControl(
   state: string | undefined,
 ): ToggleControl {
   const domain = entityId.split(".")[0]!;
+  if (ha.admin) {
+    const next = adminControl(entityId, state);
+    const enabled =
+      !!next &&
+      permissions.effectiveMode !== "read-only" &&
+      !permissions.blocked;
+    return {
+      enabled,
+      mode: permissions.effectiveMode,
+      label: next?.label ?? "Toggle",
+      reason: !ADMIN_CONTROL_DOMAINS.includes(domain)
+        ? "Hearth has no control for this kind of device; this stays read-only."
+        : permissions.effectiveMode === "read-only"
+          ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to use this control."
+          : permissions.blocked
+            ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
+            : !next
+              ? "Hearth only acts from a known state."
+              : permissions.effectiveMode === "ask"
+                ? "Ask: you review the exact action before it runs."
+                : "Full access: low-risk controls run once; others wait for your approval.",
+    };
+  }
   const scoped =
     ha.policy.enabled &&
     (domain === "light" || domain === "switch") &&
@@ -596,16 +692,31 @@ export async function pressHomeToggle(
   insist(!settings.blocked, "home_outcome_unresolved", 409);
   await runtime.session(owner, sessionId);
   const current = await ha.state(entityId);
-  insist(
-    current.state === "on" || current.state === "off",
-    "toggle_state_unknown",
-    409,
-  );
-  const service = `${entityId.split(".")[0]}.turn_${current.state === "on" ? "off" : "on"}`;
+  let action: unknown;
+  if (ha.admin) {
+    // Admin mode: the entity's own domain service, risk-classified.
+    const next = adminControl(entityId, current.state);
+    insist(next, "toggle_state_unknown", 409);
+    action = {
+      kind: "service",
+      domain: entityId.split(".")[0]!,
+      service: next.service,
+      target: { entity_id: [entityId] },
+      data: {},
+    };
+  } else {
+    insist(
+      current.state === "on" || current.state === "off",
+      "toggle_state_unknown",
+      409,
+    );
+    const service = `${entityId.split(".")[0]}.turn_${current.state === "on" ? "off" : "on"}`;
+    action = { service, entityId, data: {} };
+  }
   const proposal: Proposal = await ha.actions.press(
     owner,
     sessionId,
-    { service, entityId, data: {} },
+    action,
     origin,
   );
   let readBack: { state: string; observedAt: number } | null = null;

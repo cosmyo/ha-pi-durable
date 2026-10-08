@@ -36,6 +36,12 @@ options:
   model: ""
   openai_api_key: ""
   workspace_enabled: false
+  access_mode: scoped
+  risk_judge_model: auto
+  risk_judge_url: ""
+  risk_judge_api_key: ""
+  risk_judge_timeout_ms: 15000
+  risk_judge_session_ttl_ms: 300000
 schema:
   authorized_user_ids:
     - str
@@ -50,3 +56,9 @@ schema:
   model: str
   openai_api_key: password
   workspace_enabled: bool
+  access_mode: list(scoped|admin)
+  risk_judge_model: str
+  risk_judge_url: str
+  risk_judge_api_key: password
+  risk_judge_timeout_ms: int(1000,30000)
+  risk_judge_session_ttl_ms: int(0,3600000)

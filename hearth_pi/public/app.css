@@ -619,6 +619,62 @@ pre {
   font-family: ui-monospace, monospace;
   font-size: 0.8rem;
 }
+.action-card pre {
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+/* Risk is shown as text and colour, never colour alone. */
+.risk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.risk-badge {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  border: 1px solid currentColor;
+}
+.risk-low {
+  color: #b9e0c7;
+}
+.risk-medium {
+  color: #ffd98e;
+}
+.risk-high {
+  color: #ffb07a;
+}
+.risk-critical {
+  color: #1d0f0c;
+  background: #ff8f7a;
+  border-color: #ff8f7a;
+}
+.confirm-label {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  font-size: 0.88rem;
+  margin-bottom: 12px;
+}
+.confirm-label code {
+  display: inline;
+  padding: 0 4px;
+  font-size: 0.85rem;
+  color: var(--warm);
+}
+.confirm-input {
+  min-height: 44px;
+  font-family: ui-monospace, monospace;
+}
+.settings-info-row {
+  padding: 10px 14px;
+  cursor: default;
+}
 .actions {
   display: flex;
   gap: 10px;
@@ -1043,6 +1099,9 @@ dialog .actions {
        this is the baseline every unstyled button inherits, including the
        drawer footer rows, dialog actions and Settings list rows. */
     min-height: 44px;
+    padding: 8px 12px;
+  }
+  .settings-info-row {
     padding: 8px 12px;
   }
   select,

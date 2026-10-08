@@ -219,7 +219,12 @@ export function appServer(
               : config.provider === "local"
                 ? (options.local?.model ?? "Local endpoint not configured")
                 : config.model,
-          safety: "Home permissions · scoped light/switch controls only",
+          safety:
+            config.policy.access === "admin"
+              ? "Home permissions · Admin access · every change is a risk-classified proposal"
+              : "Home permissions · scoped light/switch controls only",
+          access: config.policy.access === "admin" ? "admin" : "scoped",
+          riskJudge: actions.engine.judge.describe(),
           entityScopeCount: new Set(config.policy.entities).size,
           homePermissions: await actions.engine.settings(owner),
           experimental: true,
@@ -730,7 +735,13 @@ export function appServer(
           return json(res, 200, { stopped: true });
         }
         if (req.method === "POST" && operation === "actions") {
-          const v = object(await body(req), ["id", "hash", "decision", "note"]);
+          const v = object(await body(req), [
+            "id",
+            "hash",
+            "decision",
+            "note",
+            "confirm",
+          ]);
           const actionId = text(v.id, 20);
           insist(/^[1-9][0-9]*$/.test(actionId));
           const hash = text(v.hash, 64);
@@ -741,7 +752,17 @@ export function appServer(
               v.decision === "resolve",
           );
           const note = v.note === undefined ? "" : text(v.note, 300, 0);
-          await actions.decide(owner, id, actionId, hash, v.decision, note);
+          const confirm =
+            v.confirm === undefined ? "" : text(v.confirm, 100, 0);
+          await actions.decide(
+            owner,
+            id,
+            actionId,
+            hash,
+            v.decision,
+            note,
+            confirm,
+          );
           return json(res, 200, { recorded: true });
         }
       }

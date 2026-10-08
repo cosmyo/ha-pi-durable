@@ -12,11 +12,32 @@ export const supportedServices = [
   "switch.turn_on",
   "switch.turn_off",
 ];
+export type AccessMode = "scoped" | "admin";
 export type Policy = {
   enabled: boolean;
   services: string[];
   entities: string[];
+  // Absent means "scoped". Only App configuration (or HEARTH_ACCESS_MODE in
+  // local development) sets it; never the UI, a model or a suggestion.
+  access?: AccessMode;
+  // Admin mode: this add-on's own Supervisor slug and display name, for
+  // self-protection (from the container hostname, then /addons/self/info).
+  selfSlug?: string;
+  selfName?: string;
 };
+// Optional cheap model that may only escalate a proposed action's risk.
+export type JudgeConfig = {
+  // "off", "auto", "<provider>/<modelId>" or "endpoint/<modelId>".
+  model: string;
+  // OpenAI-compatible base URL for "endpoint/<modelId>" (private addresses).
+  url: string;
+  apiKey: string;
+  timeoutMs: number;
+  // Reuse one advisory judge session (prompt cache) within this window.
+  sessionTtlMs: number;
+};
+export const JUDGE_MODEL_PATTERN =
+  /^(off|auto|[a-z0-9][a-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119})$/;
 export type Config = {
   mode: "local" | "ingress";
   host: string;
@@ -31,6 +52,7 @@ export type Config = {
   anthropicAuthEnabled?: boolean;
   workspaceEnabled?: boolean;
   policy: Policy;
+  judge?: JudgeConfig;
   haToken: string;
   apiKey: string;
 };
@@ -58,6 +80,12 @@ export async function loadConfig(): Promise<Config> {
           "openai_api_key",
           "workspace_enabled",
           "anthropic_auth_enabled",
+          "access_mode",
+          "risk_judge_model",
+          "risk_judge_url",
+          "risk_judge_api_key",
+          "risk_judge_timeout_ms",
+          "risk_judge_session_ttl_ms",
         ])
       : {};
   const port =
@@ -96,9 +124,68 @@ export async function loadConfig(): Promise<Config> {
     services.every((s) => supportedServices.includes(s)) &&
       entities.every((e) => entityPattern.test(e)),
   );
-  const enabled =
+  const access =
+    options.access_mode ?? process.env.HEARTH_ACCESS_MODE ?? "scoped";
+  insist(access === "scoped" || access === "admin", "invalid_access_mode");
+  const configuredEnabled =
     options.service_actions_enabled ?? process.env.HEARTH_ACTIONS === "true";
-  insist(typeof enabled === "boolean");
+  insist(typeof configuredEnabled === "boolean");
+  // Admin mode: every entity and service is in scope and actions are enabled;
+  // every mutation still goes through Home permissions and the risk classifier.
+  const enabled = access === "admin" ? true : configuredEnabled;
+  const judgeModel = text(
+    options.risk_judge_model || process.env.HEARTH_RISK_JUDGE_MODEL || "auto",
+    200,
+  );
+  insist(JUDGE_MODEL_PATTERN.test(judgeModel), "invalid_risk_judge_model");
+  const judgeUrl = text(
+    options.risk_judge_url ?? process.env.HEARTH_RISK_JUDGE_URL ?? "",
+    300,
+    0,
+  );
+  if (judgeUrl) {
+    // Syntax only here; private-address resolution is re-checked per call.
+    insist(URL.canParse(judgeUrl), "invalid_risk_judge_url");
+    const parsed = new URL(judgeUrl);
+    insist(
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+        !parsed.username &&
+        !parsed.password &&
+        !parsed.search &&
+        !parsed.hash,
+      "invalid_risk_judge_url",
+    );
+  }
+  const judgeKey = text(
+    options.risk_judge_api_key ?? process.env.HEARTH_RISK_JUDGE_API_KEY ?? "",
+    500,
+    0,
+  );
+  insist(!judgeKey || /^[A-Za-z0-9._~+/=:-]{1,500}$/.test(judgeKey));
+  const judgeTimeout = Number(
+    options.risk_judge_timeout_ms ??
+      process.env.HEARTH_RISK_JUDGE_TIMEOUT_MS ??
+      15000,
+  );
+  insist(
+    Number.isInteger(judgeTimeout) &&
+      judgeTimeout >= 1000 &&
+      judgeTimeout <= 30000,
+    "invalid_risk_judge_timeout",
+  );
+  const judgeTtl = Number(
+    options.risk_judge_session_ttl_ms ??
+      process.env.HEARTH_RISK_JUDGE_SESSION_TTL_MS ??
+      300000,
+  );
+  insist(
+    Number.isInteger(judgeTtl) && judgeTtl >= 0 && judgeTtl <= 3600000,
+    "invalid_risk_judge_session_ttl",
+  );
+  insist(
+    !judgeModel.startsWith("endpoint/") || judgeUrl,
+    "risk_judge_url_required",
+  );
   const provider = options.provider ?? process.env.HEARTH_PROVIDER ?? "offline";
   insist(
     provider === "offline" ||
@@ -163,8 +250,40 @@ export async function loadConfig(): Promise<Config> {
     thinkingLevel,
     anthropicAuthEnabled: anthropicEnabled,
     workspaceEnabled,
-    policy: { enabled, services, entities },
+    policy:
+      access === "admin"
+        ? {
+            enabled,
+            // The supported on/off toggles keep apps and Home World working;
+            // admin tools carry every other service as a classified proposal.
+            services: [...supportedServices],
+            // Filled from live Home Assistant state by HAClient.refreshScope.
+            entities: [],
+            access,
+            selfSlug: selfSlug(process.env.HOSTNAME, mode === "ingress"),
+          }
+        : { enabled, services, entities },
+    judge: {
+      model: judgeModel,
+      url: judgeUrl,
+      apiKey: judgeKey,
+      timeoutMs: judgeTimeout,
+      sessionTtlMs: judgeTtl,
+    },
     haToken: process.env.SUPERVISOR_TOKEN ?? "",
     apiKey,
   };
+}
+
+// Supervisor names an add-on container's host after its slug with "_" → "-"
+// (e.g. "a0d7b954-hearth-pi" for slug "a0d7b954_hearth_pi"). In an App any
+// such hostname is this add-on's own slug, including renamed forks; in local
+// development only a Hearth-looking hostname is taken.
+export function selfSlug(
+  hostname: string | undefined,
+  ingress = false,
+): string {
+  const value = (hostname ?? "").toLowerCase();
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(value)) return "";
+  return ingress || value.endsWith("hearth-pi") ? value.replace(/-/g, "_") : "";
 }

@@ -247,6 +247,22 @@
             <span>Home permissions</span>
             <span id="permissions-mode-row" class="muted">Read-only</span>
           </button>
+          <div
+            id="access-row"
+            class="settings-list-row settings-info-row"
+            title="Set access_mode in the App configuration"
+          >
+            <span>Access</span>
+            <span id="access-mode-row" class="muted">Scoped</span>
+          </div>
+          <div
+            id="judge-row"
+            class="settings-list-row settings-info-row"
+            title="Set risk_judge_model in the App configuration"
+          >
+            <span>Risk judge</span>
+            <span id="judge-model-row" class="muted">Off</span>
+          </div>
           <button
             id="account"
             type="button"
@@ -402,9 +418,14 @@
           Emergency Read-only
         </button>
         <p id="permission-summary" role="status"></p>
-        <p class="muted">
+        <p id="permission-scope-note" class="muted">
           Only configured exact light/switch on/off and light brightness. No
           Home shell, config, SSH, Docker, scripts or admin access.
+        </p>
+        <p id="permission-config-note" class="muted">
+          Access mode and risk judge are set only in the App configuration
+          (Settings › Add-ons › Hearth Pi › Configuration: access_mode,
+          risk_judge_model). Hearth cannot change them.
         </p>
         <p class="muted">
           Code permissions are unchanged and separately confined.

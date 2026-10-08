@@ -640,9 +640,10 @@ export function createDeviceCard(ctx, device, options = {}) {
 function toggleControls(ctx, device) {
   const on = device.state === "on";
   const label =
-    device.state === "on" || device.state === "off"
+    device.control.label ??
+    (device.state === "on" || device.state === "off"
       ? `Turn ${on ? "off" : "on"}`
-      : "Toggle";
+      : "Toggle");
   const toggle = button(label, "world-primary");
   toggle.dataset.key = `${device.entityId}:toggle`;
   toggle.setAttribute("aria-label", `${label} ${device.name}`);

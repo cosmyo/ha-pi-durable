@@ -529,10 +529,12 @@ export function renderApp(container, data, handlers, ui = { tabs: new Map() }) {
           node("strong", shown.text, "app-state"),
           asOfLine(value),
         );
+        const label =
+          control.label ?? (value?.state === "on" ? "Turn off" : "Turn on");
         const press = button(
-          value?.state === "on" ? "Turn off" : "Turn on",
+          label,
           "app-toggle-button",
-          `${value?.state === "on" ? "Turn off" : "Turn on"} ${nameFor(props, value)}`,
+          `${label} ${nameFor(props, value)}`,
         );
         press.disabled = !control.enabled;
         press.addEventListener("click", () => handlers.toggle(id));

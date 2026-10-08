@@ -352,6 +352,9 @@ export type ValidationContext = {
   readable: readonly string[];
   // Hearth's configured exact service scope.
   services: readonly string[];
+  // Admin access mode: entity domains a ToggleAction may control, each sent
+  // as a risk-classified service action through Home permissions.
+  adminControls?: readonly string[];
   // Removes configured secrets from stored text.
   redact?: (value: string) => string;
 };
@@ -1096,15 +1099,19 @@ export function validateSpec(
           case "entity": {
             const v = bindEntity(value, path);
             if (v === undefined) break;
-            if (prop.domains && !prop.domains.includes(v.split(".")[0]!)) {
+            const domains =
+              component.safety === "home" && context.adminControls
+                ? context.adminControls
+                : prop.domains;
+            if (domains && !domains.includes(v.split(".")[0]!)) {
               fail(
                 path,
                 "entity_domain",
-                `${type} only supports ${prop.domains.join("/")} entities.`,
+                `${type} only supports ${domains.join("/")} entities.`,
               );
               break;
             }
-            if (component.safety === "home") {
+            if (component.safety === "home" && !context.adminControls) {
               const domain = v.split(".")[0]!;
               const missing = [
                 `${domain}.turn_on`,

@@ -9,6 +9,7 @@ import { Subscription } from "./subscription.js";
 import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
 import { WorkspaceClient, workspaceExtension } from "./workspace.js";
 import { Proactive } from "./proactive.js";
+import { JudgeSessions, RiskJudgeService, resolveJudge } from "./judge.js";
 
 try {
   const config = await loadConfig();
@@ -21,7 +22,12 @@ try {
     secrets,
   } = await Subscription.openProviders(
     config.dataDir,
-    [config.apiKey, config.haToken, config.password],
+    [
+      config.apiKey,
+      config.haToken,
+      config.password,
+      config.judge?.apiKey ?? "",
+    ],
     config.anthropicAuthEnabled === true
       ? ["openai-codex", "anthropic"]
       : ["openai-codex"],
@@ -37,9 +43,45 @@ try {
     provider === LOCAL_PROVIDER
       ? await LocalEndpoints.open(config.dataDir, native, secrets, model)
       : undefined;
+  // A judge on the saved local endpoint while chat uses another provider:
+  // register the endpoint's models without touching the chat default.
+  if (!local && config.judge?.model.startsWith(`${LOCAL_PROVIDER}/`))
+    await LocalEndpoints.open(config.dataDir, native, secrets, {
+      modelId: "",
+    }).catch(() => undefined);
   const ha = new HAClient(config.haToken, config.policy, fetch, secrets);
   ha.actions.authorizeOwners(
     config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
+  );
+  // Admin access mode: the read scope is every entity Home Assistant reports.
+  if (ha.admin) {
+    await ha.identifySelf();
+    await ha.refreshScope().catch(() => 0);
+    setInterval(() => void ha.refreshScope().catch(() => 0), 300000).unref();
+  }
+  const judge = config.judge ?? {
+    model: "off",
+    url: "",
+    apiKey: "",
+    timeoutMs: 15000,
+    sessionTtlMs: 300000,
+  };
+  ha.actions.useJudge(
+    new RiskJudgeService(
+      judge.model,
+      () =>
+        resolveJudge(judge.model, {
+          models: native,
+          signedIn: (provider) =>
+            subscriptions.some(
+              (s) => s.provider === provider && s.configured(),
+            ),
+          endpoint: { url: judge.url, apiKey: judge.apiKey },
+        }),
+      judge.timeoutMs,
+      (value) => ha.sanitize(value),
+      new JudgeSessions(judge.sessionTtlMs),
+    ),
   );
   const home = [haExtension(ha)];
   const workspace = [];

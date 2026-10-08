@@ -681,11 +681,8 @@ export function renderProposals(
     (a, b) => b.created - a.created,
   )) {
     const card = node("article", "", "action-card");
-    card.append(
-      node("h3", `${proposal.action.service} · ${proposal.status}`),
-      node("p", proposal.action.entityId),
-      node("pre", JSON.stringify(proposal.action.data, null, 2)),
-    );
+    renderActionSummary(card, proposal);
+    renderRisk(card, proposal);
     if (proposal.origin?.kind === "app")
       card.append(
         node(
@@ -720,9 +717,26 @@ export function renderProposals(
           `Review expires ${new Date(proposal.expires).toLocaleTimeString()}`,
         ),
       );
+      // Critical: a second explicit step — type the exact word shown.
+      const word =
+        proposal.risk?.level === "critical" ? proposal.confirmation : "";
+      let confirmInput = null;
+      if (word) {
+        const label = node("label", "", "confirm-label");
+        const prompt = node("span", "Critical action. To approve, type ");
+        prompt.append(node("code", word));
+        label.append(prompt);
+        confirmInput = node("input", "", "confirm-input");
+        confirmInput.type = "text";
+        confirmInput.autocomplete = "off";
+        confirmInput.spellcheck = false;
+        confirmInput.setAttribute("aria-label", `Type ${word} to confirm`);
+        label.append(confirmInput);
+        card.append(label);
+      }
       const buttons = node("div", "", "actions");
       for (const [decision, label] of [
-        ["approve", "Approve exact action"],
+        ["approve", word ? "Approve critical action" : "Approve exact action"],
         ["reject", "Reject"],
       ]) {
         const button = node(
@@ -731,10 +745,21 @@ export function renderProposals(
           decision === "approve" ? "approve" : "",
         );
         button.type = "button";
-        button.disabled =
+        const blocked =
           proposal.expires <= Date.now() ||
           (decision === "approve" && !canApprove);
-        button.addEventListener("click", () => decide(proposal, decision));
+        button.disabled = blocked || (decision === "approve" && !!word);
+        if (decision === "approve" && confirmInput)
+          confirmInput.addEventListener("input", () => {
+            button.disabled = blocked || confirmInput.value !== word;
+          });
+        button.addEventListener("click", () =>
+          decide(
+            proposal,
+            decision,
+            decision === "approve" && confirmInput ? confirmInput.value : "",
+          ),
+        );
         buttons.append(button);
       }
       card.append(buttons);
@@ -756,4 +781,137 @@ export function renderProposals(
     fragment.append(card);
   }
   container.replaceChildren(fragment);
+}
+
+const RISK_LABEL = {
+  low: "Low risk",
+  medium: "Medium risk",
+  high: "High risk",
+  critical: "Critical",
+};
+const JUDGE_LABEL = {
+  agreed: "agreed",
+  escalated: "raised the risk",
+  misaligned: "flagged a mismatch",
+  unavailable: "unavailable (no agreement)",
+  off: "off",
+  not_applicable: "not needed",
+};
+// One readable summary per action kind. All text is untrusted: node() only
+// ever sets textContent.
+function renderActionSummary(card, proposal) {
+  const action = proposal.action;
+  const status = ` · ${proposal.status}`;
+  if (!action.kind) {
+    card.append(
+      node("h3", `${action.service}${status}`),
+      node("p", action.entityId),
+      node("pre", JSON.stringify(action.data, null, 2)),
+    );
+    return;
+  }
+  if (action.kind === "service") {
+    card.append(node("h3", `${action.domain}.${action.service}${status}`));
+    const target = Object.entries(action.target ?? {})
+      .map(([key, ids]) => `${key.replace("_id", "")}: ${ids.join(", ")}`)
+      .join(" · ");
+    card.append(node("p", target || "No target"));
+    if (Object.keys(action.data ?? {}).length)
+      card.append(node("pre", JSON.stringify(action.data, null, 2)));
+    return;
+  }
+  if (action.kind === "config") {
+    card.append(
+      node(
+        "h3",
+        `${action.op === "delete" ? "Delete" : "Write"} ${action.resource} ${action.id}${status}`,
+      ),
+    );
+    if (action.body) {
+      card.append(
+        node(
+          "p",
+          `${Object.keys(action.body).length} top-level fields · replaces the saved ${action.resource} with exactly this configuration`,
+          "muted",
+        ),
+        node("pre", toYaml(action.body)),
+      );
+    } else card.append(node("p", `Removes ${action.resource} ${action.id}.`));
+    return;
+  }
+  if (action.kind === "ws") {
+    card.append(
+      node("h3", `${action.type}${status}`),
+      node("pre", JSON.stringify(action.payload, null, 2)),
+    );
+    return;
+  }
+  card.append(
+    node("h3", `Supervisor ${action.method} ${action.path}${status}`),
+  );
+  if (action.body)
+    card.append(node("pre", JSON.stringify(action.body, null, 2)));
+}
+function renderRisk(card, proposal) {
+  const risk = proposal.risk;
+  if (!risk) return;
+  const row = node("p", "", "risk-row");
+  const badge = node(
+    "span",
+    RISK_LABEL[risk.level] ?? risk.level,
+    `risk-badge risk-${risk.level}`,
+  );
+  row.append(badge, node("span", ` · rule ${risk.rule}`, "muted"));
+  card.append(row);
+  if (risk.reasons?.length) card.append(node("p", risk.reasons.join(" ")));
+  const judge = proposal.judge;
+  if (judge && judge.verdict !== "not_applicable")
+    card.append(
+      node(
+        "p",
+        `Risk judge ${judge.model === "off" ? "" : `(${judge.model}) `}${JUDGE_LABEL[judge.verdict] ?? judge.verdict}${judge.reason && judge.verdict !== "off" ? `: ${judge.reason}` : ""}${judge.latencyMs ? ` · ${judge.latencyMs} ms` : ""}`,
+        judge.verdict === "misaligned" || judge.verdict === "escalated"
+          ? "error"
+          : "muted",
+      ),
+    );
+}
+// Minimal, display-only YAML rendering of a JSON config body.
+export function toYaml(value, indent = "") {
+  const scalar = (v) =>
+    typeof v === "string"
+      ? /^[\w./!: -]*$/.test(v) && v.trim() === v && v !== "" && !/: /.test(v)
+        ? v
+        : JSON.stringify(v)
+      : JSON.stringify(v);
+  if (Array.isArray(value)) {
+    if (!value.length) return "[]";
+    return value
+      .map((item) =>
+        item && typeof item === "object"
+          ? `${indent}- ${toYaml(item, `${indent}  `).trimStart()}`
+          : `${indent}- ${scalar(item)}`,
+      )
+      .join("\n");
+  }
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value);
+    if (!entries.length) return "{}";
+    return entries
+      .map(([rawKey, item]) => [
+        // Only plain words stay bare; anything else is JSON-quoted so a key
+        // cannot fake structure (newlines, ":", "-", "#") on the card.
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(rawKey)
+          ? rawKey
+          : JSON.stringify(rawKey),
+        item,
+      ])
+      .map(([key, item]) =>
+        item && typeof item === "object" && Object.keys(item).length
+          ? `${indent}${key}:\n${toYaml(item, `${indent}  `)}`
+          : `${indent}${key}: ${item && typeof item === "object" ? (Array.isArray(item) ? "[]" : "{}") : scalar(item)}`,
+      )
+      .join("\n");
+  }
+  return `${indent}${scalar(value)}`;
 }

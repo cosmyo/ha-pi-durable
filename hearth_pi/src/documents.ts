@@ -45,14 +45,78 @@ export const Inputs = defineDoc<{ requests: Record<string, Input> }>({
   initial: () => ({ requests: {} }),
   checkpointWhen,
 });
-export type Action = {
+// The original scoped light/switch action (no `kind`, so receipts and hashes
+// of earlier proposals stay valid).
+export type ToggleAction = {
   service: string;
   entityId: string;
   data: { brightness?: number };
 };
+export type ServiceTarget = {
+  entity_id?: string[];
+  device_id?: string[];
+  area_id?: string[];
+};
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+export type JsonObject = { [key: string]: JsonValue };
+// Admin mode only: each kind is strictly validated and size-capped in admin.ts.
+export type AdminAction =
+  | {
+      kind: "service";
+      domain: string;
+      service: string;
+      target: ServiceTarget;
+      data: JsonObject;
+    }
+  | {
+      kind: "config";
+      resource: "automation" | "script" | "scene";
+      op: "upsert" | "delete";
+      id: string;
+      body?: JsonObject;
+    }
+  | { kind: "ws"; type: string; payload: JsonObject }
+  | {
+      kind: "supervisor";
+      method: "DELETE" | "POST";
+      path: string;
+      body?: JsonObject;
+    };
+export type Action = ToggleAction | AdminAction;
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+export type RiskAssessment = {
+  level: RiskLevel;
+  rule: string;
+  reasons: string[];
+};
+// What the optional cheap judge said. It can only escalate or flag a mismatch.
+export type JudgeRecord = {
+  model: string;
+  verdict:
+    | "agreed"
+    | "escalated"
+    | "misaligned"
+    | "unavailable"
+    | "off"
+    | "not_applicable";
+  reason: string;
+  escalateTo?: RiskLevel;
+  latencyMs: number;
+};
 export type Proposal = {
   id: string;
   action: Action;
+  // Deterministic classification, possibly escalated by the judge.
+  risk?: RiskAssessment;
+  judge?: JudgeRecord;
+  // Critical actions: the approval must repeat this exact word.
+  confirmation?: string;
   hash: string;
   policy: string;
   created: number;

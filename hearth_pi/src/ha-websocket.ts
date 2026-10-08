@@ -61,17 +61,19 @@ export type HAWebSocketCall = (
   type: HAWebSocketCommand,
   payload: Record<string, string>,
 ) => Promise<unknown>;
+// A session opened with a wider allowlist (admin.ts) uses this signature.
+export type HAWebSocketAnyCall = (
+  type: string,
+  payload: Record<string, unknown>,
+) => Promise<unknown>;
 
 // The single write path to the socket. Refuses every non-allowlisted type.
 export function sendAllowed(
   socket: Pick<SocketLike, "send">,
   message: { type: string } & Record<string, unknown>,
+  allowed: readonly string[] = HA_WEBSOCKET_TYPES,
 ): void {
-  insist(
-    (HA_WEBSOCKET_TYPES as readonly string[]).includes(message.type),
-    "ws_type_not_allowed",
-    403,
-  );
+  insist(allowed.includes(message.type), "ws_type_not_allowed", 403);
   socket.send(JSON.stringify(message));
 }
 
@@ -85,6 +87,7 @@ export async function haWebSocketSession<T>(
   work: (call: HAWebSocketCall) => Promise<T>,
   signal?: AbortSignal,
   limits: HAWebSocketLimits = HA_WEBSOCKET_LIMITS,
+  allowed: readonly string[] = HA_WEBSOCKET_TYPES,
 ): Promise<T> {
   insist(token, "ha_unconfigured", 503);
   const deadline = AbortSignal.timeout(limits.timeoutMs);
@@ -145,15 +148,15 @@ export async function haWebSocketSession<T>(
   try {
     const greeting = await next((m) => typeof m.type === "string");
     insist(greeting.type === "auth_required", "ha_read_failed", 502);
-    sendAllowed(socket, { type: "auth", access_token: token });
+    sendAllowed(socket, { type: "auth", access_token: token }, allowed);
     const auth = await next((m) => typeof m.type === "string");
     insist(auth.type === "auth_ok", "ha_auth_failed", 502);
     let id = 0;
-    const call: HAWebSocketCall = async (type, payload) => {
+    const call: HAWebSocketAnyCall = async (type, payload) => {
       insist(type !== ("auth" as string), "ws_type_not_allowed", 403);
       insist(id < limits.commands, "ha_request_limit", 502);
       const mine = ++id;
-      sendAllowed(socket, { ...payload, id: mine, type });
+      sendAllowed(socket, { ...payload, id: mine, type }, allowed);
       const reply = await next((m) => m.id === mine && m.type === "result");
       if (reply.success !== true) {
         const code = (reply.error as { code?: unknown } | undefined)?.code;
@@ -164,7 +167,7 @@ export async function haWebSocketSession<T>(
       }
       return reply.result;
     };
-    return await work(call);
+    return await work(call as HAWebSocketCall);
   } catch (error) {
     // Raw socket/upstream errors may carry details; expose only a code.
     throw error instanceof Fault ? error : new Fault(502, "ha_read_failed");

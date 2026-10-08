@@ -10,6 +10,7 @@ import {
   pool,
   pressHomeToggle,
   toggleControl,
+  ADMIN_CONTROL_DOMAINS,
   type ToggleControl,
 } from "./apps.js";
 import { entityPattern, insist, object, text } from "./safety.js";
@@ -222,7 +223,11 @@ export class WorldStore {
     const controls: Record<string, ToggleControl> = {};
     for (const id of entities) {
       const domain = id.split(".")[0];
-      if (domain === "light" || domain === "switch")
+      if (
+        domain === "light" ||
+        domain === "switch" ||
+        (this.ha.admin && ADMIN_CONTROL_DOMAINS.includes(domain!))
+      )
         controls[id] = toggleControl(
           this.ha,
           permissions,
@@ -308,10 +313,12 @@ export class WorldStore {
     insist((await this.drawn()).includes(entityId), "device_not_found", 404);
     const domain = entityId.split(".")[0];
     insist(
-      (domain === "light" || domain === "switch") &&
-        this.ha.policy.enabled &&
-        this.ha.policy.services.includes(`${domain}.turn_on`) &&
-        this.ha.policy.services.includes(`${domain}.turn_off`),
+      this.ha.admin
+        ? ADMIN_CONTROL_DOMAINS.includes(domain!)
+        : (domain === "light" || domain === "switch") &&
+            this.ha.policy.enabled &&
+            this.ha.policy.services.includes(`${domain}.turn_on`) &&
+            this.ha.policy.services.includes(`${domain}.turn_off`),
       "control_not_in_scope",
       403,
     );

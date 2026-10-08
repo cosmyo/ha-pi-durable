@@ -235,7 +235,23 @@ function updatePermissions(value) {
   $("permissions-mode-row").textContent = modeLabel;
   permissionModeLabel = modeLabel;
   paintSettingsSummary();
-  homeSafety = `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
+  const admin = value.access === "admin";
+  $("access-mode-row").textContent = admin ? "Admin" : "Scoped";
+  const judge = value.judge ?? { setting: "off", model: "off" };
+  $("judge-model-row").textContent =
+    judge.model === "off"
+      ? judge.setting === "off"
+        ? "Off"
+        : "Off (unavailable)"
+      : judge.model;
+  $("judge-row").title =
+    `risk_judge_model: ${judge.setting}${judge.warning ? ` — ${judge.warning}` : ""}. Change it in the App configuration.`;
+  $("permission-scope-note").textContent = admin
+    ? "Admin access: Hearth may propose any Home Assistant service, automation/script/scene, registry/helper and allowlisted Supervisor change. Each is risk-classified: Full access auto-runs only low risk (medium only when the risk judge agrees); high and critical always ask, and critical needs a typed confirmation. No host shell, filesystem or Docker."
+    : "Only configured exact light/switch on/off and light brightness. No Home shell, config, SSH, Docker, scripts or admin access.";
+  homeSafety = admin
+    ? `Home permissions · ${value.effectiveMode === "full" ? "Full access / low-risk auto" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · Admin access`
+    : `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
   $("permission-summary").textContent =
     `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
   for (const option of $("home-mode").options)
@@ -247,7 +263,9 @@ async function setHomeMode(mode) {
   if (
     mode === "full" &&
     !window.confirm(
-      `Enable Home Full access / auto-approve? ${current.acknowledgement}\n${current.entityScopeCount} exact configured entities; ${current.services.join(", ")}.\nPolicy: ${current.policy}\nRunning/old inputs are not elevated. Emergency Read-only cannot undo in-flight effects.`,
+      current.access === "admin"
+        ? `Enable Home Full access in Admin mode? ${current.acknowledgement}\nPolicy: ${current.policy}\nRunning/old inputs are not elevated. Emergency Read-only cannot undo in-flight effects.`
+        : `Enable Home Full access / auto-approve? ${current.acknowledgement}\n${current.entityScopeCount} exact configured entities; ${current.services.join(", ")}.\nPolicy: ${current.policy}\nRunning/old inputs are not elevated. Emergency Read-only cannot undo in-flight effects.`,
     )
   )
     return;
@@ -879,7 +897,7 @@ async function deleteSession(id, title) {
     );
   }
 }
-async function decide(proposal, decision) {
+async function decide(proposal, decision, confirm = "") {
   let note = "";
   if (decision === "resolve") {
     note =
@@ -897,6 +915,7 @@ async function decide(proposal, decision) {
       hash: proposal.hash,
       decision,
       ...(note ? { note } : {}),
+      ...(confirm ? { confirm } : {}),
     });
     if (selected === id) {
       snapshot(await api(`sessions/${id}/snapshot`));
@@ -1445,13 +1464,14 @@ function showActionApproval(sessionId, proposal, after) {
   renderProposals(
     $("app-approval-card"),
     { [proposal.id]: proposal },
-    async (p, decision) => {
+    async (p, decision, confirm) => {
       if (decision === "resolve") return;
       try {
         await api(`sessions/${sessionId}/actions`, {
           id: p.id,
           hash: p.hash,
           decision,
+          ...(confirm ? { confirm } : {}),
         });
         $("app-approval").close();
         await after(

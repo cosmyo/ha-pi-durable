@@ -19,11 +19,24 @@ import {
 import type { HAClient } from "./ha.js";
 import type { Runtime } from "./runtime.js";
 import { Serial, digest, insist, text } from "./safety.js";
+import { classifyAction, confirmationWord, maxRisk } from "./risk.js";
+import { offJudge, type RiskJudge } from "./judge.js";
+import type { Action, JudgeRecord, RiskAssessment } from "./documents.js";
 
 export const ACTION_SCHEMA = 1;
 export const FULL_ACKNOWLEDGEMENT =
   "Auto-approve supported Home actions within this exact configured policy; no host or admin access.";
+// Admin access mode's Full grant: the risk classifier, not an entity list,
+// bounds what may run without a person.
+export const ADMIN_FULL_ACKNOWLEDGEMENT =
+  "Auto-approve only low-risk Home Assistant admin actions, and medium ones a risk judge agrees with; high and critical always ask; no host shell or filesystem.";
 export function policyFingerprint(ha: HAClient): string {
+  if (ha.policy.access === "admin")
+    return digest({
+      schema: ACTION_SCHEMA,
+      access: "admin",
+      enabled: true,
+    });
   return digest({
     schema: ACTION_SCHEMA,
     enabled: ha.policy.enabled,
@@ -32,6 +45,19 @@ export function policyFingerprint(ha: HAClient): string {
   });
 }
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+// Full access may run a proposal without a person only when it is low risk,
+// or medium with an agreeing judge; never high/critical or judge-misaligned.
+export function autoRunAllowed(risk: RiskAssessment, judge: JudgeRecord) {
+  if (judge.verdict === "misaligned") return false;
+  if (risk.level === "low") return true;
+  return risk.level === "medium" && judge.verdict === "agreed";
+}
+const NO_JUDGE: JudgeRecord = {
+  model: "off",
+  verdict: "not_applicable",
+  reason: "Pressed by you directly; no judge needed.",
+  latencyMs: 0,
+};
 
 // One engine owns permission revisions and both human/automatic action admission.
 // The gate never spans HA waits. Dispatch intent and attempt are separate durable commits.
@@ -42,7 +68,34 @@ export class HomeActions {
   private controllers = new Map<AbortController, string>();
   private inFlight = new Set<Promise<unknown>>();
   private authorizedOwners = new Set<string>();
+  judge: RiskJudge = offJudge;
   constructor(readonly ha: HAClient) {}
+  useJudge(judge: RiskJudge) {
+    this.judge = judge;
+  }
+  get acknowledgement() {
+    return this.ha.admin ? ADMIN_FULL_ACKNOWLEDGEMENT : FULL_ACKNOWLEDGEMENT;
+  }
+  // Deterministic class first; the judge may then only escalate.
+  private assess(
+    action: Action,
+    base: RiskAssessment,
+    judge: JudgeRecord,
+  ): RiskAssessment {
+    const level = judge.escalateTo
+      ? maxRisk(base.level, judge.escalateTo)
+      : base.level;
+    return level === base.level
+      ? base
+      : {
+          level,
+          rule: `judge_escalated:${base.rule}`,
+          reasons: [
+            ...base.reasons,
+            `Judge escalated ${base.level} → ${level}.`,
+          ],
+        };
+  }
   // Supply the server-boundary's current configured owners before opening the
   // durable harness. An unconfigured engine grants no Home write authority.
   authorizeOwners(owners: readonly string[]) {
@@ -113,7 +166,7 @@ export class HomeActions {
         item.grant.owner !== owner ||
         item.grant.policy !== policy ||
         item.grant.schema !== ACTION_SCHEMA ||
-        item.grant.acknowledgement !== FULL_ACKNOWLEDGEMENT)
+        item.grant.acknowledgement !== this.acknowledgement)
     ) {
       item.mode = this.ha.policy.enabled ? "ask" : "read-only";
       item.revision++;
@@ -178,7 +231,9 @@ export class HomeActions {
         return {
           ...p,
           effectiveMode: this.binding(p).mode,
-          acknowledgement: FULL_ACKNOWLEDGEMENT,
+          acknowledgement: this.acknowledgement,
+          access: this.ha.admin ? "admin" : "scoped",
+          judge: this.judge.describe(),
           enabled: this.ha.policy.enabled,
           entityScopeCount: new Set(this.ha.policy.entities).size,
           services: [...new Set(this.ha.policy.services)].sort(),
@@ -204,7 +259,7 @@ export class HomeActions {
       typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint),
     );
     insist(
-      acknowledgement === undefined || acknowledgement === FULL_ACKNOWLEDGEMENT,
+      acknowledgement === undefined || acknowledgement === this.acknowledgement,
     );
     const runtime = this.host();
     await this.gate.run(async () => {
@@ -221,7 +276,7 @@ export class HomeActions {
           insist(this.ha.policy.enabled, "actions_disabled", 403);
         if (mode === "full")
           insist(
-            acknowledgement === FULL_ACKNOWLEDGEMENT,
+            acknowledgement === this.acknowledgement,
             "full_acknowledgement_required",
             400,
           );
@@ -235,7 +290,7 @@ export class HomeActions {
                 owner,
                 policy: p.policy,
                 schema: ACTION_SCHEMA,
-                acknowledgement: FULL_ACKNOWLEDGEMENT,
+                acknowledgement: this.acknowledgement,
                 at: Date.now(),
               }
             : null;
@@ -272,6 +327,15 @@ export class HomeActions {
     );
     return session;
   }
+  // The owner's latest message in this conversation's current run: the only
+  // conversation text the risk judge may see.
+  private async latestRequest(tx: Tx, sessionId: ConversationId) {
+    const ids = new Set((await tx.doc(LiveDoc, sessionId)).run?.inputs ?? []);
+    const inputs = Object.values((await tx.doc(Inputs, sessionId)).requests)
+      .filter((i) => ids.has(i.submissionId as never))
+      .sort((a, b) => b.admitted - a.admitted);
+    return inputs[0]?.content ?? "";
+  }
   private async inputBinding(tx: Tx, sessionId: ConversationId) {
     const ids = (await tx.doc(LiveDoc, sessionId)).run?.inputs ?? [];
     const inputs = Object.values((await tx.doc(Inputs, sessionId)).requests);
@@ -288,7 +352,7 @@ export class HomeActions {
         p.grant?.owner === owner &&
         p.grant.policy === p.policy &&
         p.grant.schema === ACTION_SCHEMA &&
-        p.grant.acknowledgement === FULL_ACKNOWLEDGEMENT,
+        p.grant.acknowledgement === this.acknowledgement,
       "full_grant_required",
       403,
     );
@@ -313,12 +377,15 @@ export class HomeActions {
     context: Context,
   ): Promise<Proposal> {
     const id = String(api.taskId);
-    const owner = await this.gate.run(() =>
+    const { owner, latest } = await this.gate.run(() =>
       api.commit(async (tx) => {
         const session = await this.home(tx, api.conversationId);
         const p = await this.permission(tx, session.owner);
         insist(this.binding(p).mode !== "read-only", "home_read_only", 403);
-        return session.owner;
+        return {
+          owner: session.owner,
+          latest: await this.latestRequest(tx, api.conversationId),
+        };
       }, context),
     );
     const action = this.ha.action(value);
@@ -336,6 +403,22 @@ export class HomeActions {
       if (existing) return existing;
       // Live discovery can be slow; never hold the permission/revocation gate here.
       await this.ha.validateLive(action, signal);
+      const base = classifyAction(
+        action,
+        await this.ha.riskContext(action, signal),
+      );
+      // The judge sees only the owner's latest message and this exact action.
+      const judge = await this.judge.evaluate(
+        {
+          owner,
+          conversation: api.conversationId,
+          request: latest,
+          action,
+          level: base.level,
+        },
+        signal,
+      );
+      const risk = this.assess(action, base, judge);
       const proposal = await this.gate.run(() =>
         api.commit(async (tx) => {
           insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
@@ -354,6 +437,8 @@ export class HomeActions {
           if (doc.items[id]) return copy(doc.items[id]!);
           insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
           const now = Date.now();
+          const automatic =
+            binding.mode === "full" && autoRunAllowed(risk, judge);
           const item: Proposal = {
             id,
             action,
@@ -365,9 +450,14 @@ export class HomeActions {
             decidedBy: "",
             decidedAt: 0,
             resolution: "",
+            risk,
+            judge,
+            ...(risk.level === "critical"
+              ? { confirmation: confirmationWord(action) }
+              : {}),
             authorization: {
               ...binding,
-              source: binding.mode === "full" ? "automatic" : "human",
+              source: automatic ? "automatic" : "human",
               owner,
               inputIds: input.ids,
             },
@@ -416,6 +506,10 @@ export class HomeActions {
     const signal = controller.signal;
     try {
       await this.ha.validateLive(action, signal);
+      const risk = classifyAction(
+        action,
+        await this.ha.riskContext(action, signal),
+      );
       const proposal = await this.gate.run(() =>
         runtime.harness.commit(async (tx) => {
           insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
@@ -448,6 +542,11 @@ export class HomeActions {
             decidedBy: "",
             decidedAt: 0,
             resolution: "",
+            risk,
+            judge: NO_JUDGE,
+            ...(risk.level === "critical"
+              ? { confirmation: confirmationWord(action) }
+              : {}),
             authorization: {
               ...binding,
               source: "human",
@@ -460,7 +559,13 @@ export class HomeActions {
           return copy(item);
         }, ctx),
       );
-      if (proposal.authorization?.mode !== "full") return proposal;
+      // A direct press in Full access runs only when low risk; otherwise the
+      // owner reviews the exact action like any other proposal.
+      if (
+        proposal.authorization?.mode !== "full" ||
+        !autoRunAllowed(risk, NO_JUDGE)
+      )
+        return proposal;
       await this.dispatch(owner, conversationId, proposal, false, signal);
       return (await runtime.harness.snapshot(Proposals, conversationId, ctx))!
         .items[proposal.id]!;
@@ -475,6 +580,7 @@ export class HomeActions {
     hash: string,
     decision: "approve" | "reject" | "resolve",
     note = "",
+    confirm = "",
   ) {
     const runtime = this.host();
     const conversation = await runtime.session(owner, sessionId);
@@ -511,6 +617,15 @@ export class HomeActions {
       return;
     }
     insist(proposal.status === "pending", "proposal_already_decided", 409);
+    // Critical: a second explicit step, typing the exact word shown.
+    if (proposal.risk?.level === "critical")
+      insist(
+        typeof confirm === "string" &&
+          !!proposal.confirmation &&
+          confirm === proposal.confirmation,
+        "confirmation_required",
+        400,
+      );
     insist(
       (await this.settings(owner)).effectiveMode !== "read-only",
       "home_read_only",
@@ -562,6 +677,13 @@ export class HomeActions {
       insist(
         proposal.authorization?.source === "automatic",
         "automatic_receipt_required",
+        403,
+      );
+      insist(
+        proposal.risk &&
+          proposal.judge &&
+          autoRunAllowed(proposal.risk, proposal.judge),
+        "risk_requires_approval",
         403,
       );
       const input = await this.inputBinding(tx, sessionId);
