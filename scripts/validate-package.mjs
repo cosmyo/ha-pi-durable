@@ -85,11 +85,10 @@ for (const file of [
   "apps.js",
   "today.js",
   "render.js",
-  // PROTOTYPE Home World modules (throwaway UI exploration).
-  "world/prototype-world.js",
-  "world/world-pixel.js",
-  "world/world-diorama.js",
-  "world/world-ambient.js",
+  // Home World modules (loaded on demand).
+  "world/world.js",
+  "world/house.js",
+  "world/strip.js",
 ]) {
   const result = spawnSync(process.execPath, [
     "--check",

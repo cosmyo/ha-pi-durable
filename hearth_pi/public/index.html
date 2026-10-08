@@ -99,6 +99,7 @@
         </header>
         <p id="connection" role="status">Connecting</p>
         <section class="conversation" aria-label="Chat">
+          <div id="world-strip"></div>
           <p id="safety" class="sr-only" aria-live="polite">
             Read-only by default
           </p>
@@ -282,7 +283,7 @@
           </button>
           <button id="open-world" type="button" class="settings-list-row">
             <span>Home World</span>
-            <span class="muted">Prototype</span>
+            <span class="muted">Map · list · edit</span>
           </button>
         </section>
         <section class="settings-group" aria-label="About">
@@ -374,7 +375,7 @@
         <button id="insights-close" type="button">Close</button>
       </div>
     </dialog>
-    <dialog id="app-approval" aria-label="Review app action">
+    <dialog id="app-approval" aria-label="Review action">
       <h2>Review exact action</h2>
       <p class="muted">
         Home permissions are Ask: nothing runs until you approve this exact

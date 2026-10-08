@@ -327,35 +327,98 @@ function controls() {
     button.disabled = $("send").disabled || selectedKind !== "home";
   forwardWorld();
 }
-// PROTOTYPE Home World hook (public/world/, throwaway exploration): loaded
-// on demand by dynamic import so the app is unchanged if it never opens or
-// fails to load. It receives the snapshot already shown here, read-only, and
-// can only draft questions through draftQuestion.
-let worldModule = null,
+// Home World (public/world/): loaded on demand by dynamic import so the chat
+// is unaffected if it never loads. app.js owns every request the world makes
+// (worldApi, toggleFromWorld) and the full-screen view switch; the world
+// receives the snapshot already shown here, read-only.
+let world = null,
+  worldLoading = null,
   worldSnapshot = null;
+const worldApi = {
+  load: () => api("world"),
+  values: () => api("world/values"),
+  save: (body) => api("world/layout", body),
+  reset: (body) => api("world/reset", body),
+  migrate: (body) => api("world/migrate", body),
+};
 function worldInput() {
   return {
     snapshot: worldSnapshot,
-    busy,
     kind: selected ? selectedKind : "home",
-    canDraft: !$("message").disabled && selectedKind === "home",
-    draftQuestion,
-    buildViewPrompt: BUILD_VIEW_PROMPT,
+    canDraft: !$("message").disabled && (!selected || selectedKind === "home"),
   };
 }
 function forwardWorld() {
   try {
-    worldModule?.updateWorld(worldInput());
+    world?.update(worldInput());
   } catch {
-    /* The prototype must never break the chat. */
+    /* Home World must never break the chat. */
   }
 }
-async function openWorld() {
+function loadWorld() {
+  worldLoading ??= (async () => {
+    if (!document.querySelector("link[data-world-css]")) {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = new URL("world/world.css", base).href;
+      link.dataset.worldCss = "";
+      document.head.append(link);
+    }
+    const module = await import("./world/world.js");
+    world = await module.mountWorld({
+      api: worldApi,
+      toggle: toggleFromWorld,
+      ask: (prompt) => void draftFromApp(prompt, "Home World", "Home World"),
+      showView: showWorldView,
+      stripHost: $("world-strip"),
+    });
+    forwardWorld();
+    return world;
+  })().catch(() => {
+    worldLoading = null;
+    return null;
+  });
+  return worldLoading;
+}
+async function openWorld(options = {}) {
+  const loaded = await loadWorld();
+  if (loaded) loaded.openFull(options);
+  else feedback("Home World could not load. Chat is unaffected.");
+}
+// The full-screen house replaces the conversation like an open app does.
+function showWorldView(element) {
+  document.querySelector("#main > .world-view")?.remove();
+  if (element) {
+    if (openAppId) {
+      openAppId = null;
+      appData = null;
+      $("app-view").hidden = true;
+    }
+    $("main").append(element);
+    if (compact() && document.body.classList.contains("drawer-open"))
+      closeDrawer();
+  }
+  $("topbar").hidden = !!element;
+  document.querySelector(".conversation").hidden = !!element;
+}
+// A world light/switch press goes through the same Home permissions broker
+// as app ToggleActions; Ask shows the same exact approval card.
+async function toggleFromWorld(entityId, onDecided) {
   try {
-    worldModule ??= await import("./world/prototype-world.js");
-    worldModule.openWorld(worldInput());
-  } catch {
-    feedback("Home World prototype could not load. Chat is unaffected.");
+    const sessionId = await homeSessionFor("Home World", "Home World");
+    const result = await api("world/actions", { entityId, sessionId });
+    const p = result.proposal;
+    if (p.status === "pending") {
+      showActionApproval(sessionId, p, async (message) => onDecided(message));
+      return "Review the exact action to continue. It is also listed in the Home World chat.";
+    }
+    if (p.status === "accepted")
+      return `Home Assistant accepted ${p.action.service} for ${p.action.entityId}${result.readBack ? `; it now reads ${result.readBack.state} (as of ${timeOf(result.readBack.observedAt)})` : ""}. Acceptance is not physical verification.`;
+    if (p.status === "unknown")
+      return `Outcome unknown for ${p.action.service} ${p.action.entityId}. It will not be retried. Check the device, then record what you saw on the action card in the chat.`;
+    return `Action ${p.status}. ${p.resolution || ""}`;
+  } catch (error) {
+    return appMessage(error, "Not sent");
   }
 }
 function draftQuestion(content) {
@@ -1280,11 +1343,13 @@ async function loadApps() {
   renderPinned();
 }
 function showAppView(open) {
+  if (open) world?.closeFull();
   $("app-view").hidden = !open;
   $("topbar").hidden = open;
   document.querySelector(".conversation").hidden = open;
 }
 function closeApp() {
+  world?.closeFull();
   if (!openAppId) return;
   openAppId = null;
   appData = null;
@@ -1332,9 +1397,9 @@ async function refreshApp(message = "") {
   }
 }
 // Ask/toggle need a Home chat: the current one, or a new one named for the app.
-async function homeSessionFor(title) {
+async function homeSessionFor(title, sessionTitle = `App: ${title}`) {
   if (selected && selectedKind === "home") return selected;
-  const name = `App: ${title}`.slice(0, SESSION_TITLE_MAX);
+  const name = sessionTitle.slice(0, SESSION_TITLE_MAX);
   const result = await api("sessions", {
     title: name,
     kind: "home",
@@ -1345,9 +1410,9 @@ async function homeSessionFor(title) {
   await listSessions();
   return result.id;
 }
-async function draftFromApp(prompt, title) {
+async function draftFromApp(prompt, title, sessionTitle) {
   try {
-    await homeSessionFor(title);
+    await homeSessionFor(title, sessionTitle);
     closeApp();
     if ($("message").disabled)
       feedback(
@@ -1375,7 +1440,8 @@ async function changeAppState(stateKey, body) {
     if (appData === data) paintApp();
   }
 }
-function showAppApproval(sessionId, proposal) {
+// The exact approval card for a person-pressed control (app or Home World).
+function showActionApproval(sessionId, proposal, after) {
   renderProposals(
     $("app-approval-card"),
     { [proposal.id]: proposal },
@@ -1388,14 +1454,14 @@ function showAppApproval(sessionId, proposal) {
           decision,
         });
         $("app-approval").close();
-        await refreshApp(
+        await after(
           decision === "approve"
             ? "Approved. Values were read again; HA acceptance is not physical verification."
             : "Rejected. Nothing was sent.",
         );
       } catch (error) {
         $("app-approval").close();
-        appFeedback(appMessage(error, "Decision not recorded"));
+        await after(appMessage(error, "Decision not recorded"));
       }
     },
     permissions?.effectiveMode !== "read-only" && !permissions?.blocked,
@@ -1416,7 +1482,7 @@ async function toggleFromApp(elementId) {
     const p = result.proposal;
     if (p.status === "pending") {
       appFeedback("Review the exact action to continue.");
-      showAppApproval(sessionId, p);
+      showActionApproval(sessionId, p, (message) => refreshApp(message));
     } else if (p.status === "accepted")
       await refreshApp(
         `Home Assistant accepted ${p.action.service} for ${p.action.entityId}${result.readBack ? `; it now reads ${result.readBack.state} (as of ${timeOf(result.readBack.observedAt)})` : ""}. Acceptance is not physical verification.`,
@@ -1736,10 +1802,6 @@ $("open-world").addEventListener("click", () => {
   if (compact()) closeDrawer();
   void openWorld();
 });
-window.addEventListener("hashchange", () => {
-  if (/^#world=[ABC]$/.test(window.location.hash)) void openWorld();
-});
-if (/^#world=[ABC]$/.test(window.location.hash)) void openWorld();
 $("model-dialog").addEventListener("close", () => {
   $("model-chip").setAttribute("aria-expanded", "false");
 });
@@ -2186,6 +2248,7 @@ try {
   void loadApps();
   void loadToday();
   void loadProactive();
+  void loadWorld();
   setConnection("Connected");
   if (sessions.length) {
     await select(sessions[sessions.length - 1]);

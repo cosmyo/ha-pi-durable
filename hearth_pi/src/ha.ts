@@ -17,9 +17,11 @@ import type { StateReader } from "./proactive.js";
 import { AutomationReader, automationTools } from "./automations.js";
 import {
   defaultSocket,
+  HA_REGISTRY_LIMITS,
   haWebSocketSession,
   type SocketFactory,
 } from "./ha-websocket.js";
+import { projectRegistry, type RegistryProjection } from "./world-layout.js";
 
 export class HAClient {
   readonly actions = new HomeActions(this);
@@ -31,7 +33,7 @@ export class HAClient {
     readonly policy: Policy,
     private transport: typeof fetch = fetch,
     secrets: string[] = [],
-    socket: SocketFactory = defaultSocket,
+    private socket: SocketFactory = defaultSocket,
   ) {
     // Keep the live collection: OAuth refresh/login adds secrets after startup.
     this.redact = (value) => redactor([token, ...secrets])(value);
@@ -46,6 +48,23 @@ export class HAClient {
   }
   sanitize(value: string): string {
     return this.redact(value);
+  }
+  // Home World: the three read-only registry lists over one bounded socket,
+  // projected at once to the read scope (area/device names only).
+  async registry(signal?: AbortSignal): Promise<RegistryProjection> {
+    const raw = await haWebSocketSession(
+      this.socket,
+      this.token,
+      this.redact,
+      async (call) => ({
+        areas: await call("config/area_registry/list", {}),
+        devices: await call("config/device_registry/list", {}),
+        entities: await call("config/entity_registry/list", {}),
+      }),
+      signal,
+      HA_REGISTRY_LIMITS,
+    );
+    return projectRegistry(raw, this.policy.entities, this.redact);
   }
   // Narrow read-only view for proactive watchers and briefings: exact scoped
   // state reads only, with no route to services or Home permissions.

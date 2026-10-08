@@ -344,7 +344,7 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
     (document.getElementById("insights-dialog") as any).close();
 
     // Home World row: still closes Settings (world rendering itself is
-    // covered by world-prototype.test.ts, not re-tested here).
+    // covered by world.test.ts, not re-tested here).
     reopenSettings();
     document
       .getElementById("open-world")!

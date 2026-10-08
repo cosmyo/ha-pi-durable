@@ -1,17 +1,27 @@
 // Minimal, bounded, read-only Home Assistant WebSocket client used only for
-// automation traces, which HA exposes over WebSocket and not REST. It can send
-// exactly the allowlisted message types below; anything else is refused before
-// a frame is written. One short-lived connection per troubleshooting read.
+// automation traces and the area/device/entity registries (Home World), which
+// HA exposes over WebSocket and not REST. It can send exactly the allowlisted
+// message types below; anything else is refused before a frame is written.
+// One short-lived connection per read.
 import { Fault, insist } from "./safety.js";
 
 export const HA_WEBSOCKET_URL = "ws://supervisor/core/websocket";
-// "auth" is only sent by the handshake; commands may use the trace types.
+// "auth" is only sent by the handshake; commands may use the read-only trace
+// and registry list types. No registry create/update/delete type is allowed.
 export const HA_WEBSOCKET_TYPES = Object.freeze([
   "auth",
   "trace/list",
   "trace/get",
+  "config/area_registry/list",
+  "config/device_registry/list",
+  "config/entity_registry/list",
 ] as const);
-export type HAWebSocketCommand = "trace/list" | "trace/get";
+export type HAWebSocketCommand =
+  | "trace/list"
+  | "trace/get"
+  | "config/area_registry/list"
+  | "config/device_registry/list"
+  | "config/entity_registry/list";
 
 // The subset of the WHATWG WebSocket used here; tests inject a fake.
 export type SocketLike = {
@@ -37,6 +47,14 @@ export const HA_WEBSOCKET_LIMITS: HAWebSocketLimits = Object.freeze({
   messageBytes: 1048576,
   totalBytes: 4194304,
   commands: 8,
+});
+
+// Registry lists of large homes can exceed one trace frame; still bounded.
+export const HA_REGISTRY_LIMITS: HAWebSocketLimits = Object.freeze({
+  timeoutMs: 10000,
+  messageBytes: 8388608,
+  totalBytes: 16777216,
+  commands: 3,
 });
 
 export type HAWebSocketCall = (

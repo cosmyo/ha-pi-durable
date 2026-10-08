@@ -2274,3 +2274,7 @@ dialog .pro-field label {
     flex: 1 1 auto;
   }
 }
+/* Home World strip host: the ambient chip/strip mounts here (world/*.js). */
+#world-strip:empty {
+  display: none;
+}

@@ -5,5 +5,3 @@ node_modules/
 **/.local/
 .pi/
 **/package-lock.json
-# Vendored upstream files are kept byte-for-byte (see docs/third-party.md).
-hearth_pi/public/vendor/

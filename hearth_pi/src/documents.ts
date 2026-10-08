@@ -74,8 +74,11 @@ export type Proposal = {
     inputIds: number[];
   };
   attemptedAt?: number;
-  // Set when a person pressed an app ToggleAction instead of a model tool call.
-  origin?: { kind: "app"; appId: string; version: number; elementId: string };
+  // Set when a person pressed an app ToggleAction or a Home World device
+  // instead of a model tool call.
+  origin?:
+    | { kind: "app"; appId: string; version: number; elementId: string }
+    | { kind: "world"; entityId: string };
 };
 export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   kind: "hearth.proposals",

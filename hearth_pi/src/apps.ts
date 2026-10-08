@@ -529,7 +529,7 @@ export function downsample(
     max: Math.max(...values),
   };
 }
-async function pool<T>(
+export async function pool<T>(
   items: T[],
   limit: number,
   run: (item: T) => Promise<void>,
@@ -541,6 +541,85 @@ async function pool<T>(
         await run(item);
     }),
   );
+}
+
+export type ToggleControl = { enabled: boolean; mode: string; reason: string };
+// Whether a person may press an on/off control for one light/switch entity
+// right now (shared by app ToggleActions and Home World devices).
+export function toggleControl(
+  ha: HAClient,
+  permissions: { effectiveMode: string; blocked: boolean },
+  entityId: string,
+  state: string | undefined,
+): ToggleControl {
+  const domain = entityId.split(".")[0]!;
+  const scoped =
+    ha.policy.enabled &&
+    (domain === "light" || domain === "switch") &&
+    ha.policy.entities.includes(entityId) &&
+    ha.policy.services.includes(`${domain}.turn_on`) &&
+    ha.policy.services.includes(`${domain}.turn_off`);
+  const reason = !scoped
+    ? "Outside Hearth's configured service scope; this control stays read-only."
+    : permissions.effectiveMode === "read-only"
+      ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to use this control."
+      : permissions.blocked
+        ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
+        : state !== "on" && state !== "off"
+          ? "Hearth only toggles from a known on/off state."
+          : permissions.effectiveMode === "ask"
+            ? "Ask: you review the exact action before it runs."
+            : "Full access: runs once within the configured scope.";
+  return {
+    enabled:
+      scoped &&
+      permissions.effectiveMode !== "read-only" &&
+      !permissions.blocked &&
+      (state === "on" || state === "off"),
+    mode: permissions.effectiveMode,
+    reason,
+  };
+}
+// A person pressed an on/off control (app ToggleAction or Home World device):
+// the controller picks the service from a fresh read and hands one exact
+// action to the shared Home permissions broker. Never retried.
+export async function pressHomeToggle(
+  runtime: Runtime,
+  ha: HAClient,
+  owner: string,
+  sessionId: number,
+  entityId: string,
+  origin: NonNullable<Proposal["origin"]>,
+) {
+  const settings = await ha.actions.settings(owner);
+  insist(settings.effectiveMode !== "read-only", "home_read_only", 403);
+  insist(!settings.blocked, "home_outcome_unresolved", 409);
+  await runtime.session(owner, sessionId);
+  const current = await ha.state(entityId);
+  insist(
+    current.state === "on" || current.state === "off",
+    "toggle_state_unknown",
+    409,
+  );
+  const service = `${entityId.split(".")[0]}.turn_${current.state === "on" ? "off" : "on"}`;
+  const proposal: Proposal = await ha.actions.press(
+    owner,
+    sessionId,
+    { service, entityId, data: {} },
+    origin,
+  );
+  let readBack: { state: string; observedAt: number } | null = null;
+  if (proposal.status === "accepted")
+    try {
+      const after = await ha.state(entityId);
+      readBack = {
+        state: ha.sanitize(after.state).slice(0, 200),
+        observedAt: Date.now(),
+      };
+    } catch {
+      readBack = null;
+    }
+  return { proposal, readBack, sessionId };
 }
 
 // HTTP-facing household operations. Every method is owner-scoped; another
@@ -677,40 +756,16 @@ export class AppStore {
       history[id] = result;
     }
     const permissions = await this.ha.actions.settings(owner);
-    const controls: Record<
-      string,
-      { enabled: boolean; mode: string; reason: string }
-    > = {};
+    const controls: Record<string, ToggleControl> = {};
     for (const [id, element] of Object.entries(spec.elements)) {
       if (element.type !== "ToggleAction") continue;
       const entityId = element.props.entity as string;
-      const domain = entityId.split(".")[0]!;
-      const value = values[entityId];
-      const scoped =
-        this.ha.policy.enabled &&
-        this.ha.policy.entities.includes(entityId) &&
-        this.ha.policy.services.includes(`${domain}.turn_on`) &&
-        this.ha.policy.services.includes(`${domain}.turn_off`);
-      const reason = !scoped
-        ? "Outside Hearth's configured service scope; this control stays read-only."
-        : permissions.effectiveMode === "read-only"
-          ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to use this control."
-          : permissions.blocked
-            ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
-            : value?.state !== "on" && value?.state !== "off"
-              ? "Hearth only toggles from a known on/off state."
-              : permissions.effectiveMode === "ask"
-                ? "Ask: you review the exact action before it runs."
-                : "Full access: runs once within the configured scope.";
-      controls[id] = {
-        enabled:
-          scoped &&
-          permissions.effectiveMode !== "read-only" &&
-          !permissions.blocked &&
-          (value?.state === "on" || value?.state === "off"),
-        mode: permissions.effectiveMode,
-        reason,
-      };
+      controls[id] = toggleControl(
+        this.ha,
+        permissions,
+        entityId,
+        values[entityId]?.state,
+      );
     }
     return {
       app: lite(meta),
@@ -917,35 +972,13 @@ export class AppStore {
       "app_needs_repair",
       409,
     );
-    const settings = await this.ha.actions.settings(owner);
-    insist(settings.effectiveMode !== "read-only", "home_read_only", 403);
-    insist(!settings.blocked, "home_outcome_unresolved", 409);
-    await this.runtime.session(owner, v.sessionId as number);
-    const entityId = element.props.entity as string;
-    const current = await this.ha.state(entityId);
-    insist(
-      current.state === "on" || current.state === "off",
-      "toggle_state_unknown",
-      409,
-    );
-    const service = `${entityId.split(".")[0]}.turn_${current.state === "on" ? "off" : "on"}`;
-    const proposal: Proposal = await this.ha.actions.press(
+    return pressHomeToggle(
+      this.runtime,
+      this.ha,
       owner,
       v.sessionId as number,
-      { service, entityId, data: {} },
+      element.props.entity as string,
       { kind: "app", appId: meta.id, version: meta.version, elementId },
     );
-    let readBack: { state: string; observedAt: number } | null = null;
-    if (proposal.status === "accepted")
-      try {
-        const after = await this.ha.state(entityId);
-        readBack = {
-          state: this.ha.sanitize(after.state).slice(0, 200),
-          observedAt: Date.now(),
-        };
-      } catch {
-        readBack = null;
-      }
-    return { proposal, readBack, sessionId: v.sessionId };
   }
 }

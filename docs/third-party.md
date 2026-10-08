@@ -8,10 +8,6 @@ Home Assistant and Pi names refer to separate projects, not endorsements. Public
 
 The unreleased local endpoint flow takes design ideas from Pi's built-in `/login llama.cpp` flow and from the MIT-licensed community Pi extensions [Crossbar](https://github.com/Hypabolic/Crossbar) and [pi-lm-providers](https://github.com/orboto/pi-lm-providers): server fingerprinting by public metadata endpoints, hiding embedding/non-tool models, and test-before-save onboarding. Their READMEs were read; no source code was copied. Server response shapes in tests are synthetic fixtures based on public Ollama/LM Studio/OpenAI-compatible API documentation.
 
-## PROTOTYPE: three.js for the Home World diorama
+## Home World
 
-The throwaway Home World prototype (variant B, `hearth_pi/public/world/world-diorama.js`) uses [three.js](https://github.com/mrdoob/three.js) **0.186.1** (npm package `three`, MIT License, copyright 2010-2026 three.js authors), vendored locally because the App's Content-Security-Policy only allows `script-src 'self'` (no CDN).
-
-- Source: `npm pack three@0.186.1` from `https://registry.npmjs.org/three/-/three-0.186.1.tgz` (integrity `sha512-blFeqb49wRCSGUGj7gtpfnSGHy2lwDk94RhUmS1c/hTby70kvChbWpkJ4Pm1390LqzzvTmzgXKHPEafJwCb8jA==`).
-- Copied unmodified into `hearth_pi/public/vendor/three/`: `build/three.module.js` (SHA-256 `9052042d676cb0fdc1ddfefe193053f34b7ac0513a616fdac4535d49987812ea`), `build/three.core.js` (SHA-256 `9edde002b066a9a05676a6127f67735b62baf399bdea529f2f7e31657da769e6`, imported by `three.module.js`) and `LICENSE` (SHA-256 `8b378ebe60e2fe500158cb0ac71cb5e8b7d92953c2abcc63a0eb90499653b5bc`). The 0.186.1 package ships no `three.module.min.js`, so the unminified module pair (about 2.1 MB) is served; it is fetched only when variant B is opened.
-- The files are excluded from Prettier so they stay byte-identical to upstream. No three.js addons, examples, textures or models are included; all prototype art and geometry is original and generated in code. The Muse/“Dash” video that inspired the prototype was used only as a visual reference; none of its branding, assets or code is used.
+Home World art (the pixel house, side-view strip, character, pet and device sprites) is original and drawn procedurally in code under `hearth_pi/public/world/`; no image, sprite, font or 3D library is vendored. The Meta Muse "Dash" handheld demo was used only as a visual reference for the split-screen idea; none of its branding, assets or code is used. The earlier three.js diorama prototype and its vendored copy of three.js were removed.

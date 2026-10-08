@@ -24,6 +24,7 @@ import { Proactive } from "./proactive.js";
 import { FeedbackStore } from "./feedback.js";
 import { MemoryStore } from "./memory.js";
 import { SuggestionStore } from "./suggestions.js";
+import { WorldStore } from "./world.js";
 
 // Cached once per process: the package version shown read-only in the
 // Settings \u2192 About sheet. Never written to, never user-controlled.
@@ -45,7 +46,7 @@ function appVersion(): Promise<string> {
   return appVersionPromise;
 }
 
-async function body(req: IncomingMessage): Promise<unknown> {
+async function body(req: IncomingMessage, limit = 8192): Promise<unknown> {
   insist(
     req.headers["content-type"] === "application/json",
     "json_required",
@@ -53,7 +54,7 @@ async function body(req: IncomingMessage): Promise<unknown> {
   );
   insist(!req.headers["content-encoding"], "encoding_rejected", 415);
   insist(
-    Number(req.headers["content-length"] ?? 0) <= 8192,
+    Number(req.headers["content-length"] ?? 0) <= limit,
     "body_too_large",
     413,
   );
@@ -66,7 +67,7 @@ async function body(req: IncomingMessage): Promise<unknown> {
     );
     req.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
-      if (bytes > 8192) {
+      if (bytes > limit) {
         chunks.length = 0;
         clearTimeout(timer);
         reject(new Fault(413, "body_too_large"));
@@ -158,6 +159,7 @@ export function appServer(
     ).length;
     return { ...today, unread: today.unread + unseen, suggestions: open };
   };
+  const world = new WorldStore(runtime, actions.engine.ha);
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
@@ -437,6 +439,33 @@ export function appServer(
         const result = await feedback.deleteAll(owner, await body(req));
         await proactive.resetSignals(owner);
         return json(res, 200, result);
+      }
+      if (req.method === "GET" && path === "/api/world")
+        return json(res, 200, await world.get(owner));
+      if (req.method === "GET" && path === "/api/world/values")
+        return json(res, 200, await world.values(owner));
+      const worldRoute = /^\/api\/world\/(layout|reset|migrate|actions)$/.exec(
+        path,
+      );
+      if (worldRoute && req.method === "POST") {
+        const operation = worldRoute[1];
+        // A full customization (24 rooms, 64 device places) needs more room
+        // than the default 8 KB body; still bounded and strictly validated.
+        if (operation === "layout")
+          return json(
+            res,
+            200,
+            await world.save(owner, await body(req, 32768)),
+          );
+        if (operation === "migrate")
+          return json(
+            res,
+            200,
+            await world.migrate(owner, await body(req, 32768)),
+          );
+        if (operation === "reset")
+          return json(res, 200, await world.reset(owner, await body(req)));
+        return json(res, 200, await world.press(owner, await body(req)));
       }
       if (req.method === "GET" && path === "/api/apps")
         return json(res, 200, await apps.list(owner));
@@ -725,32 +754,11 @@ export function appServer(
           "/today.js": ["today.js", "text/javascript"],
           "/app.css": ["app.css", "text/css"],
           "/icon.svg": ["icon.svg", "image/svg+xml"],
-          // PROTOTYPE Home World (throwaway UI exploration): exact files only.
-          "/world/prototype-world.js": [
-            "world/prototype-world.js",
-            "text/javascript",
-          ],
-          "/world/world-pixel.js": ["world/world-pixel.js", "text/javascript"],
-          "/world/world-diorama.js": [
-            "world/world-diorama.js",
-            "text/javascript",
-          ],
-          "/world/world-ambient.js": [
-            "world/world-ambient.js",
-            "text/javascript",
-          ],
-          "/world/prototype-world.css": [
-            "world/prototype-world.css",
-            "text/css",
-          ],
-          "/vendor/three/three.module.js": [
-            "vendor/three/three.module.js",
-            "text/javascript",
-          ],
-          "/vendor/three/three.core.js": [
-            "vendor/three/three.core.js",
-            "text/javascript",
-          ],
+          // Home World modules, loaded on demand: exact files only.
+          "/world/world.js": ["world/world.js", "text/javascript"],
+          "/world/house.js": ["world/house.js", "text/javascript"],
+          "/world/strip.js": ["world/strip.js", "text/javascript"],
+          "/world/world.css": ["world/world.css", "text/css"],
         };
         const file = files[path];
         if (file) {

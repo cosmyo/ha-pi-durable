@@ -544,7 +544,7 @@ test("HA WebSocket client sends only allowlisted message types", async () => {
     assert.throws(() => sendAllowed(sink, { type }), /ws_type_not_allowed/);
   assert.equal(sent.length, 0);
   for (const type of HA_WEBSOCKET_TYPES) sendAllowed(sink, { type });
-  assert.equal(sent.length, 3);
+  assert.equal(sent.length, HA_WEBSOCKET_TYPES.length);
 
   const frames: Frames = [];
   await assert.rejects(
