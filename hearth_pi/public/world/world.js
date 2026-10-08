@@ -390,6 +390,17 @@ export function thinkLabel(think, device, room) {
     return "Checking what I may change…";
   return "Thinking…";
 }
+// Markdown → plain speech for the pixel dialogue box (no rendering, text only).
+export function plainSpeech(text) {
+  return String(text)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/(\*\*|__|\*|_|~~|`)(?=\S)([^\n]*?\S)\1/g, "$2")
+    .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/gm, "")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
 // Latest conversation lines for the house's dialogue box (plain text).
 export function recentLines(snapshot, limit = 3) {
   const lines = [];
@@ -399,7 +410,7 @@ export function recentLines(snapshot, limit = 3) {
   for (const entry of entries.slice(-8))
     for (const message of Array.isArray(entry?.model) ? entry.model : []) {
       if (message.role !== "user" && message.role !== "assistant") continue;
-      const text = messageText(message);
+      const text = plainSpeech(messageText(message));
       if (text)
         lines.push({
           who: message.role === "user" ? "You" : "Hearth",

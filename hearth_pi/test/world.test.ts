@@ -1317,3 +1317,31 @@ test("think mode moves the avatar only for tool events naming a drawn device", a
   loop.invalidate();
   assert.equal(queue.length, 0);
 });
+
+test("house dialogue shows plain speech, not raw markdown", async () => {
+  const world = await import(
+    new URL("../public/world/world.js", import.meta.url).href
+  );
+  assert.equal(
+    world.plainSpeech(
+      "## Status\nThe study fan currently reports **off** in `Home Assistant`.\n\n- see [docs](https://example.invalid)",
+    ),
+    "Status\nThe study fan currently reports off in Home Assistant.\nsee docs",
+  );
+  assert.equal(world.plainSpeech("2 * 3 * 4 stays"), "2 * 3 * 4 stays");
+  const lines = world.recentLines({
+    view: {
+      entries: [
+        {
+          model: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "It is **on**." }],
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.deepEqual(lines, [{ who: "Hearth", text: "It is on." }]);
+});
