@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -265,6 +265,11 @@ test("HTTP API: Basic auth, browser-bound CSRF/Origin, strict validation, protec
     const bootstrap = await boot.json();
     assert.equal(bootstrap.entityScopeCount, 2);
     assert.doesNotMatch(JSON.stringify(bootstrap), /private_id_canary/);
+    // The Settings \u2192 About panel reads this read-only version string.
+    const pkg = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    );
+    assert.equal(bootstrap.version, pkg.version);
     const csrf = bootstrap.csrf;
     const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
     assert.match(cookie, /^hearth_browser=/);

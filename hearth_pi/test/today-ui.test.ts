@@ -343,8 +343,14 @@ test("app shell: Today row with unread badge opens the inbox, marks seen, and As
   );
   const footer = document.querySelector(".drawer-footer")!;
   const rows = [...footer.querySelectorAll("button")].map((b) => b.id);
-  assert.equal(rows[0], "today-row");
-  assert(rows.indexOf("proactive-row") > rows.indexOf("permissions-row"));
+  assert.deepEqual(rows, ["today-row", "apps-row", "settings-row"]);
+  // Briefings & watchers and Home permissions moved into the Settings
+  // sheet (still after Today in document order), not the drawer footer.
+  assert(
+    document
+      .getElementById("settings-dialog")!
+      .contains(document.getElementById("proactive-row")),
+  );
   const previous = {
     window: globalThis.window,
     document: globalThis.document,

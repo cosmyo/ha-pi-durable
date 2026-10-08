@@ -142,6 +142,40 @@ const TOOL_META = {
     phrase: (n) => (n > 1 ? `Proposed ${n} actions` : "Proposed an action"),
     args: (a) => [a?.service, a?.entityId].filter(Boolean).join(" · "),
   },
+  ha_automation_config: {
+    icon: "🤖",
+    label: "Read an automation",
+    phrase: (n) => (n > 1 ? `Read ${n} automations` : "Read an automation"),
+    args: (a) => (a?.entityId ? `Automation ${a.entityId}` : ""),
+  },
+  ha_automation_traces: {
+    icon: "🧭",
+    label: "Checked recent runs",
+    phrase: (n) => (n > 1 ? `Checked runs ×${n}` : "Checked recent runs"),
+    args: (a) =>
+      a?.entityId
+        ? `Automation ${a.entityId}${a.limit ? ` · last ${a.limit}` : ""}`
+        : "",
+  },
+  ha_automation_trace_detail: {
+    icon: "🔬",
+    label: "Read one run step by step",
+    phrase: (n) =>
+      n > 1 ? `Read ${n} runs step by step` : "Read one run step by step",
+    args: (a) =>
+      [a?.entityId, a?.runId ? `run ${truncate(a.runId, 12)}` : ""]
+        .filter(Boolean)
+        .join(" · "),
+  },
+  ha_automation_activity: {
+    icon: "📜",
+    label: "Checked logbook and history",
+    phrase: () => "Checked logbook and history",
+    args: (a) =>
+      a?.entityId
+        ? `Automation ${a.entityId}${a.hours ? ` · last ${a.hours} h` : ""}`
+        : "",
+  },
   ha_build_view: {
     icon: "🧩",
     label: "Built a home view",

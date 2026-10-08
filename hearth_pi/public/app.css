@@ -248,7 +248,7 @@ button.primary {
 }
 .session-menu button {
   text-align: left;
-  min-height: 40px;
+  min-height: 44px;
   background: transparent;
   border-color: transparent;
 }
@@ -266,11 +266,6 @@ button.primary {
   gap: 8px;
   text-align: left;
   background: transparent;
-}
-.drawer-note {
-  font-size: 0.74rem;
-  line-height: 1.6;
-  margin: 4px 0 0;
 }
 #main {
   flex: 1;
@@ -818,6 +813,11 @@ dialog {
   border: 1px solid var(--line);
   border-radius: 18px;
   max-width: min(620px, 94vw);
+  /* Every sheet scrolls internally once it is taller than the viewport,
+     not just on compact screens: short landscape phones and small desktop
+     windows need this just as much. */
+  max-height: min(88vh, 860px);
+  overflow: auto;
   padding: 26px;
   line-height: 1.65;
 }
@@ -860,6 +860,36 @@ dialog .actions {
 .model-picker p {
   margin: 4px 0;
   color: var(--muted);
+}
+/* Settings sheet: grouped iOS-Settings-style list rows, each one entry
+   point into an existing dialog (Home permissions, Account, Briefings &
+   watchers, Insights, Home World) plus a static About group. */
+.settings-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin: 14px 0;
+}
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.settings-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  min-height: 48px;
+}
+.settings-group > .settings-list-row + .settings-list-row {
+  border-top: 1px solid var(--line);
 }
 #account-providers {
   display: flex;
@@ -1009,7 +1039,10 @@ dialog .actions {
     padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
   }
   button {
-    min-height: 40px;
+    /* 44px minimum touch target on phones (WCAG 2.5.5 / Apple HIG), not 40px:
+       this is the baseline every unstyled button inherits, including the
+       drawer footer rows, dialog actions and Settings list rows. */
+    min-height: 44px;
     padding: 8px 12px;
   }
   select,
@@ -1036,6 +1069,12 @@ dialog .actions {
     z-index: 40;
     transform: translateX(-100%);
     box-shadow: 0 0 24px #000a;
+    /* Short landscape phones (COMPACT_QUERY's max-height branch) can be too
+       short for drawer-head + drawer-actions + sessions + the footer rows
+       to all fit; #sessions alone scrolling isn't enough once it is
+       squeezed to zero height, which left Today/Apps/Settings unreachable
+       without this. */
+    overflow-y: auto;
   }
   @media (prefers-reduced-motion: no-preference) {
     #drawer {
@@ -1311,6 +1350,15 @@ dialog .actions {
 }
 .app-empty {
   font-size: 0.86rem;
+}
+.app-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.app-suggestions .chip {
+  min-height: 44px;
 }
 #pinned-apps {
   margin-bottom: 16px;
@@ -1669,7 +1717,7 @@ h3.app-text {
 }
 .app-tab {
   border-radius: 18px;
-  min-height: 40px;
+  min-height: 44px;
   font-size: 0.84rem;
   flex-shrink: 0;
 }
@@ -1860,8 +1908,15 @@ h3.app-text {
 #insights-dialog .actions button {
   min-height: 44px;
 }
+.today-empty h3 {
+  margin: 0 0 6px;
+}
 .today-empty p {
   margin: 4px 0;
+  color: var(--muted);
+}
+.today-empty .approve {
+  margin-top: 10px;
 }
 .today-footnote {
   font-size: 0.78rem;
@@ -2067,4 +2122,15 @@ dialog .pro-field label {
   .today-card {
     padding: 12px;
   }
+}
+/* Keep the drawer's Settings status on one line beside its label. */
+#settings-row {
+  gap: 12px;
+}
+#settings-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
 }

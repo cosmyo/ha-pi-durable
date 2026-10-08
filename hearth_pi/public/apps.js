@@ -69,16 +69,37 @@ function appCard(item, handlers, compact = false) {
   }
   return card;
 }
+// The four built-in starting templates (src/app-spec.ts TEMPLATES), offered
+// as one-tap drafts when the household has no apps yet. Each only drafts a
+// message into the composer; you still review and press Send.
+const APP_TEMPLATE_SUGGESTIONS = [
+  "Laundry",
+  "Bedtime lock-up",
+  "3D print monitor",
+  "Maintenance checklist",
+];
 export function renderAppList(container, items, handlers) {
   const fragment = document.createDocumentFragment();
-  if (!items.length)
-    fragment.append(
+  if (!items.length) {
+    const empty = node("div", "", "app-empty");
+    empty.append(
       node(
         "p",
-        "No apps yet. Ask Hearth in a chat, for example “Make me a laundry app.”",
-        "muted app-empty",
+        "No apps yet. Pick a starting point below, or describe your own in a chat.",
+        "muted",
       ),
     );
+    const suggestions = node("div", "", "app-suggestions");
+    for (const name of APP_TEMPLATE_SUGGESTIONS) {
+      const suggest = button(name, "chip", `Make me a ${name} app`);
+      suggest.addEventListener("click", () =>
+        handlers.draft(`Make me a ${name} app`),
+      );
+      suggestions.append(suggest);
+    }
+    empty.append(suggestions);
+    fragment.append(empty);
+  }
   for (const item of items) fragment.append(appCard(item, handlers));
   container.replaceChildren(fragment);
 }

@@ -82,10 +82,18 @@ let csrf = "",
   feedbackSession = null,
   feedbackItems = {},
   feedbackRows = new Map(),
-  feedbackUi = new Map();
+  feedbackUi = new Map(),
+  permissionModeLabel = "Read-only",
+  accountSummaryText = "Account";
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
+// The Settings drawer row shows one compact status line combining Home
+// permissions and Account, e.g. "Full access \u00b7 ChatGPT \u2713 \u00b7 Claude \u2713".
+function paintSettingsSummary() {
+  $("settings-summary").textContent =
+    `${permissionModeLabel} \u00b7 ${accountSummaryText}`;
+}
 function setConnection(text) {
   $("connection").textContent = text;
   $("connection").hidden = text === "Connected";
@@ -143,7 +151,7 @@ async function refreshAccountSummary() {
   accountStatuses = new Map(items.map((i) => [i.provider, i]));
   if (!authProviders.includes(activeAuthProvider))
     activeAuthProvider = authProviders[0] ?? "";
-  $("account-summary").textContent = items.length
+  accountSummaryText = items.length
     ? items
         .map(
           (i) =>
@@ -151,6 +159,8 @@ async function refreshAccountSummary() {
         )
         .join(" · ")
     : "Account";
+  $("account-summary").textContent = accountSummaryText;
+  paintSettingsSummary();
   renderAccountProviders();
 }
 function renderAccountProviders() {
@@ -192,6 +202,10 @@ async function bootstrap() {
   $("provider").textContent = status.provider;
   provider = status.provider;
   $("account-local").hidden = provider !== "local";
+  $("about-version").textContent = status.version
+    ? `Hearth Pi v${status.version}`
+    : "Hearth Pi";
+  $("about-provider").textContent = `Inference provider: ${status.provider}`;
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
@@ -213,6 +227,8 @@ function updatePermissions(value) {
         : "Read-only";
   $("permissions-mode").textContent = modeLabel;
   $("permissions-mode-row").textContent = modeLabel;
+  permissionModeLabel = modeLabel;
+  paintSettingsSummary();
   homeSafety = `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
   $("permission-summary").textContent =
     `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
@@ -1033,6 +1049,7 @@ $("open-local").addEventListener("click", () => {
   void refreshLocal();
 });
 function openAccount() {
+  closeSettingsSheet();
   $("account").setAttribute("aria-expanded", "true");
   $("account-dialog").showModal();
   renderAccountProviders();
@@ -1219,6 +1236,10 @@ const appMessage = (error, prefix) =>
 const appHandlers = {
   open: (id) => void openApp(id),
   pin: (id, pinned) => void pinApp(id, pinned),
+  draft: (prompt) => {
+    $("apps-dialog").close();
+    void draftFromApp(prompt, "New app");
+  },
 };
 function appResultCard(message) {
   return message.role === "toolResult" && APP_TOOL.test(message.toolName)
@@ -1559,8 +1580,38 @@ document.addEventListener("keydown", (event) => {
     first.focus();
   }
 });
+// --- Settings: one drawer-footer row opens a grouped sheet; each list row
+// closes it and opens the entry point it has always opened (same dialogs,
+// same ids, same logic \u2014 only the launch point moved). ---
+function closeSettingsSheet() {
+  if ($("settings-dialog").open) $("settings-dialog").close();
+}
+function openSettings() {
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+  $("settings-dialog").showModal();
+  $("settings-row").setAttribute("aria-expanded", "true");
+}
+$("settings-row").addEventListener("click", openSettings);
+$("settings-close").addEventListener("click", () =>
+  $("settings-dialog").close(),
+);
+$("settings-dialog").addEventListener("close", () => {
+  $("settings-row").setAttribute("aria-expanded", "false");
+});
+function openAbout() {
+  closeSettingsSheet();
+  $("about-dialog").showModal();
+}
+$("settings-about-row").addEventListener("click", openAbout);
+$("about-close").addEventListener("click", () => $("about-dialog").close());
+$("settings-insights-row").addEventListener("click", () => {
+  closeSettingsSheet();
+  openInsights();
+});
 // --- Sheets: Home permissions and Model open as dialogs from several entry points ---
 function openPermissions() {
+  closeSettingsSheet();
   $("permissions-dialog").showModal();
   $("permissions-toggle").setAttribute("aria-expanded", "true");
   $("permissions-row").setAttribute("aria-expanded", "true");
@@ -1581,6 +1632,7 @@ function openModel() {
 $("model-chip").addEventListener("click", openModel);
 $("model-close").addEventListener("click", () => $("model-dialog").close());
 $("open-world").addEventListener("click", () => {
+  closeSettingsSheet();
   if (compact()) closeDrawer();
   void openWorld();
 });
@@ -1657,6 +1709,15 @@ const todayHandlers = {
   openApp: (appId) => {
     $("today-dialog").close();
     void openApp(appId);
+  },
+  createWatcher: () => {
+    $("today-dialog").close();
+    void openProactive().then(() => {
+      const details = document.getElementById("watcher-add-details");
+      if (!details) return;
+      details.open = true;
+      details.scrollIntoView({ block: "center" });
+    });
   },
 };
 async function openToday() {
@@ -1805,6 +1866,7 @@ const proactiveHandlers = {
   },
 };
 async function openProactive() {
+  closeSettingsSheet();
   if (compact() && document.body.classList.contains("drawer-open"))
     closeDrawer();
   proactiveFeedback("");
@@ -1826,12 +1888,15 @@ async function loadInsights() {
     $("insights-feedback").textContent = `Could not load: ${error.message}.`;
   }
 }
-$("open-insights").addEventListener("click", () => {
-  $("proactive-dialog").close();
+function openInsights() {
   $("insights-feedback").textContent = "";
   $("insights-export-box").hidden = true;
   $("insights-dialog").showModal();
   void loadInsights();
+}
+$("open-insights").addEventListener("click", () => {
+  $("proactive-dialog").close();
+  openInsights();
 });
 $("insights-close").addEventListener("click", () =>
   $("insights-dialog").close(),

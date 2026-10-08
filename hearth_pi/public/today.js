@@ -153,18 +153,23 @@ export function renderToday(container, data, handlers) {
   if (!data.cards.length) {
     const empty = node("div", "", "today-empty");
     empty.append(
+      node("h3", "Nothing new yet"),
       node(
         "p",
-        "Nothing new. Cards from your watchers and briefings appear here.",
-      ),
-      node(
-        "p",
-        data.snoozed
-          ? `${data.snoozed} snoozed card${data.snoozed === 1 ? "" : "s"} will come back later.`
-          : "Turn on a briefing or add a watcher in Briefings & watchers.",
-        "muted",
+        "Watchers and briefings are checks Hearth's controller runs for you \u2014 a door left open, a load of laundry finished, a morning summary \u2014 and leave a card here when something is worth seeing. They only read Home Assistant: they never control a device, call a service or start a chat on their own.",
       ),
     );
+    if (data.snoozed)
+      empty.append(
+        node(
+          "p",
+          `${data.snoozed} snoozed card${data.snoozed === 1 ? "" : "s"} will come back later.`,
+          "muted",
+        ),
+      );
+    const create = button("Create a watcher", "approve", "Create a watcher");
+    create.addEventListener("click", () => handlers.createWatcher());
+    empty.append(create);
     fragment.append(empty);
   }
   for (const card of data.cards)
@@ -314,6 +319,7 @@ export function watcherFromForm(values) {
 }
 function addWatcherForm(handlers) {
   const details = node("details", "", "pro-add");
+  details.id = "watcher-add-details";
   details.append(node("summary", "Add a watcher"));
   const kind = select(KIND_CHOICES, "to");
   const entity = document.createElement("input");

@@ -23,6 +23,26 @@ import { AppStore } from "./apps.js";
 import { Proactive } from "./proactive.js";
 import { FeedbackStore } from "./feedback.js";
 
+// Cached once per process: the package version shown read-only in the
+// Settings \u2192 About sheet. Never written to, never user-controlled.
+let appVersionPromise: Promise<string> | undefined;
+function appVersion(): Promise<string> {
+  appVersionPromise ??= readFile(
+    fileURLToPath(new URL("../package.json", import.meta.url)),
+    "utf8",
+  )
+    .then((raw) => {
+      const value: unknown = JSON.parse(raw);
+      const version =
+        value && typeof value === "object" && "version" in value
+          ? (value as { version: unknown }).version
+          : undefined;
+      return typeof version === "string" ? version : "unknown";
+    })
+    .catch(() => "unknown");
+  return appVersionPromise;
+}
+
 async function body(req: IncomingMessage): Promise<unknown> {
   insist(
     req.headers["content-type"] === "application/json",
@@ -168,6 +188,7 @@ export function appServer(
       if (req.method === "GET" && path === "/api/bootstrap")
         return json(res, 200, {
           csrf: boundary.bootstrap(req, res, owner),
+          version: await appVersion(),
           provider: config.provider,
           anthropicAuthEnabled: config.anthropicAuthEnabled === true,
           defaultThinkingLevel: runtime.defaultThinkingLevel,

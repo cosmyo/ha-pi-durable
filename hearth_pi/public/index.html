@@ -57,40 +57,15 @@
             <span>Apps</span>
             <span id="apps-count" class="muted"></span>
           </button>
-          <button id="open-world" type="button">
-            <span>Home World</span>
-            <span class="muted">Prototype</span>
-          </button>
           <button
-            id="permissions-row"
+            id="settings-row"
             type="button"
-            aria-controls="permissions-dialog"
+            aria-controls="settings-dialog"
             aria-expanded="false"
           >
-            <span>Home permissions</span>
-            <span id="permissions-mode-row" class="muted">Read-only</span>
+            <span>Settings</span>
+            <span id="settings-summary" class="muted"></span>
           </button>
-          <button
-            id="proactive-row"
-            type="button"
-            aria-controls="proactive-dialog"
-            aria-expanded="false"
-          >
-            <span>Briefings &amp; watchers</span>
-            <span id="proactive-summary" class="muted"></span>
-          </button>
-          <button
-            id="account"
-            type="button"
-            aria-controls="account-dialog"
-            aria-expanded="false"
-          >
-            <span id="account-summary">Account</span>
-          </button>
-          <p class="muted drawer-note">
-            Independent community app.<br />Pi Durable is experimental.
-          </p>
-          <span class="pill" id="provider">Provider loading</span>
         </div>
       </nav>
       <div id="main">
@@ -256,6 +231,76 @@
       <div class="actions">
         <button id="apps-new" type="button">Ask Hearth for an app</button>
         <button id="apps-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="settings-dialog" aria-labelledby="settings-heading">
+      <h2 id="settings-heading">Settings</h2>
+      <div class="settings-groups">
+        <section class="settings-group" aria-label="Home">
+          <button
+            id="permissions-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="permissions-dialog"
+          >
+            <span>Home permissions</span>
+            <span id="permissions-mode-row" class="muted">Read-only</span>
+          </button>
+          <button
+            id="account"
+            type="button"
+            class="settings-list-row"
+            aria-controls="account-dialog"
+          >
+            <span id="account-summary">Account</span>
+          </button>
+          <button
+            id="proactive-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="proactive-dialog"
+          >
+            <span>Briefings &amp; watchers</span>
+            <span id="proactive-summary" class="muted"></span>
+          </button>
+          <button
+            id="settings-insights-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="insights-dialog"
+          >
+            <span>Insights</span>
+          </button>
+          <button id="open-world" type="button" class="settings-list-row">
+            <span>Home World</span>
+            <span class="muted">Prototype</span>
+          </button>
+        </section>
+        <section class="settings-group" aria-label="About">
+          <button
+            id="settings-about-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="about-dialog"
+          >
+            <span>About</span>
+            <span id="provider" class="muted">Provider loading</span>
+          </button>
+        </section>
+      </div>
+      <div class="actions">
+        <button id="settings-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="about-dialog" aria-labelledby="about-heading">
+      <h2 id="about-heading">About Hearth Pi</h2>
+      <p id="about-version" class="muted"></p>
+      <p class="muted">
+        Independent community app.<br />Pi Durable is experimental.
+      </p>
+      <p id="about-provider" class="muted"></p>
+      <div class="actions">
+        <button id="about-close" type="button">Close</button>
       </div>
     </dialog>
     <dialog id="today-dialog" aria-labelledby="today-heading">

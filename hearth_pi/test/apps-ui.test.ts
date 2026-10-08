@@ -416,13 +416,21 @@ test("transcript app card shows diff summary and Open/Pin, with hostile titles a
   }
 });
 
-test("app shell: Apps row sits between conversations and Home permissions; opening, ticking and AskButton draft without sending", async () => {
+test("app shell: Apps row sits between conversations and Settings; opening, ticking and AskButton draft without sending", async () => {
   const { window, document } = parseHTML(
     await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   );
   const footer = document.querySelector(".drawer-footer")!;
   const rows = [...footer.querySelectorAll("button")].map((b) => b.id);
-  assert(rows.indexOf("apps-row") < rows.indexOf("permissions-row"));
+  assert.deepEqual(rows, ["today-row", "apps-row", "settings-row"]);
+  // Home permissions, Account, Briefings & watchers and Insights moved into
+  // the Settings sheet, not the drawer footer; their ids/dialogs still work.
+  assert.equal(document.querySelector(".drawer-footer #permissions-row"), null);
+  assert(
+    document
+      .getElementById("settings-dialog")!
+      .contains(document.getElementById("permissions-row")),
+  );
   assert(
     document
       .getElementById("sessions")!
