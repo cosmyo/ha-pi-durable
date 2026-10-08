@@ -508,6 +508,32 @@ export function appServer(
           "/render.js": ["render.js", "text/javascript"],
           "/app.css": ["app.css", "text/css"],
           "/icon.svg": ["icon.svg", "image/svg+xml"],
+          // PROTOTYPE Home World (throwaway UI exploration): exact files only.
+          "/world/prototype-world.js": [
+            "world/prototype-world.js",
+            "text/javascript",
+          ],
+          "/world/world-pixel.js": ["world/world-pixel.js", "text/javascript"],
+          "/world/world-diorama.js": [
+            "world/world-diorama.js",
+            "text/javascript",
+          ],
+          "/world/world-ambient.js": [
+            "world/world-ambient.js",
+            "text/javascript",
+          ],
+          "/world/prototype-world.css": [
+            "world/prototype-world.css",
+            "text/css",
+          ],
+          "/vendor/three/three.module.js": [
+            "vendor/three/three.module.js",
+            "text/javascript",
+          ],
+          "/vendor/three/three.core.js": [
+            "vendor/three/three.core.js",
+            "text/javascript",
+          ],
         };
         const file = files[path];
         if (file) {

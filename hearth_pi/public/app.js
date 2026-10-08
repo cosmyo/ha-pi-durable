@@ -277,6 +277,38 @@ function controls() {
     ".canvas-question, .home-starters button",
   ))
     button.disabled = $("send").disabled || selectedKind !== "home";
+  forwardWorld();
+}
+// PROTOTYPE Home World hook (public/world/, throwaway exploration): loaded
+// on demand by dynamic import so the app is unchanged if it never opens or
+// fails to load. It receives the snapshot already shown here, read-only, and
+// can only draft questions through draftQuestion.
+let worldModule = null,
+  worldSnapshot = null;
+function worldInput() {
+  return {
+    snapshot: worldSnapshot,
+    busy,
+    kind: selected ? selectedKind : "home",
+    canDraft: !$("message").disabled && selectedKind === "home",
+    draftQuestion,
+    buildViewPrompt: BUILD_VIEW_PROMPT,
+  };
+}
+function forwardWorld() {
+  try {
+    worldModule?.updateWorld(worldInput());
+  } catch {
+    /* The prototype must never break the chat. */
+  }
+}
+async function openWorld() {
+  try {
+    worldModule ??= await import("./world/prototype-world.js");
+    worldModule.openWorld(worldInput());
+  } catch {
+    feedback("Home World prototype could not load. Chat is unaffected.");
+  }
 }
 function draftQuestion(content) {
   if ($("message").disabled || selectedKind !== "home") return;
@@ -287,10 +319,10 @@ function draftQuestion(content) {
     "Question drafted. Review and press Send; no request has been admitted yet.",
   );
 }
+const BUILD_VIEW_PROMPT =
+  "Discover the exact HA entities you are allowed to read, then use ha_build_view to build a useful status canvas with sensible named sections. Use controller-read facts; do not invent entities/rooms or call services. If the scope is empty, explain that.";
 $("build-view").addEventListener("click", () =>
-  draftQuestion(
-    "Discover the exact HA entities you are allowed to read, then use ha_build_view to build a useful status canvas with sensible named sections. Use controller-read facts; do not invent entities/rooms or call services. If the scope is empty, explain that.",
-  ),
+  draftQuestion(BUILD_VIEW_PROMPT),
 );
 $("home-briefing").addEventListener("click", () =>
   draftQuestion(
@@ -376,6 +408,7 @@ function snapshot(value) {
     );
   }
   busy = !!value.view.docs["pi.live"]?.run;
+  worldSnapshot = value;
   $("task-status").textContent = busy
     ? "Durable task in progress"
     : value.lastInput?.status === "unanswered"
@@ -486,6 +519,7 @@ async function select(session) {
   actionSignature = "";
   canvasSignature = "";
   messageSignature = "";
+  worldSnapshot = null;
   renderCanvas($("home-canvas"), null, draftQuestion);
   $("title").textContent = session.title;
   feedback("");
@@ -641,6 +675,7 @@ function showWelcome() {
   canvasSignature = "";
   messageSignature = "";
   busy = false;
+  worldSnapshot = null;
   $("title").textContent = "A little warmth. A little more certainty.";
   $("safety").textContent = "Read-only by default";
   $("task-status").textContent = "Choose a session";
@@ -1192,6 +1227,14 @@ function openModel() {
 }
 $("model-chip").addEventListener("click", openModel);
 $("model-close").addEventListener("click", () => $("model-dialog").close());
+$("open-world").addEventListener("click", () => {
+  if (compact()) closeDrawer();
+  void openWorld();
+});
+window.addEventListener("hashchange", () => {
+  if (/^#world=[ABC]$/.test(window.location.hash)) void openWorld();
+});
+if (/^#world=[ABC]$/.test(window.location.hash)) void openWorld();
 $("model-dialog").addEventListener("close", () => {
   $("model-chip").setAttribute("aria-expanded", "false");
 });

@@ -80,7 +80,15 @@ for (const file of [
   ".dockerignore",
 ])
   await access(`hearth_pi/${file}`);
-for (const file of ["app.js", "render.js"]) {
+for (const file of [
+  "app.js",
+  "render.js",
+  // PROTOTYPE Home World modules (throwaway UI exploration).
+  "world/prototype-world.js",
+  "world/world-pixel.js",
+  "world/world-diorama.js",
+  "world/world-ambient.js",
+]) {
   const result = spawnSync(process.execPath, [
     "--check",
     `hearth_pi/public/${file}`,
