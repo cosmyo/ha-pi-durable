@@ -1946,3 +1946,46 @@ test("room labels stay inside the room's visible part as the map pans", async ()
   assert.equal(world.scrollLeftFor(360, 900, fixture.grid.cols, kitchen), 320);
   assert.equal(world.scrollLeftFor(360, 900, fixture.grid.cols, null), 0);
 });
+
+test("wide value tags side by side are thinned; a living room is home base", async () => {
+  const world = await import(
+    new URL("../public/world/world.js", import.meta.url).href
+  );
+  const tag = (entityId: string, x: number, value: string) => ({
+    entityId,
+    room: "area:hall",
+    kind: "sensor",
+    observedAt: 1,
+    x,
+    y: 2,
+    value,
+  });
+  const shown = world.visibleTagIds([
+    tag("sensor.a", 3, "Unavailable"),
+    tag("sensor.b", 4.4, "Unavailable"),
+    tag("sensor.c", 9, "21 °C"),
+  ]);
+  assert.equal(shown.size, 2);
+  assert.ok(shown.has("sensor.c"));
+  const room = (id: string, name: string) => ({
+    id,
+    name,
+    x: 0,
+    y: 0,
+    w: 4,
+    h: 4,
+  });
+  const structure = {
+    rooms: [room("area:bath", "Bath"), room("area:living", "Living Room")],
+    devices: [
+      ...Array.from({ length: 5 }, (_, i) => ({
+        room: "area:bath",
+        entityId: `sensor.b${i}`,
+      })),
+      { room: "area:living", entityId: "light.l" },
+    ],
+  };
+  assert.equal(world.spawnRoom(structure).id, "area:living");
+  structure.devices = structure.devices.filter((d) => d.room !== "area:living");
+  assert.equal(world.spawnRoom(structure).id, "area:bath");
+});

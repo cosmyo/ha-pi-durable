@@ -278,16 +278,17 @@ export function spawnRoom(structure) {
   const devices = structure.devices ?? [];
   const deviceCount = (room) =>
     devices.filter((d) => d.room === room.id).length;
-  let best = rooms[0];
+  // A living/kitchen-like room with devices is home base; otherwise the
+  // room with the most devices.
+  const homely = rooms.filter(
+    (r) => HOME_ROOM_NAME.test(r.name) && deviceCount(r) > 0,
+  );
+  const pool = homely.length ? homely : rooms;
+  let best = pool[0];
   let bestCount = deviceCount(best);
-  for (const room of rooms.slice(1)) {
+  for (const room of pool.slice(1)) {
     const count = deviceCount(room);
-    const better =
-      count > bestCount ||
-      (count === bestCount &&
-        HOME_ROOM_NAME.test(room.name) &&
-        !HOME_ROOM_NAME.test(best.name));
-    if (better) {
+    if (count > bestCount) {
       best = room;
       bestCount = count;
     }
@@ -348,8 +349,13 @@ export function visibleTagIds(devices, limit = TAG_LIMIT_PER_ROOM) {
     const kept = [];
     for (const device of ranked) {
       if (kept.length >= limit) break;
+      // Tags are centered under their device and as wide as their text
+      // (about 0.42 grid cells per character at the rendered font size).
+      const half = (d) => (0.6 + String(d.value ?? "").length * 0.42) / 2;
       const overlaps = kept.some(
-        (k) => Math.abs(k.x - device.x) < 1.1 && Math.abs(k.y - device.y) < 0.6,
+        (k) =>
+          Math.abs(k.x - device.x) < half(k) + half(device) &&
+          Math.abs(k.y - device.y) < 0.6,
       );
       if (overlaps) continue;
       kept.push(device);
