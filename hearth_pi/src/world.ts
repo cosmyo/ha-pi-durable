@@ -184,7 +184,8 @@ export class WorldStore {
       "rate_limit",
       429,
     );
-    const entities = await this.drawn();
+    const projection = await this.projection();
+    const entities = worldEntities(this.scope, projection);
     let night = false;
     let nightSource: "sun" | "clock" = "clock";
     if (this.scope.includes("sun.sun"))
@@ -226,7 +227,12 @@ export class WorldStore {
           ),
           kind,
           available: state !== "unavailable",
-          anomaly: anomalyOf(kind, deviceClass, state, night),
+          anomaly: anomalyOf(kind, deviceClass, state, night, {
+            lastChangedMs: reading.lastChangedMs,
+            nowMs: this.now(),
+            platform: projection?.entities[id]?.platform ?? null,
+            isGroup: reading.isGroup,
+          }),
           observedAt: this.now(),
         };
       } catch {

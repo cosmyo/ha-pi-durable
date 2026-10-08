@@ -64,9 +64,16 @@ export type RegistryProjection = {
   areas: { id: string; name: string; level: string }[];
   // Exactly the in-scope entities, with their effective area and device name.
   // secondary: diagnostic/config category, hidden or disabled in HA.
+  // platform: the integration that owns the entity (e.g. "mobile_app",
+  // "group"), used only to calm Home World's anomaly list, never shown.
   entities: Record<
     string,
-    { area: string | null; device: string | null; secondary?: boolean }
+    {
+      area: string | null;
+      device: string | null;
+      secondary?: boolean;
+      platform?: string;
+    }
   >;
 };
 export type WorldRoom = {
@@ -149,7 +156,12 @@ export function projectRegistry(
   const inScope = new Set(scope.filter((id) => entityPattern.test(id)));
   const entities = new Map<
     string,
-    { area: string | null; deviceId: string | null; secondary: boolean }
+    {
+      area: string | null;
+      deviceId: string | null;
+      secondary: boolean;
+      platform: string | null;
+    }
   >();
   for (const e of records(raw.entities)) {
     const id = e.entity_id;
@@ -169,6 +181,10 @@ export function projectRegistry(
         e.entity_category === "config" ||
         !!e.hidden_by ||
         !!e.disabled_by,
+      platform:
+        typeof e.platform === "string" && e.platform.length <= 32
+          ? e.platform
+          : null,
     });
   }
   const wantedDevices = new Set(
@@ -194,6 +210,7 @@ export function projectRegistry(
       area: e?.area ?? device?.area ?? null,
       device: device?.name || null,
       ...(e?.secondary ? { secondary: true } : {}),
+      ...(e?.platform ? { platform: e.platform } : {}),
     };
   }
   const wantedAreas = new Set(
@@ -864,14 +881,46 @@ export type Anomaly =
   | "open_at_night"
   | "low_battery"
   | "leak";
+// A device/app platform that never reliably reports: a phone's own sensors
+// (Focus, battery, ... from the mobile_app integration) and multi-entity
+// groups (a Hue entertainment area, "group." domain helpers), which read
+// "unavailable" between member updates by design, not because anything
+// broke.
+const UNREPORTING_PLATFORMS = new Set(["mobile_app", "group"]);
+// How long a physical device must have reported "unavailable" (via its last
+// state change) before Home World calls it out: long enough that a Wi-Fi
+// blip or a brief HA restart never shows up, short enough that a device that
+// is actually gone still gets noticed.
+export const UNAVAILABLE_SETTLE_MS = 10 * 60 * 1000;
+export type AnomalyHints = {
+  // Milliseconds since epoch the entity's state last changed, or 0 when
+  // unknown (treated as not yet persistent, calm by default).
+  lastChangedMs?: number;
+  nowMs?: number;
+  // The registry integration that owns the entity (projectRegistry's
+  // `platform`), or null when unknown.
+  platform?: string | null;
+  // A multi-entity group detected from its live attributes (entity_id list,
+  // Hue entertainment area, ...), independent of registry platform.
+  isGroup?: boolean;
+};
 // Calm by default: only these states glint.
 export function anomalyOf(
   kind: DeviceKind,
   deviceClass: string,
   state: string,
   night: boolean,
+  hints: AnomalyHints = {},
 ): Anomaly {
-  if (state === "unavailable") return "unavailable";
+  if (state === "unavailable") {
+    const unreporting =
+      (hints.platform && UNREPORTING_PLATFORMS.has(hints.platform)) ||
+      hints.isGroup;
+    const persistent =
+      (hints.lastChangedMs ?? 0) > 0 &&
+      (hints.nowMs ?? 0) - (hints.lastChangedMs ?? 0) >= UNAVAILABLE_SETTLE_MS;
+    return !unreporting && persistent ? "unavailable" : "";
+  }
   const open = state === "on" || state === "open" || state === "opening";
   if (
     night &&

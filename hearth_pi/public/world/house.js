@@ -7,6 +7,7 @@
 import {
   ANOMALY_TEXT,
   PALETTES,
+  attentionView,
   button,
   clamp,
   createDeviceCard,
@@ -477,6 +478,7 @@ export function createHouse(ctx, { onClose }) {
     staticKey = "",
     drag = null,
     selectedRoom = "",
+    attentionExpanded = false,
     announced = new Set();
   const canvas = el("canvas", {
     className: "wh-canvas",
@@ -776,7 +778,7 @@ export function createHouse(ctx, { onClose }) {
             text: "Couldn't read Home Assistant areas, so every device is in the Unassigned shed for now.",
           }),
         );
-      const odd = devices.filter((d) => d.anomaly);
+      const attention = attentionView(devices);
       if (ctx.think.busy)
         body.append(el("p", { className: "wh-status", text: currentLabel() }));
       for (const line of recentLines(ctx.snapshot, 2))
@@ -792,16 +794,38 @@ export function createHouse(ctx, { onClose }) {
             ],
           ),
         );
-      if (odd.length) {
+      if (attention.items.length || attention.group) {
         const list = el("div", { className: "wh-attention" });
         list.append(el("span", { className: "wh-who", text: "Needs a look" }));
-        for (const d of odd) {
+        for (const d of attention.items) {
           const b = button(
             `⚠ ${d.name} · ${ANOMALY_TEXT[d.anomaly]}`,
             "wh-attention-item",
           );
           b.addEventListener("click", () => ctx.select(d.entityId));
           list.append(b);
+        }
+        // Many devices reading "unavailable" at once (a Wi-Fi outage, a HA
+        // restart) collapse into one line instead of a wall of warnings.
+        if (attention.group && !attentionExpanded) {
+          const b = button(
+            `⚠ ${attention.group.length} devices unavailable · Show`,
+            "wh-attention-item",
+          );
+          b.addEventListener("click", () => {
+            attentionExpanded = true;
+            render();
+          });
+          list.append(b);
+        } else if (attention.group) {
+          for (const d of attention.group) {
+            const b = button(
+              `⚠ ${d.name} · ${ANOMALY_TEXT[d.anomaly]}`,
+              "wh-attention-item",
+            );
+            b.addEventListener("click", () => ctx.select(d.entityId));
+            list.append(b);
+          }
         }
         body.append(list);
       }

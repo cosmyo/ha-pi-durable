@@ -7,6 +7,7 @@
 import {
   ANOMALY_TEXT,
   PALETTES,
+  attentionView,
   button,
   clamp,
   createDeviceCard,
@@ -123,7 +124,9 @@ export function createStrip(ctx) {
   function summaryText() {
     const structure = ctx.structure;
     if (!structure) return "Home World";
-    const odd = devices.filter((d) => d.anomaly).length;
+    // The strip chip's count reflects the same filtered "Needs a look" list
+    // as the full house view, not every raw anomaly flag.
+    const odd = attentionView(devices).total;
     if (!structure.rooms.length) return "Home World · no devices in scope";
     return `Home · ${structure.rooms.length} room${structure.rooms.length === 1 ? "" : "s"} · ${devices.length} device${devices.length === 1 ? "" : "s"}${odd ? ` · ⚠ ${odd}` : ""}`;
   }

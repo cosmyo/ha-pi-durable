@@ -29,6 +29,7 @@ import {
   roomSize,
   validateCustom,
   worldEntities,
+  UNAVAILABLE_SETTLE_MS,
   WORLD_GRID,
   WORLD_LIMITS,
 } from "../src/world-layout.js";
@@ -123,7 +124,10 @@ const REGISTRY = {
     { entity_id: "camera.private", area_id: "kitchen" },
   ],
 };
-const STATES: Record<string, [string, Record<string, unknown>]> = {
+// Third tuple entry: minutes since last_changed (default 20, well past the
+// unavailable settle window) so existing anomaly expectations keep meaning
+// "genuinely stuck", not "just read".
+const STATES: Record<string, [string, Record<string, unknown>, number?]> = {
   "light.kitchen_ceiling": ["on", { friendly_name: "Kitchen ceiling" }],
   "switch.coffee_maker": ["off", { friendly_name: "Coffee maker" }],
   "sensor.kitchen_temperature": [
@@ -179,7 +183,10 @@ const STATES: Record<string, [string, Record<string, unknown>]> = {
 };
 
 type Frames = Record<string, unknown>[];
-function registrySocket(frames: Frames, registry = REGISTRY): SocketFactory {
+function registrySocket(
+  frames: Frames,
+  registry: { areas: unknown; devices: unknown; entities: unknown } = REGISTRY,
+): SocketFactory {
   return (url) => {
     assert.equal(url, HA_WEBSOCKET_URL);
     const socket: SocketLike = {
@@ -218,10 +225,14 @@ function fakeWorldHA(
   options: {
     policy?: { enabled: boolean; entities: string[]; services: string[] };
     socket?: SocketFactory;
+    states?: typeof STATES;
   } = {},
 ) {
   const states = Object.fromEntries(
-    Object.entries(STATES).map(([k, v]) => [k, [v[0], { ...v[1] }]]),
+    Object.entries({ ...STATES, ...options.states }).map(([k, v]) => [
+      k,
+      [v[0], { ...v[1] }, v[2]],
+    ]),
   ) as typeof STATES;
   const posts: string[] = [];
   const gets: string[] = [];
@@ -256,7 +267,15 @@ function fakeWorldHA(
       const id = decodeURIComponent(path.replace("states/", ""));
       const s = states[id];
       if (!s) return new Response("missing", { status: 404 });
-      return Response.json({ entity_id: id, state: s[0], attributes: s[1] });
+      const lastChanged = new Date(
+        Date.now() - (s[2] ?? 20) * 60000,
+      ).toISOString();
+      return Response.json({
+        entity_id: id,
+        state: s[0],
+        attributes: s[1],
+        last_changed: lastChanged,
+      });
     }) as typeof fetch,
     [],
     options.socket ?? registrySocket(frames),
@@ -281,13 +300,16 @@ test("registry projection keeps only in-scope entities with their area and devic
     "picture",
     "/api/image",
     "cuisine",
-    "hue",
     TOKEN,
   ])
     assert(!json.includes(leak), `projection leaks ${leak}`);
+  // The registry's "platform" is the one hint Home World's anomaly filter
+  // needs (to calm groups and mobile_app sensors); it travels this far but
+  // no further (never into a room/device sent to the browser, see below).
   assert.deepEqual(projection.entities["light.kitchen_ceiling"], {
     area: "kitchen",
     device: "Kitchen bulb",
+    platform: "hue",
   });
   // Entity area wins over its device's area; user device name wins.
   assert.deepEqual(projection.entities["climate.bedroom"], {
@@ -496,12 +518,69 @@ test("device kinds and anomalies follow domain, device class and night", () => {
   assert.equal(deviceKind("vacuum.robot", "", "x"), "vacuum");
   assert.equal(deviceKind("fan.x", "", "x"), "fan");
   assert.equal(deviceKind("media_player.x", "", "x"), "media");
-  assert.equal(anomalyOf("light", "", "unavailable", false), "unavailable");
   assert.equal(anomalyOf("door", "door", "on", true), "open_at_night");
   assert.equal(anomalyOf("door", "door", "on", false), "");
   assert.equal(anomalyOf("battery", "battery", "12", false), "low_battery");
   assert.equal(anomalyOf("battery", "battery", "80", false), "");
   assert.equal(anomalyOf("sensor", "", "21", true), "");
+});
+
+test("'unavailable' only glints for a physical device stuck that way, never a fresh blip, a phone or a group", () => {
+  const now = 1700000000000;
+  // No last_changed hint at all: calm by default, never flagged.
+  assert.equal(anomalyOf("light", "", "unavailable", false), "");
+  assert.equal(
+    anomalyOf("light", "", "unavailable", false, { nowMs: now }),
+    "",
+  );
+  // Just went unavailable (a Wi-Fi blip, a brief HA restart): not yet flagged.
+  assert.equal(
+    anomalyOf("light", "", "unavailable", false, {
+      lastChangedMs: now - 60000,
+      nowMs: now,
+    }),
+    "",
+  );
+  // Unavailable for the full settle window: a real physical device, flagged.
+  assert.equal(
+    anomalyOf("light", "", "unavailable", false, {
+      lastChangedMs: now - UNAVAILABLE_SETTLE_MS,
+      nowMs: now,
+    }),
+    "unavailable",
+  );
+  const persistentHints = {
+    lastChangedMs: now - UNAVAILABLE_SETTLE_MS - 1,
+    nowMs: now,
+  };
+  // A phone/app sensor (mobile_app) normally goes unavailable when the app
+  // is backgrounded: never flagged, no matter how long.
+  assert.equal(
+    anomalyOf("binary", "", "unavailable", false, {
+      ...persistentHints,
+      platform: "mobile_app",
+    }),
+    "",
+  );
+  // A "group." helper or a Hue entertainment area reads unavailable between
+  // member updates by design: never flagged, by registry platform...
+  assert.equal(
+    anomalyOf("light", "", "unavailable", false, {
+      ...persistentHints,
+      platform: "group",
+    }),
+    "",
+  );
+  // ...or by its live attributes (entity_id list / is_hue_group / hue_type).
+  assert.equal(
+    anomalyOf("light", "", "unavailable", false, {
+      ...persistentHints,
+      isGroup: true,
+    }),
+    "",
+  );
+  // A diagnostic/hidden/disabled entity never even reaches anomalyOf: it is
+  // filtered out of the drawn set by worldEntities before any state read.
 });
 
 test("customization validation is strict and merge never returns out-of-scope entities", () => {
@@ -742,6 +821,10 @@ test("Home World HTTP: authenticated structure and values, scoped and redacted, 
       "unique_id",
       "sun.sun",
       "automation.",
+      // The registry platform hint (e.g. "hue") used to calm the anomaly
+      // list never leaves the registry projection into a client response.
+      "hue",
+      "platform",
     ])
       assert(!text.includes(leak), `structure leaks ${leak}`);
     // The registry is cached: a second structure read opens no socket.
@@ -1439,6 +1522,73 @@ test("registry projection marks diagnostic, config, hidden and disabled entities
   assert.equal(projection.entities["light.desk"]!.secondary, undefined);
   for (const id of ["sensor.fw", "switch.led", "light.old", "light.off"])
     assert.equal(projection.entities[id]!.secondary, true, id);
+});
+
+test("Needs a look end to end: a phone sensor and a Hue entertainment group never glint, a stuck lounge light does", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-world-calm-"));
+  const provider = offline();
+  // A synthetic lounge: a Hue "All Lights" entertainment group (platform
+  // "hue" plus is_hue_group), a phone's own Focus sensor (platform
+  // "mobile_app") and one genuinely stuck physical lamp.
+  const registry = {
+    areas: [{ area_id: "lounge", name: "Lounge", floor_id: "ground" }],
+    devices: [],
+    entities: [
+      {
+        entity_id: "light.lounge_entertainment",
+        area_id: "lounge",
+        platform: "hue",
+      },
+      { entity_id: "binary_sensor.phone_focus", platform: "mobile_app" },
+      { entity_id: "light.lounge_lamp", area_id: "lounge" },
+    ],
+  };
+  const scope = [
+    "light.lounge_entertainment",
+    "binary_sensor.phone_focus",
+    "light.lounge_lamp",
+  ];
+  const f = fakeWorldHA({
+    policy: { enabled: true, entities: scope, services: [] },
+    socket: registrySocket([], registry),
+    states: {
+      "light.lounge_entertainment": [
+        "unavailable",
+        { friendly_name: "All Lights", is_hue_group: true },
+        1000,
+      ],
+      "binary_sensor.phone_focus": [
+        "unavailable",
+        { friendly_name: "Focus" },
+        1000,
+      ],
+      "light.lounge_lamp": ["unavailable", { friendly_name: "Lamp" }, 1000],
+    },
+  });
+  const runtime = await Runtime.open(
+    dir,
+    provider.models,
+    provider.model,
+    [haExtension(f.ha)],
+    [],
+    undefined,
+    f.ha.actions,
+  );
+  try {
+    const store = new WorldStore(runtime, f.ha);
+    const values = await store.values("owner");
+    assert.equal(values.values["light.lounge_entertainment"]!.anomaly, "");
+    assert.equal(values.values["binary_sensor.phone_focus"]!.anomaly, "");
+    assert.equal(values.values["light.lounge_lamp"]!.anomaly, "unavailable");
+    // A fresh blip (well within the settle window) never glints either, on
+    // the very same device: only how long it has been unavailable changed.
+    f.states["light.lounge_lamp"]![2] = 1;
+    const freshValues = await store.values("owner");
+    assert.equal(freshValues.values["light.lounge_lamp"]!.anomaly, "");
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("an owner floor plan may widen the grid and add decor spaces", () => {

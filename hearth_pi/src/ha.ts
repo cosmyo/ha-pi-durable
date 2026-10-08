@@ -242,7 +242,21 @@ export class HAClient {
       )
         attributes[key] = v;
     }
-    return { entityId: id, state: state.state.slice(0, 200), attributes };
+    // Two extra hints Home World uses to calm its anomaly list: whether this
+    // is a multi-entity group (Hue entertainment area, a light/cover group…)
+    // and how long ago the state last changed. Never widened beyond that.
+    const changedAt = Date.parse(String(state.last_changed ?? ""));
+    const isGroup =
+      Array.isArray(attrs.entity_id) ||
+      attrs.is_hue_group === true ||
+      attrs.hue_type === "entertainment";
+    return {
+      entityId: id,
+      state: state.state.slice(0, 200),
+      attributes,
+      lastChangedMs: Number.isFinite(changedAt) ? changedAt : 0,
+      isGroup,
+    };
   }
   // Bounded recorder history for exact configured entities: raw points only,
   // capped per series; callers downsample. Attributes are never requested.

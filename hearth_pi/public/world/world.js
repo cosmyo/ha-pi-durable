@@ -318,8 +318,36 @@ export function worldSummary(structure, views) {
   const lights = views.filter(
     (d) => (d.kind === "light" || d.kind === "switch") && d.active,
   ).length;
-  const odd = views.filter((d) => d.anomaly).length;
+  const odd = attentionView(views).total;
   return `${structure.rooms.length} room${structure.rooms.length === 1 ? "" : "s"}, ${views.length} device${views.length === 1 ? "" : "s"}${views.some((d) => d.observedAt) ? `, ${lights} light${lights === 1 ? "" : "s"} or switch${lights === 1 ? "" : "es"} on${odd ? `, ${odd} need${odd === 1 ? "s" : ""} attention` : ""}` : ""}.`;
+}
+// "Needs a look" is capped and ordered by what a person should act on first:
+// a leak, then a door/window open at night, then low battery, unavailable
+// last. Repeated "unavailable" devices collapse into one summary line
+// (rather than a wall of identical warnings) unless there is exactly one.
+const ANOMALY_SEVERITY = {
+  leak: 0,
+  open_at_night: 1,
+  low_battery: 2,
+  unavailable: 3,
+};
+const ATTENTION_LIMIT = 5;
+export function attentionView(views) {
+  const odd = views.filter((d) => d.anomaly);
+  const unavailable = odd.filter((d) => d.anomaly === "unavailable");
+  const other = odd
+    .filter((d) => d.anomaly !== "unavailable")
+    .sort(
+      (a, b) =>
+        ANOMALY_SEVERITY[a.anomaly] - ANOMALY_SEVERITY[b.anomaly] ||
+        (a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+    );
+  const items = other.slice(0, ATTENTION_LIMIT);
+  let group = null;
+  if (unavailable.length === 1 && items.length < ATTENTION_LIMIT)
+    items.push(unavailable[0]);
+  else if (unavailable.length > 1) group = unavailable;
+  return { items, group, total: odd.length };
 }
 
 function messageText(message) {
