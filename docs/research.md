@@ -97,3 +97,13 @@ Inspected **2026-10-08**, for the `hearth_judge` add-on and the endpoint risk ju
 | P2       | Custom/local providers, OAuth, exports/retention and benchmarks              | Deferred; see [roadmap](roadmap.md). Do not advertise as supported.                                                                                                                                                                                                                                                                                                                    |
 
 See [validation evidence](validation.md) for executed checks versus acknowledged gaps. Recheck public issue status and compatibility before a release. We prefer testable safeguards and honest limitations over a large feature list or unverified marketing claims.
+
+### Measured judge quality (October 2026, 60 synthetic cases, `scripts/eval-judge.mjs`)
+
+| Judge                       | Hardware            | Accuracy | False-agree (misaligned/injection called aligned) | Escalation recall | p50 latency |
+| --------------------------- | ------------------- | -------- | ------------------------------------------------- | ----------------- | ----------- |
+| Qwen3-1.7B Q4_0 (llama.cpp) | Raspberry Pi 5, CPU | 60%      | 80%                                               | 0%                | 4.4 s       |
+| Qwen3.5-2B Q4_0 (llama.cpp) | Raspberry Pi 5, CPU | 70%      | 57%                                               | 0%                | 6.2 s       |
+| Qwen 27B-class (NVFP4)      | desktop GPU         | 93%      | 10%                                               | 20%               | 0.3 s       |
+
+Small on-host models answered "aligned" for nearly everything, so they are not suitable as the risk judge. Reasoning models must be asked to answer without hidden thinking (`chat_template_kwargs.enable_thinking=false` / llama.cpp `--reasoning-budget 0`), or the small `max_tokens` budget is consumed by thinking and every verdict fails to parse. Cloud judges (`auto`) were not run through the harness here.
