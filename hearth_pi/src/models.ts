@@ -55,6 +55,19 @@ export function providerFailure(raw: string | undefined): string {
   return "Provider request failed; check server configuration.";
 }
 
+const STOP_TEXT: Record<string, string> = {
+  turn_budget: "eight model turns per message reached",
+  context_budget: "conversation context too large",
+  output_limit: "a single model event was too large",
+  unsupported_or_excessive_tools: "too many tool calls in one turn",
+  wrapper_error: "unexpected failure",
+};
+const STOP_CODES = new Set([
+  "turn_budget",
+  "context_budget",
+  "output_limit",
+  "unsupported_or_excessive_tools",
+]);
 // Filter before Pi commits provider events, including error/partial fields.
 /**
  * Per-call OAuth credential refresh on a 401, for the subscription providers
@@ -85,10 +98,11 @@ export function safeModels(
         if (
           transcript.messages
             .slice(lastUser + 1)
-            .filter((m) => m.role === "assistant").length >= 8 ||
-          Buffer.byteLength(JSON.stringify(transcript)) > 262144
+            .filter((m) => m.role === "assistant").length >= 8
         )
-          throw new Error("budget");
+          throw new Error("turn_budget");
+        if (Buffer.byteLength(JSON.stringify(transcript)) > 262144)
+          throw new Error("context_budget");
         const signal = options?.signal
           ? AbortSignal.any([options.signal, abort.signal])
           : abort.signal;
@@ -142,18 +156,22 @@ export function safeModels(
           stream.push(safe);
           step = await iterator.next();
         }
-      } catch {
+      } catch (error) {
+        // Only Hearth's own fixed guard codes are named (never provider or
+        // tool text): enough to tell a budget stop from a wrapper failure.
+        const code =
+          error instanceof Error && STOP_CODES.has(error.message)
+            ? error.message
+            : "wrapper_error";
+        const text = `Model request stopped (${STOP_TEXT[code] ?? "unexpected failure"}).`;
+        console.error(`hearth: model request stopped: ${code}`);
         stream.push({
           type: "error",
           reason: "error",
-          error: fauxAssistantMessage(
-            "Model request stopped (failure or eight-turn budget).",
-            {
-              stopReason: "error",
-              errorMessage:
-                "Model request stopped (failure or eight-turn budget).",
-            },
-          ),
+          error: fauxAssistantMessage(text, {
+            stopReason: "error",
+            errorMessage: text,
+          }),
         });
       } finally {
         abort.abort();
