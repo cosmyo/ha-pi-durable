@@ -220,6 +220,9 @@ function wsAction(v: Record<string, unknown>): AdminAction {
 // upstream source); none of Hearth's allowlisted endpoints need "admin".
 export const SUPERVISOR_READS: readonly RegExp[] = [
   /^\/addons$/,
+  // Hearth-side aggregate (not a Supervisor route): stats of every started
+  // add-on in one bounded read, so a model needs one call, not one per add-on.
+  /^\/addons\/stats$/,
   new RegExp(`^/addons/${SLUG}/(info|logs|stats)$`),
   /^\/backups$/,
   new RegExp(`^/backups/${SLUG}/info$`),

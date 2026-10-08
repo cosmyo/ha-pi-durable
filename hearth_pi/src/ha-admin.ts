@@ -376,6 +376,7 @@ export class AdminOps {
   async supervisorRead(path: unknown, signal?: AbortSignal) {
     insist(this.isAdmin, "admin_mode_required", 403);
     const endpoint = supervisorReadAllowed(path);
+    if (endpoint === "/addons/stats") return this.allAddonStats(signal);
     const value = await this.supervisorFetch(endpoint, signal);
     if (endpoint.endsWith("/logs"))
       return {
@@ -390,6 +391,46 @@ export class AdminOps {
       path: endpoint,
       ...boundedJson(projectSupervisor(endpoint, value)),
     };
+  }
+  // Stats for every started add-on (at most 40, 4 reads at a time), each
+  // projected to the same safe fields as /addons/<slug>/stats.
+  private async allAddonStats(signal?: AbortSignal) {
+    const list = projectSupervisor(
+      "/addons",
+      await this.supervisorFetch("/addons", signal),
+    ) as { addons?: { slug?: unknown; name?: unknown; state?: unknown }[] };
+    const started = (list.addons ?? [])
+      .filter(
+        (a) =>
+          a.state === "started" &&
+          typeof a.slug === "string" &&
+          /^[a-z0-9_-]{1,64}$/.test(a.slug),
+      )
+      .slice(0, 40);
+    const addons: Record<string, unknown>[] = new Array(started.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < started.length) {
+        const i = next++;
+        const a = started[i]!;
+        const statsPath = `/addons/${a.slug as string}/stats`;
+        try {
+          const stats = projectSupervisor(
+            statsPath,
+            await this.supervisorFetch(statsPath, signal),
+          ) as Record<string, unknown>;
+          addons[i] = { slug: a.slug, name: a.name, ...stats };
+        } catch {
+          addons[i] = {
+            slug: a.slug,
+            name: a.name,
+            error: "stats_unavailable",
+          };
+        }
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    return { path: "/addons/stats", ...boundedJson({ addons }) };
   }
   // Learn this add-on's own slug and name from Supervisor for self-protection.
   // Best effort: the hostname-derived slug and "hearth pi" text still apply.
@@ -641,7 +682,7 @@ export function adminTools(ha: HAClient) {
   const supervisorRead = defineTool({
     name: "supervisor_read",
     description:
-      "GET an allowlisted Supervisor endpoint directly from Supervisor's own API: /addons, /addons/<slug>/info|logs|stats, /backups, /backups/<slug>/info, /core/info|logs, /supervisor/info|logs, /os/info, /host/info, /network/info, /resolution/info, /jobs/info, /jobs/<job_id>, /store, /store/addons. Logs are redacted and capped. Backup/update/install actions queue a background job; check its progress with /jobs/<job_id>.",
+      "GET an allowlisted Supervisor endpoint directly from Supervisor's own API: /addons, /addons/stats (CPU/memory of every running add-on in one call; prefer it over many per-add-on reads), /addons/<slug>/info|logs|stats, /backups, /backups/<slug>/info, /core/info|logs, /supervisor/info|logs, /os/info, /host/info, /network/info, /resolution/info, /jobs/info, /jobs/<job_id>, /store, /store/addons. Logs are redacted and capped. Backup/update/install actions queue a background job; check its progress with /jobs/<job_id>.",
     replay: "safe",
     outputLimits: { maxBytes: 28000 },
     parameters: Type.Object(

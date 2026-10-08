@@ -623,3 +623,51 @@ test("Supervisor REST transport: no redirects, oversize/non-JSON refused, 401/40
       error.message === "dispatch_outcome_unknown",
   );
 });
+
+test("supervisor_read /addons/stats aggregates every started add-on in one bounded read", async () => {
+  const { ha, supervisorCalls } = fakeAdminHA({
+    supervisor: (endpoint) => {
+      if (endpoint === "/addons")
+        return {
+          addons: [
+            {
+              name: "Alpha",
+              slug: "core_alpha",
+              state: "started",
+              options: { secret: "LEAK-CANARY" },
+            },
+            { name: "Beta", slug: "local_beta", state: "stopped" },
+            { name: "Gamma", slug: "x_gamma", state: "started" },
+          ],
+        };
+      if (endpoint === "/addons/core_alpha/stats")
+        return { cpu_percent: 1.5, memory_usage: 1024, token: "LEAK-CANARY" };
+      if (endpoint === "/addons/x_gamma/stats") return { status: 500 };
+    },
+  });
+  const out = (await ha.supervisorRead("/addons/stats")) as {
+    path: string;
+    value: { addons: Record<string, unknown>[] };
+  };
+  assert.equal(out.path, "/addons/stats");
+  const paths = supervisorCalls.map((c) => c.path).sort();
+  assert.deepEqual(paths, [
+    "/addons",
+    "/addons/core_alpha/stats",
+    "/addons/x_gamma/stats",
+  ]);
+  const addons = out.value.addons;
+  assert.equal(addons.length, 2);
+  assert.deepEqual(addons[0], {
+    slug: "core_alpha",
+    name: "Alpha",
+    cpu_percent: 1.5,
+    memory_usage: 1024,
+  });
+  assert.deepEqual(addons[1], {
+    slug: "x_gamma",
+    name: "Gamma",
+    error: "stats_unavailable",
+  });
+  assert.doesNotMatch(JSON.stringify(out), /LEAK-CANARY/);
+});

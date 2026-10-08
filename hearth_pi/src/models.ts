@@ -147,7 +147,7 @@ export function safeModels(
                 : safe.partial;
           if (
             message.content.filter((block) => block.type === "toolCall")
-              .length > 8 ||
+              .length > 16 ||
             message.stopReason === "deferred"
           )
             throw new Error("unsupported_or_excessive_tools");

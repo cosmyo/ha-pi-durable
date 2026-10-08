@@ -220,7 +220,7 @@ test("bounded models refuse nine model turns, excessive tool calls and oversized
   assert.equal(faux.state.callCount, 0);
   faux.setResponses([
     fauxAssistantMessage(
-      Array.from({ length: 9 }, () =>
+      Array.from({ length: 17 }, () =>
         fauxToolCall("ha_state_detail", { entityId: "light.example" }),
       ),
       { stopReason: "toolUse" },
