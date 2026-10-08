@@ -15,6 +15,13 @@ import {
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import type { Context } from "@earendil-works/chord";
 import { Catalog, type Proposal } from "./documents.js";
+import {
+  AppIndex,
+  AppVersion,
+  versionKey,
+  type AppMeta,
+  type AppVersionInfo,
+} from "./app-docs.js";
 import type { HAClient } from "./ha.js";
 import type { Runtime } from "./runtime.js";
 import {
@@ -44,46 +51,7 @@ const appIdPattern = /^app_[1-9][0-9]{0,8}$/;
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) =>
   info.deltasSinceBase >= 31;
 
-export type AppVersionInfo = {
-  version: number;
-  created: number;
-  // "conversation:<id>" for model tools, "owner" for human reverts.
-  by: string;
-  summary: string;
-  parent: number;
-  elements: number;
-};
-export type AppMeta = {
-  id: string;
-  owner: string;
-  title: string;
-  summary: string;
-  created: number;
-  createdBy: number;
-  updated: number;
-  version: number;
-  pinned: boolean;
-  versions: AppVersionInfo[];
-};
-// Index of household apps. Each owner sees only their own entries.
-export const AppIndex = defineDoc<{ next: number; items: AppMeta[] }>({
-  kind: "hearth.apps",
-  version: 1,
-  scope: "session",
-  initial: () => ({ next: 1, items: [] }),
-  checkpointWhen,
-});
-// One immutable document per version, keyed "<appId>.v<n>"; never rewritten.
-export const AppVersion = defineDocFamily<
-  { spec: AppSpec | null },
-  AppSpec | null
->({
-  kind: "hearth.app-version",
-  version: 1,
-  scope: "session",
-  family: true,
-  initial: (spec) => ({ spec }),
-});
+export { AppIndex, AppVersion, type AppMeta, type AppVersionInfo };
 export type LocalValue =
   | { kind: "checklist"; checked: string[]; updated: number }
   | { kind: "counter"; value: number; updated: number }
@@ -125,7 +93,6 @@ const AppReceipt = defineDoc<{ hash: string; result: AppToolResult | null }>({
   scope: "task",
   initial: () => ({ hash: "", result: null }),
 });
-const versionKey = (appId: string, version: number) => `${appId}.v${version}`;
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 export function validationContext(ha: HAClient): ValidationContext {
   return {

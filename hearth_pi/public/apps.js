@@ -36,6 +36,10 @@ export function diffSummary(diff) {
     parts.push(`entities added: ${diff.entitiesAdded.join(", ")}`);
   if (diff.entitiesRemoved?.length)
     parts.push(`entities removed: ${diff.entitiesRemoved.join(", ")}`);
+  if (diff.watchersAdded?.length)
+    parts.push(`watchers added: ${diff.watchersAdded.join(", ")}`);
+  if (diff.watchersRemoved?.length)
+    parts.push(`watchers removed: ${diff.watchersRemoved.join(", ")}`);
   return parts.join(" · ") || "No visible change";
 }
 function appCard(item, handlers, compact = false) {

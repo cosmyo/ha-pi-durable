@@ -8,6 +8,7 @@ import { readFile } from "node:fs/promises";
 import { Subscription } from "./subscription.js";
 import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
 import { WorkspaceClient, workspaceExtension } from "./workspace.js";
+import { Proactive } from "./proactive.js";
 
 try {
   const config = await loadConfig();
@@ -70,15 +71,23 @@ try {
         provider: s.provider,
         signedIn: s.configured(),
       }));
+  // Watchers and briefings read scoped state and create Today cards only.
+  const proactive = new Proactive(runtime.harness, ha.reader(), {
+    sanitize: (value) => ha.sanitize(value),
+    owners: () =>
+      config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
+  });
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscriptions,
     local,
     secrets,
+    proactive,
   });
   await new Promise<void>((resolve, reject) => {
     app.server.once("error", reject);
     app.server.listen(config.port, config.host, resolve);
   });
+  proactive.start();
   console.info(
     "Hearth Pi ready. Experimental; server-side authorization enforced.",
   );

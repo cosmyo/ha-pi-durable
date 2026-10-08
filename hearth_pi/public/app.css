@@ -396,6 +396,9 @@ button.primary {
 }
 .message.user {
   margin-left: auto;
+  padding: 10px 16px;
+  border-radius: 18px;
+  max-width: 80%;
   background: #313c33;
   border-color: #465440;
 }
@@ -410,18 +413,196 @@ pre {
   overflow-wrap: anywhere;
   margin: 0;
 }
-.message.tool {
-  background: #152123;
-  font-size: 0.82rem;
+/* Claude-style plain assistant reply: no card, a small label instead of a
+   heading, full width so long replies read naturally at 360px. */
+.message.assistant {
+  padding: 0;
+  margin: 0 0 22px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  max-width: 100%;
 }
-.message.tool pre {
-  font-family: ui-monospace, monospace;
-  font-size: 0.78rem;
-  max-height: 200px;
-  overflow: auto;
+.message-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 6px;
+}
+.message-label {
+  font-size: 0.73rem;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.message-copy {
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  min-height: 0;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
 }
 .live {
   border-style: dashed;
+}
+/* ------------------------- Tool activity rows --------------------------- */
+/* One collapsed row per assistant turn's tool calls + results, instead of
+   raw tool-call/JSON messages pushing the actual reply down the screen. */
+.message.activity {
+  padding: 0;
+  background: none;
+  border: none;
+  max-width: 100%;
+}
+.activity-details {
+  background: #152123;
+  border: 1px solid #263a3c;
+  border-radius: 12px;
+  font-size: 0.78rem;
+}
+.activity-summary {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  cursor: pointer;
+  min-height: 44px;
+  color: var(--muted);
+}
+.activity-summary::-webkit-details-marker {
+  display: none;
+}
+.activity-summary::before {
+  content: "\203A";
+  display: inline-block;
+  margin-right: 8px;
+  transition: transform 0.15s;
+}
+.activity-details[open] > .activity-summary::before {
+  transform: rotate(90deg);
+}
+.activity-summary-text {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.activity-summary-warning,
+.message.activity-error .activity-summary-text {
+  color: #ffb7a2;
+}
+.activity-body {
+  padding: 4px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.activity-call {
+  border-top: 1px solid #243336;
+  padding-top: 10px;
+}
+.activity-call-head {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.activity-call-error .activity-call-head {
+  color: #ffb7a2;
+}
+.activity-call-args {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  color: var(--muted);
+  margin: 0 0 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.activity-call-warning {
+  color: #ffb7a2;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.tool-result-pre {
+  font-family: ui-monospace, monospace;
+  font-size: 0.74rem;
+  max-height: 220px;
+  overflow: auto;
+  background: #0f1a1b;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.tool-result-more {
+  margin-top: 6px;
+  font-size: 0.72rem;
+  padding: 4px 10px;
+  min-height: 0;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--teal);
+}
+.activity-live-line {
+  cursor: pointer;
+}
+.activity-live-text {
+  font-weight: 600;
+  color: var(--text);
+}
+.activity-live-dots {
+  display: inline-flex;
+  gap: 1px;
+}
+.activity-live-dot {
+  opacity: 0.35;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .activity-live-dot {
+    animation: activity-live-blink 1.2s infinite;
+  }
+  .activity-live-dot:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .activity-live-dot:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+  @keyframes activity-live-blink {
+    0%,
+    80%,
+    100% {
+      opacity: 0.35;
+    }
+    40% {
+      opacity: 1;
+    }
+  }
+}
+.activity-live-step {
+  color: var(--muted);
+}
+/* Floating "jump to latest" pill: the last child inside the scrollable
+   .scroll-area (not .conversation, which also holds the composer below it),
+   sticky so it stays near the bottom of the visible scrolled content instead
+   of scrolling away or sitting under the composer. Shown only while scrolled
+   up and new content arrives; stick-to-bottom (app.js snapshot()) handles
+   the rest. */
+.scroll-pill {
+  position: sticky;
+  bottom: 10px;
+  margin: 10px auto 0;
+  width: fit-content;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  min-height: 36px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 0.8rem;
+  box-shadow: 0 6px 18px #0007;
 }
 .action-card {
   border: 1px solid #ad855f;
@@ -957,11 +1138,16 @@ dialog .actions {
   .message h3 {
     margin-bottom: 4px;
   }
-  .message.tool {
-    max-width: 100%;
+  .activity-summary {
+    padding: 10px 12px;
   }
-  .message.tool pre {
+  .tool-result-pre {
     max-height: 140px;
+  }
+  .scroll-pill {
+    bottom: 6px;
+    padding: 7px 14px;
+    font-size: 0.78rem;
   }
   .action-card {
     padding: 14px;
@@ -1541,5 +1727,344 @@ h3.app-text {
   }
   #app-more .actions button {
     flex: 1 1 auto;
+  }
+}
+
+/* ------------------- Today, Briefings & watchers, Insights ------------------ */
+.badge {
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 11px;
+  background: var(--warm);
+  color: #2d2c23;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-align: center;
+}
+#drawer-toggle {
+  position: relative;
+}
+.dot {
+  position: absolute;
+  top: 8px;
+  right: 2px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--warm);
+}
+#today-feedback,
+#proactive-feedback,
+#insights-feedback {
+  margin: 0;
+  color: var(--warm);
+  font-size: 0.84rem;
+}
+#today-feedback:empty,
+#proactive-feedback:empty,
+#insights-feedback:empty {
+  display: none;
+}
+#today-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0;
+}
+.today-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #1b2a29;
+  padding: 12px 14px;
+  overflow-wrap: anywhere;
+}
+.today-card.unread {
+  border-color: #6e8f7f;
+}
+.today-card.briefing {
+  background: #1c2b25;
+}
+.today-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin: 0 0 4px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.today-source {
+  color: var(--teal);
+}
+.today-new {
+  color: var(--warm);
+  font-weight: 600;
+}
+.today-title {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  color: var(--text);
+}
+.today-body {
+  margin: 0 0 8px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.today-values {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.today-values li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid #2c3c3e;
+}
+.today-values li .app-asof {
+  grid-column: 1 / -1;
+}
+.today-label {
+  font-size: 0.84rem;
+}
+.today-value {
+  font-size: 0.98rem;
+  color: var(--warm);
+  text-align: right;
+}
+.today-values li.unavailable .today-value {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.82rem;
+}
+.today-actions,
+.today-snooze {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.today-actions button,
+.today-snooze button,
+.feedback-thumb,
+.feedback-chips button,
+.pro-section button,
+.pro-add button,
+#today-dialog .actions button,
+#proactive-dialog .actions button,
+#insights-dialog .actions button {
+  min-height: 44px;
+}
+.today-empty p {
+  margin: 4px 0;
+}
+.today-footnote {
+  font-size: 0.78rem;
+  margin: 0;
+}
+.pro-section {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: 12px;
+}
+.pro-section h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+.pro-section > p {
+  font-size: 0.82rem;
+  margin: 0 0 8px;
+}
+.pro-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pro-briefing {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px 12px;
+  margin: 8px 0;
+  min-width: 0;
+}
+.pro-briefing legend {
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+dialog label.pro-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 6px 0;
+  flex-shrink: 0;
+}
+dialog label.pro-check input {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+}
+.pro-field {
+  margin: 6px 0;
+}
+.pro-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+}
+.pro-row .pro-field {
+  flex: 1;
+  min-width: 0;
+}
+.pro-briefing > button {
+  margin-top: 4px;
+}
+.pro-watchers li > button,
+.pro-head > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+#proactive-summary {
+  white-space: nowrap;
+}
+input[type="checkbox"] {
+  accent-color: var(--teal);
+}
+.today-asof {
+  margin: 2px 0 0;
+}
+dialog .pro-field label {
+  margin: 0 0 4px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.pro-field input,
+.pro-field select {
+  min-height: 44px;
+}
+.pro-watchers {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pro-watchers li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 10px;
+  overflow-wrap: anywhere;
+}
+.pro-watchers li.needs-repair {
+  border-color: #ad855f;
+}
+.pro-watch-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 0.86rem;
+}
+.pro-watch-desc {
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.pro-add {
+  font-size: 0.88rem;
+}
+.pro-add summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--teal);
+}
+.pro-errors {
+  color: var(--warm);
+  font-size: 0.82rem;
+}
+.pro-errors:empty {
+  display: none;
+}
+.insight-totals {
+  display: flex;
+  gap: 18px;
+  margin-top: 8px;
+}
+.insight-big {
+  font-size: 1.4rem;
+}
+#insights-body h3 {
+  margin: 14px 0 4px;
+  font-size: 0.9rem;
+}
+.insight-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+#insights-export {
+  max-height: 240px;
+  overflow: auto;
+  font-size: 0.72rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.feedback-row {
+  margin-top: 6px;
+}
+.feedback-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.feedback-thumb {
+  min-width: 44px;
+  padding: 4px 8px;
+  background: transparent;
+  border-color: transparent;
+  font-size: 1rem;
+  opacity: 0.7;
+}
+.feedback-thumb[aria-pressed="true"] {
+  opacity: 1;
+  border-color: var(--teal);
+  background: #24393a;
+}
+.feedback-saved {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.feedback-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.chip[aria-pressed="true"] {
+  border-color: var(--warm);
+  color: var(--warm);
+}
+@media (max-width: 720px), (max-height: 560px) {
+  .today-actions button {
+    flex: 1 1 auto;
+  }
+  .drawer-footer > button {
+    min-height: 44px;
+  }
+  .today-card {
+    padding: 12px;
   }
 }

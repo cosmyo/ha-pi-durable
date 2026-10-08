@@ -20,6 +20,8 @@ import {
 } from "./subscription.js";
 import type { LocalEndpoints } from "./local.js";
 import { AppStore } from "./apps.js";
+import { Proactive } from "./proactive.js";
+import { FeedbackStore } from "./feedback.js";
 
 async function body(req: IncomingMessage): Promise<unknown> {
   insist(
@@ -70,6 +72,8 @@ export function appServer(
     subscriptions?: readonly Subscription[];
     local?: LocalEndpoints;
     secrets?: string[];
+    // Started by main.ts; tests may pass their own (or none: not started).
+    proactive?: Proactive;
   } = {},
 ) {
   const boundary = new Boundary(config),
@@ -109,6 +113,12 @@ export function appServer(
   const ready = () =>
     configuredReady() || authProviders().some((s) => s.configured());
   const apps = new AppStore(runtime, actions.engine.ha);
+  const proactive =
+    options.proactive ??
+    new Proactive(runtime.harness, actions.engine.ha.reader(), {
+      sanitize: (value) => actions.engine.ha.sanitize(value),
+    });
+  const feedback = new FeedbackStore(runtime);
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
@@ -296,6 +306,64 @@ export function appServer(
           id: await runtime.create(owner, v.title, v.requestId, kind),
         });
       }
+      if (req.method === "GET" && path === "/api/today")
+        return json(res, 200, await proactive.today(owner));
+      const todayRoute = /^\/api\/today\/(seen|dismiss|snooze|asked)$/.exec(
+        path,
+      );
+      if (todayRoute && req.method === "POST") {
+        const v = await body(req);
+        const operation = todayRoute[1];
+        return json(
+          res,
+          200,
+          operation === "seen"
+            ? await proactive.seen(owner, v)
+            : operation === "dismiss"
+              ? await proactive.dismiss(owner, v)
+              : operation === "snooze"
+                ? await proactive.snooze(owner, v)
+                : await proactive.asked(owner, v),
+        );
+      }
+      if (req.method === "GET" && path === "/api/proactive")
+        return json(res, 200, await proactive.settings(owner));
+      const proactiveRoute =
+        /^\/api\/proactive\/(briefing|enabled|watchers\/add|watchers\/remove)$/.exec(
+          path,
+        );
+      if (proactiveRoute && req.method === "POST") {
+        const v = await body(req);
+        const operation = proactiveRoute[1];
+        if (operation === "watchers/add") {
+          const result = await proactive.addWatcher(owner, v);
+          return json(res, result.ok ? 200 : 400, result);
+        }
+        return json(
+          res,
+          200,
+          operation === "briefing"
+            ? await proactive.saveBriefing(owner, v)
+            : operation === "enabled"
+              ? await proactive.setWatchersEnabled(owner, v)
+              : await proactive.removeWatcher(owner, v),
+        );
+      }
+      if (req.method === "GET" && path === "/api/insights")
+        return json(res, 200, {
+          feedback: await feedback.insights(owner),
+          today: await proactive.signals(owner),
+        });
+      if (req.method === "GET" && path === "/api/insights/export")
+        return json(res, 200, {
+          ...(await feedback.exportAll(owner)),
+          today: await proactive.signals(owner),
+        });
+      if (req.method === "POST" && path === "/api/insights/delete") {
+        const result = await feedback.deleteAll(owner, await body(req));
+        await proactive.resetSignals(owner);
+        return json(res, 200, result);
+      }
       if (req.method === "GET" && path === "/api/apps")
         return json(res, 200, await apps.list(owner));
       const appRoute =
@@ -335,7 +403,7 @@ export function appServer(
         throw new Fault(404, "not_found");
       }
       const route =
-        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete))?$/.exec(
+        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete|feedback))?$/.exec(
           path,
         );
       if (route) {
@@ -350,6 +418,14 @@ export function appServer(
           sessionStreams.delete(id);
           return json(res, 200, { deleted: true });
         }
+        if (operation === "feedback")
+          return json(
+            res,
+            200,
+            req.method === "GET"
+              ? await feedback.list(owner, id)
+              : await feedback.record(owner, id, await body(req)),
+          );
         if (req.method === "GET" && operation === "snapshot")
           return json(
             res,
@@ -572,6 +648,7 @@ export function appServer(
           "/app.js": ["app.js", "text/javascript"],
           "/render.js": ["render.js", "text/javascript"],
           "/apps.js": ["apps.js", "text/javascript"],
+          "/today.js": ["today.js", "text/javascript"],
           "/app.css": ["app.css", "text/css"],
           "/icon.svg": ["icon.svg", "image/svg+xml"],
           // PROTOTYPE Home World (throwaway UI exploration): exact files only.
@@ -635,6 +712,7 @@ export function appServer(
       );
       for (const subscription of options.subscriptions ?? [])
         await subscription.close();
+      await proactive.stop();
       await actions.close();
       await runtime.close();
       server.closeAllConnections();

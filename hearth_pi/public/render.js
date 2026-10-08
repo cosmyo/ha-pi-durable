@@ -4,6 +4,16 @@ export function node(tag, value = "", className = "") {
   if (className) element.className = className;
   return element;
 }
+function button(label, className = "", aria = "") {
+  const element = node("button", label, className);
+  element.type = "button";
+  if (aria) element.setAttribute("aria-label", aria);
+  return element;
+}
+function truncate(value, max) {
+  const text = String(value ?? "");
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
 export function messageText(message) {
   if (typeof message.content === "string") return message.content;
   return (message.content ?? [])
@@ -101,99 +111,447 @@ export function renderMarkdown(text) {
   flush();
   return root;
 }
-function assistantBody(message) {
-  if (typeof message.content === "string")
-    return [renderMarkdown(message.content)];
-  const parts = [];
-  for (const block of message.content ?? []) {
-    if (block.type === "text" && block.text)
-      parts.push(renderMarkdown(block.text));
-    else if (
-      block.type === "toolCall" &&
-      /^app_(create|update)$/.test(block.name)
-    ) {
-      // App specs are long: name the call, keep the exact arguments one tap away.
-      const details = node("details", "", "tool-call-details");
-      details.append(
-        node("summary", `${block.name} · arguments`),
-        node("pre", JSON.stringify(block.arguments, null, 2), "tool-call"),
-      );
-      parts.push(details);
-    } else if (block.type === "toolCall")
-      parts.push(
-        node(
-          "pre",
-          `${block.name} ${JSON.stringify(block.arguments)}`,
-          "tool-call",
-        ),
-      );
+// Friendly, calm labels for known tools so a transcript reads like "Searched
+// home · read 3 devices" instead of raw tool names and JSON. Unknown tools
+// fall back to their raw name (fallbackMeta) so nothing is ever hidden.
+const TOOL_META = {
+  ha_search_states: {
+    icon: "🔍",
+    label: "Searched home",
+    phrase: (n) => (n > 1 ? `Searched home ×${n}` : "Searched home"),
+    args: (a) =>
+      a?.query
+        ? `Query “${truncate(a.query, 60)}”`
+        : "Browsed allowed entities",
+  },
+  ha_state_detail: {
+    icon: "📟",
+    label: "Read a device",
+    phrase: (n) => (n > 1 ? `Read ${n} devices` : "Read a device"),
+    args: (a) => (a?.entityId ? `Entity ${a.entityId}` : ""),
+  },
+  ha_discover_services: {
+    icon: "🧰",
+    label: "Checked available actions",
+    phrase: () => "Checked available actions",
+    args: () => "",
+  },
+  ha_propose_service: {
+    icon: "⚡",
+    label: "Proposed an action",
+    phrase: (n) => (n > 1 ? `Proposed ${n} actions` : "Proposed an action"),
+    args: (a) => [a?.service, a?.entityId].filter(Boolean).join(" · "),
+  },
+  ha_build_view: {
+    icon: "🧩",
+    label: "Built a home view",
+    phrase: () => "Built a home view",
+    args: (a) => (a?.title ? `“${truncate(a.title, 60)}”` : ""),
+  },
+  app_create: {
+    icon: "🧱",
+    label: "Created an app",
+    phrase: (n) => (n > 1 ? `Created ${n} apps` : "Created an app"),
+    args: (a) =>
+      typeof a?.spec?.title === "string"
+        ? `“${truncate(a.spec.title, 60)}”`
+        : "",
+  },
+  app_update: {
+    icon: "🛠️",
+    label: "Updated an app",
+    phrase: (n) => (n > 1 ? `Updated apps ×${n}` : "Updated an app"),
+    args: (a) => (a?.appId ? `App ${a.appId}` : ""),
+  },
+  app_get: {
+    icon: "📄",
+    label: "Read an app",
+    phrase: (n) => (n > 1 ? `Read ${n} apps` : "Read an app"),
+    args: (a) => (a?.appId ? `App ${a.appId}` : ""),
+  },
+  app_list: {
+    icon: "📋",
+    label: "Listed apps",
+    phrase: () => "Listed apps",
+    args: () => "",
+  },
+  catalog_describe: {
+    icon: "📚",
+    label: "Looked up the app catalog",
+    phrase: () => "Looked up the app catalog",
+    args: () => "",
+  },
+  read: {
+    icon: "📖",
+    label: "Read a file",
+    phrase: (n) => (n > 1 ? `Read ${n} files` : "Read a file"),
+    args: (a) => a?.path ?? "",
+  },
+  write: {
+    icon: "✏️",
+    label: "Wrote a file",
+    phrase: (n) => (n > 1 ? `Wrote ${n} files` : "Wrote a file"),
+    args: (a) => a?.path ?? "",
+  },
+  edit: {
+    icon: "✏️",
+    label: "Edited a file",
+    phrase: (n) => (n > 1 ? `Edited ${n} files` : "Edited a file"),
+    args: (a) => a?.path ?? "",
+  },
+  bash: {
+    icon: "💻",
+    label: "Ran a command",
+    phrase: (n) => (n > 1 ? `Ran ${n} commands` : "Ran a command"),
+    args: (a) => (a?.command ? truncate(String(a.command), 80) : ""),
+  },
+  powershell: {
+    icon: "💻",
+    label: "Ran a command",
+    phrase: (n) => (n > 1 ? `Ran ${n} commands` : "Ran a command"),
+    args: (a) => (a?.command ? truncate(String(a.command), 80) : ""),
+  },
+  grep: {
+    icon: "🔎",
+    label: "Searched files",
+    phrase: (n) => (n > 1 ? `Searched files ×${n}` : "Searched files"),
+    args: (a) => a?.pattern ?? "",
+  },
+  find: {
+    icon: "🔎",
+    label: "Found files",
+    phrase: (n) => (n > 1 ? `Found files ×${n}` : "Found files"),
+    args: (a) => a?.pattern ?? "",
+  },
+  ls: {
+    icon: "📁",
+    label: "Listed files",
+    phrase: (n) => (n > 1 ? `Listed files ×${n}` : "Listed files"),
+    args: (a) => a?.path ?? "",
+  },
+};
+function fallbackMeta(name) {
+  const label = name || "Tool";
+  return {
+    icon: "🔧",
+    label,
+    phrase: (n) => (n > 1 ? `${label} ×${n}` : label),
+    args: (a) =>
+      a && Object.keys(a).length ? truncate(JSON.stringify(a), 80) : "",
+  };
+}
+const toolMeta = (name) => TOOL_META[name] ?? fallbackMeta(name);
+function toolResultText(message) {
+  return (message?.content ?? [])
+    .map((b) =>
+      b.type === "text" ? b.text : b.type === "image" ? "[image omitted]" : "",
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+function prettyJson(text) {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return text;
   }
-  return parts;
+}
+const RESULT_PREVIEW_LIMIT = 600;
+// Pretty, truncated, monospace tool result with an explicit "Show more" to
+// reveal the rest; nothing is ever written as HTML.
+function buildResultBlock(message) {
+  const raw = toolResultText(message);
+  const pretty = raw ? prettyJson(raw) : "(no output)";
+  const wrap = node("div", "", "tool-result");
+  const truncated = pretty.length > RESULT_PREVIEW_LIMIT;
+  const pre = node(
+    "pre",
+    truncated ? `${pretty.slice(0, RESULT_PREVIEW_LIMIT)}…` : pretty,
+    "tool-result-pre",
+  );
+  wrap.append(pre);
+  if (truncated) {
+    const more = button("Show more", "tool-result-more");
+    more.addEventListener("click", () => {
+      pre.textContent = pretty;
+      more.remove();
+    });
+    wrap.append(more);
+  }
+  return wrap;
+}
+function buildCallRow(call) {
+  const meta = toolMeta(call.name);
+  const isError = !!call.result?.isError;
+  const row = node(
+    "div",
+    "",
+    `activity-call${isError ? " activity-call-error" : ""}`,
+  );
+  row.append(node("div", `${meta.icon} ${meta.label}`, "activity-call-head"));
+  const argSummary = truncate(meta.args(call.arguments) || "", 160);
+  if (argSummary)
+    row.append(node("p", argSummary, "activity-call-args tool-call"));
+  if (call.result) {
+    if (isError)
+      row.append(
+        node("p", "⚠️ This step reported an error.", "activity-call-warning"),
+      );
+    row.append(buildResultBlock(call.result));
+  } else {
+    row.append(node("p", "No result recorded for this step.", "muted"));
+  }
+  return row;
+}
+// One collapsed line per group of first-occurrence tool names, e.g.
+// "🔍 Searched home · read 3 devices · built a home view".
+function headerSummary(calls) {
+  const order = [];
+  const counts = new Map();
+  for (const call of calls) {
+    if (!counts.has(call.name)) order.push(call.name);
+    counts.set(call.name, (counts.get(call.name) ?? 0) + 1);
+  }
+  const parts = order.map((name) => toolMeta(name).phrase(counts.get(name)));
+  return `${toolMeta(order[0]).icon} ${parts.join(" · ")}`;
+}
+// Group one assistant turn's tool calls and their results into one compact,
+// collapsed-by-default activity row. Errors stay visible in the summary line
+// even while collapsed.
+function buildActivity(calls, extraClass = "") {
+  const hasError = calls.some((call) => call.result?.isError);
+  const article = node(
+    "article",
+    "",
+    `message activity${hasError ? " activity-error" : ""}${extraClass ? ` ${extraClass}` : ""}`,
+  );
+  const details = node("details", "", "activity-details");
+  const summary = node("summary", "", "activity-summary");
+  summary.append(node("span", headerSummary(calls), "activity-summary-text"));
+  if (hasError)
+    summary.append(node("span", "⚠️ issue", "activity-summary-warning"));
+  details.append(summary);
+  const body = node("div", "", "activity-body");
+  for (const call of calls) body.append(buildCallRow(call));
+  details.append(body);
+  article.append(details);
+  return article;
+}
+// Single animated "Working…" line for the tool round currently running,
+// expandable to see every step. Respects prefers-reduced-motion in CSS.
+function buildLiveActivity(tools) {
+  if (!tools.length) return null;
+  const active =
+    tools.find((t) => t.status === "running") ??
+    tools.find((t) => t.status === "pending") ??
+    tools[tools.length - 1];
+  const meta = toolMeta(active.name);
+  const article = node("article", "", "message activity activity-live live");
+  const details = node("details", "", "activity-details");
+  const summary = node("summary", "", "activity-summary activity-live-line");
+  summary.append(node("span", "Working", "activity-live-text"));
+  const dots = node("span", "", "activity-live-dots");
+  dots.append(node("span", ".", "activity-live-dot"));
+  dots.append(node("span", ".", "activity-live-dot"));
+  dots.append(node("span", ".", "activity-live-dot"));
+  summary.append(dots);
+  summary.append(
+    node("span", `${meta.icon} ${meta.label}`, "activity-live-step"),
+  );
+  details.append(summary);
+  const body = node("div", "", "activity-body");
+  for (const tool of tools) {
+    const row = node("div", "", "activity-call");
+    row.append(
+      node(
+        "div",
+        `${toolMeta(tool.name).icon} ${toolMeta(tool.name).label} · ${tool.status}`,
+        "activity-call-head",
+      ),
+    );
+    if (tool.output)
+      row.append(node("pre", truncate(tool.output, 600), "tool-result-pre"));
+    body.append(row);
+  }
+  details.append(body);
+  article.append(details);
+  return article;
+}
+function blocksOf(message) {
+  if (typeof message.content === "string")
+    return message.content ? [{ type: "text", text: message.content }] : [];
+  return message.content ?? [];
+}
+async function copyAssistantText(text, copyButton) {
+  const original = copyButton.textContent;
+  const finish = (label) => {
+    copyButton.textContent = label;
+    setTimeout(() => {
+      copyButton.textContent = original;
+    }, 1500);
+  };
+  const legacyFallback = () => {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.append(area);
+      area.select?.();
+      const ok = document.execCommand?.("copy");
+      area.remove();
+      finish(ok ? "Copied" : "Copy failed");
+    } catch {
+      finish("Copy failed");
+    }
+  };
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      finish("Copied");
+    } catch {
+      legacyFallback();
+    }
+  } else {
+    legacyFallback();
+  }
+}
+// Claude-style plain assistant text: no heavy card, a small label and a copy
+// button instead of a bordered panel.
+function buildAssistantText(text, extraClass = "") {
+  const article = node(
+    "article",
+    "",
+    `message assistant${extraClass ? ` ${extraClass}` : ""}`,
+  );
+  const head = node("div", "", "message-head");
+  head.append(node("span", "Hearth", "message-label"));
+  const copy = button("Copy", "message-copy", "Copy this reply");
+  copy.addEventListener("click", () => void copyAssistantText(text, copy));
+  head.append(copy);
+  article.append(head, renderMarkdown(text));
+  return article;
+}
+function appendTurnError(article, message) {
+  article.append(
+    node(
+      "p",
+      "Model turn did not complete. No action outcome can be inferred.",
+      "error",
+    ),
+  );
+  // Controller-fixed reason (never raw provider text); rendered as text.
+  if (message.errorMessage)
+    article.append(node("p", message.errorMessage, "muted"));
 }
 // special(message) may return a trusted card (e.g. an app result) that
 // replaces the raw rendering of that message.
-export function renderMessages(container, snapshot, special = () => null) {
+// decorate(entry, message) may return an element appended to a committed
+// assistant reply (feedback controls).
+export function renderMessages(
+  container,
+  snapshot,
+  special = () => null,
+  decorate = () => null,
+) {
   const fragment = document.createDocumentFragment();
+  // Open tool-call group for the turn in progress: filled by assistant
+  // toolCall blocks, then matched with their toolResult by call id.
+  let pending = null;
+  const flushPending = () => {
+    if (pending && pending.calls.length)
+      fragment.append(buildActivity(pending.calls));
+    pending = null;
+  };
+  const openPending = () => (pending ??= { calls: [] });
   for (const entry of snapshot.view.entries) {
     for (const message of entry.model ?? []) {
       if (message.role === "system") continue;
       const card = special(message);
       if (card) {
+        flushPending();
         fragment.append(card);
         continue;
       }
+      if (message.role === "toolResult") {
+        const target = pending?.calls.find(
+          (call) => call.id && call.id === message.toolCallId,
+        );
+        if (target) target.result = message;
+        else
+          openPending().calls.push({
+            id: message.toolCallId,
+            name: message.toolName,
+            arguments: undefined,
+            result: message,
+          });
+        continue;
+      }
+      if (message.role === "assistant") {
+        let reply = null;
+        for (const block of blocksOf(message)) {
+          if (block.type === "text" && block.text) {
+            flushPending();
+            reply = buildAssistantText(block.text);
+            fragment.append(reply);
+          } else if (block.type === "toolCall") {
+            openPending().calls.push({
+              id: block.id,
+              name: block.name,
+              arguments: block.arguments,
+              result: null,
+            });
+          }
+        }
+        if (
+          message.stopReason === "error" ||
+          message.stopReason === "aborted"
+        ) {
+          flushPending();
+          const article = node("article", "", "message assistant");
+          appendTurnError(article, message);
+          fragment.append(article);
+        } else if (reply) {
+          const extra = decorate(entry, message);
+          if (extra) reply.append(extra);
+        }
+        continue;
+      }
+      // user message (or any other future role): render as plain text.
+      flushPending();
       const value = messageText(message);
       if (!value && !message.errorMessage) continue;
-      const role =
-        message.role === "toolResult"
-          ? "Tool result"
-          : message.role === "user"
-            ? "You"
-            : "Hearth Pi";
-      const article = node(
-        "article",
-        "",
-        `message ${message.role === "user" ? "user" : message.role === "toolResult" ? "tool" : "assistant"}`,
-      );
-      article.append(node("h3", role));
-      if (value)
-        article.append(
-          ...(message.role === "assistant"
-            ? assistantBody(message)
-            : [node("pre", value)]),
-        );
-      if (message.stopReason === "error" || message.stopReason === "aborted") {
-        article.append(
-          node(
-            "p",
-            "Model turn did not complete. No action outcome can be inferred.",
-            "error",
-          ),
-        );
-        // Controller-fixed reason (never raw provider text); rendered as text.
-        if (message.errorMessage)
-          article.append(node("p", message.errorMessage, "muted"));
-      }
+      const article = node("article", "", "message user");
+      article.append(node("h3", "You"), node("pre", value));
       fragment.append(article);
     }
   }
+  flushPending();
   const live = snapshot.view.docs["pi.live"] ?? {};
   if (live.generation?.message) {
-    const article = node("article", "", "message assistant live");
-    article.append(
-      node("h3", "Hearth Pi · committed partial"),
-      ...assistantBody(live.generation.message),
-    );
-    fragment.append(article);
+    const blocks = blocksOf(live.generation.message);
+    const text = blocks
+      .filter((b) => b.type === "text" && b.text)
+      .map((b) => b.text)
+      .join("\n");
+    if (text) fragment.append(buildAssistantText(text, "live"));
+    const toolBlocks = blocks.filter((b) => b.type === "toolCall");
+    if (toolBlocks.length)
+      fragment.append(
+        buildActivity(
+          toolBlocks.map((b) => ({
+            id: b.id,
+            name: b.name,
+            arguments: b.arguments,
+            result: null,
+          })),
+          "live",
+        ),
+      );
   }
-  for (const tool of live.tools ?? []) {
-    const article = node("article", "", "message tool");
-    article.append(
-      node("h3", `${tool.name} · ${tool.status}`),
-      node("pre", tool.output ?? ""),
-    );
-    fragment.append(article);
-  }
+  const liveTools = buildLiveActivity(live.tools ?? []);
+  if (liveTools) fragment.append(liveTools);
   container.replaceChildren(fragment);
 }
 export function renderCanvas(container, canvas, ask) {

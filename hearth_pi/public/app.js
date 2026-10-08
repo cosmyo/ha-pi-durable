@@ -12,6 +12,13 @@ import {
   renderPinnedApps,
   timeOf,
 } from "./apps.js";
+import {
+  askPrompt,
+  renderFeedback,
+  renderInsights,
+  renderProactiveSettings,
+  renderToday,
+} from "./today.js";
 const $ = (id) => document.getElementById(id);
 // Home Assistant shows Ingress panels in an iframe below its own toolbar;
 // the CSS ignores phone safe-area insets there (see html.embedded).
@@ -70,7 +77,12 @@ let csrf = "",
   appData = null,
   appUi = { tabs: new Map() },
   transcriptEmpty = true,
-  appResultCount = -1;
+  appResultCount = -1,
+  todayData = null,
+  feedbackSession = null,
+  feedbackItems = {},
+  feedbackRows = new Map(),
+  feedbackUi = new Map();
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
@@ -347,6 +359,22 @@ $("canvas-toggle").addEventListener("click", () => {
   canvasOpen = !canvasOpen;
   controls();
 });
+// Floating "New messages" pill: shown only while the user has scrolled up
+// and new transcript content arrived without moving them; stick-to-bottom
+// (below in snapshot()) still applies whenever they were already at bottom.
+function setScrollPill(visible) {
+  $("scroll-pill").hidden = !visible;
+}
+$("scroll-pill").addEventListener("click", () => {
+  const area = $("scroll-area");
+  area.scrollTop = area.scrollHeight;
+  setScrollPill(false);
+});
+$("scroll-area").addEventListener("scroll", () => {
+  const area = $("scroll-area");
+  if (area.scrollHeight - area.scrollTop - area.clientHeight < 100)
+    setScrollPill(false);
+});
 // Grow the composer with its content instead of reserving rows up front.
 function fitComposer() {
   const box = $("message");
@@ -397,9 +425,11 @@ function snapshot(value) {
     entries[entries.length - 1] ?? null,
     value.view.docs["pi.live"] ?? null,
   ]);
-  if (nextMessageSignature !== messageSignature) {
+  const transcriptChanged = nextMessageSignature !== messageSignature;
+  if (transcriptChanged) {
     messageSignature = nextMessageSignature;
-    renderMessages($("messages"), value, appResultCard);
+    feedbackRows = new Map();
+    renderMessages($("messages"), value, appResultCard, feedbackFor);
     transcriptEmpty = entries.length === 0;
     renderPinned();
     // A new app_create/app_update result refreshes the Apps list and pins.
@@ -448,7 +478,12 @@ function snapshot(value) {
     ? `${usage.toLocaleString()} reported tokens · not a bill`
     : "No reported model usage";
   controls();
-  if (atBottom) area.scrollTop = area.scrollHeight;
+  if (atBottom) {
+    area.scrollTop = area.scrollHeight;
+    setScrollPill(false);
+  } else if (transcriptChanged) {
+    setScrollPill(true);
+  }
 }
 // Compact relative time for the conversation list, Claude-app style.
 function relativeTime(ms) {
@@ -553,6 +588,7 @@ async function select(session) {
   controls();
   const id = selected;
   try {
+    void loadFeedback(id);
     const state = await api(`sessions/${id}/snapshot`);
     if (selected !== id) return;
     snapshot(state);
@@ -1555,11 +1591,364 @@ if (/^#world=[ABC]$/.test(window.location.hash)) void openWorld();
 $("model-dialog").addEventListener("close", () => {
   $("model-chip").setAttribute("aria-expanded", "false");
 });
+// --- Today inbox, Briefings & watchers, Insights and message feedback ---
+// Polled (no extra stream): the controller checks watchers about once a
+// minute, so the badge never needs to be fresher than that.
+function todayFeedback(value) {
+  $("today-feedback").textContent = value;
+}
+function paintTodayBadge() {
+  const unread = todayData?.unread ?? 0;
+  $("today-badge").textContent = unread ? String(unread) : "";
+  $("today-badge").hidden = !unread;
+  $("today-dot").hidden = !unread;
+  $("today-row").setAttribute(
+    "aria-label",
+    unread ? `Today, ${unread} new card${unread === 1 ? "" : "s"}` : "Today",
+  );
+  $("drawer-toggle").setAttribute(
+    "aria-label",
+    unread ? `Conversations and Today (${unread} new)` : "Conversations",
+  );
+}
+function paintToday() {
+  if (!todayData) return;
+  paintTodayBadge();
+  if ($("today-dialog").open)
+    renderToday($("today-list"), todayData, todayHandlers);
+}
+async function loadToday() {
+  try {
+    todayData = await api("today");
+  } catch {
+    return;
+  }
+  paintToday();
+}
+async function todayAction(path, payload, message) {
+  try {
+    const result = await api(path, payload);
+    if (result?.cards) todayData = { ...todayData, ...result };
+    else await loadToday();
+    paintToday();
+    todayFeedback(message);
+  } catch (error) {
+    todayFeedback(
+      error.message === "snooze_tonight_passed"
+        ? "It is already evening; choose Tomorrow instead."
+        : `Not saved: ${error.message}.`,
+    );
+  }
+}
+const todayHandlers = {
+  dismiss: (card) =>
+    void todayAction("today/dismiss", { id: card.id }, "Dismissed."),
+  snooze: (card, until) =>
+    void todayAction(
+      "today/snooze",
+      { id: card.id, until },
+      `Snoozed until ${until === "1h" ? "an hour from now" : until === "tonight" ? "19:00" : "tomorrow 08:00"}.`,
+    ),
+  ask: (card) => {
+    $("today-dialog").close();
+    void api("today/asked", { id: card.id }).catch(() => {});
+    void draftFromApp(askPrompt(card), card.source?.title || card.title);
+  },
+  openApp: (appId) => {
+    $("today-dialog").close();
+    void openApp(appId);
+  },
+};
+async function openToday() {
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+  todayFeedback("");
+  $("today-dialog").showModal();
+  $("today-row").setAttribute("aria-expanded", "true");
+  await loadToday();
+  if (!todayData) {
+    todayFeedback("Today is unavailable right now.");
+    return;
+  }
+  renderToday($("today-list"), todayData, todayHandlers);
+  // Opening the inbox marks what is shown as seen; the "New" labels stay
+  // until the next refresh so you can still tell which cards were new.
+  if (todayData.unread)
+    try {
+      const seen = await api("today/seen", {});
+      todayData = { ...seen };
+      paintTodayBadge();
+    } catch {
+      /* The badge simply stays until the next refresh. */
+    }
+}
+$("today-row").addEventListener("click", () => void openToday());
+$("today-close").addEventListener("click", () => $("today-dialog").close());
+$("today-dialog").addEventListener("close", () =>
+  $("today-row").setAttribute("aria-expanded", "false"),
+);
+$("today-settings").addEventListener("click", () => {
+  $("today-dialog").close();
+  void openProactive();
+});
+function proactiveFeedback(value) {
+  $("proactive-feedback").textContent = value;
+}
+let proactiveSettings = null;
+function paintProactive() {
+  if (!proactiveSettings) return;
+  const on = ["morning", "evening"].filter(
+    (slot) => proactiveSettings.briefings[slot].enabled,
+  ).length;
+  const active = proactiveSettings.watchers.filter(
+    (w) => w.status === "active",
+  ).length;
+  $("proactive-summary").textContent = !proactiveSettings.watchersEnabled
+    ? "Paused"
+    : on + active
+      ? `${on + active} on`
+      : "Off";
+  if ($("proactive-dialog").open)
+    renderProactiveSettings(
+      $("proactive-body"),
+      proactiveSettings,
+      proactiveHandlers,
+    );
+}
+async function loadProactive() {
+  try {
+    proactiveSettings = await api("proactive");
+  } catch (error) {
+    proactiveFeedback(`Could not load: ${error.message}.`);
+    return;
+  }
+  paintProactive();
+}
+async function proactiveAction(path, payload, message) {
+  try {
+    proactiveSettings = await api(path, payload);
+    paintProactive();
+    proactiveFeedback(message);
+  } catch (error) {
+    proactiveFeedback(
+      {
+        briefing_source_required:
+          "Choose where the briefing reads its values from first.",
+        invalid_time: "Choose a time.",
+        app_not_found: "That app no longer exists.",
+        canvas_not_found: "That Home view no longer exists.",
+        watcher_limit: "You already have the maximum number of watchers.",
+      }[error.message] ?? `Not saved: ${error.message}.`,
+    );
+  }
+}
+const WATCHER_ERRORS = {
+  entity_not_in_scope: "That entity is not in Hearth's read scope.",
+  entity_binding_required:
+    "Enter an exact entity ID, like sensor.washer_state.",
+  text_length: "Fill in the card title (up to 60 characters).",
+  unsafe_text: "Use plain words only.",
+  threshold_number: "Enter a number.",
+  integer_range: "Minutes must be 1–1440.",
+  watcher_time: "Choose a time.",
+};
+const proactiveHandlers = {
+  saveBriefing: (slot, value) =>
+    void proactiveAction(
+      "proactive/briefing",
+      { slot, ...value },
+      value.enabled
+        ? `${slot === "morning" ? "Morning" : "Evening"} briefing on at ${value.at}. The first one arrives at the next ${value.at}.`
+        : "Briefing off.",
+    ),
+  setEnabled: (enabled) =>
+    void proactiveAction(
+      "proactive/enabled",
+      { enabled },
+      enabled ? "Watchers resumed." : "All watchers paused.",
+    ),
+  removeWatcher: (id) =>
+    void proactiveAction("proactive/watchers/remove", { id }, "Removed."),
+  openApp: (appId) => {
+    $("proactive-dialog").close();
+    void openApp(appId);
+  },
+  addWatcher: async (watcher, errors) => {
+    try {
+      const response = await fetch(
+        new URL("api/proactive/watchers/add", base),
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Hearth-CSRF": csrf,
+          },
+          body: JSON.stringify({ watcher }),
+        },
+      );
+      const result = await response.json();
+      if (result.ok) {
+        proactiveSettings = result.settings;
+        paintProactive();
+        proactiveFeedback("Watcher added. It starts with the next check.");
+        return;
+      }
+      if (!result.errors) throw new Error(result.error ?? "Request failed");
+      errors.textContent = result.errors
+        .map((e) => WATCHER_ERRORS[e.code] ?? e.message)
+        .filter((v, i, all) => all.indexOf(v) === i)
+        .join(" ");
+    } catch (error) {
+      errors.textContent = `Not added: ${error.message}.`;
+    }
+  },
+};
+async function openProactive() {
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+  proactiveFeedback("");
+  $("proactive-dialog").showModal();
+  $("proactive-row").setAttribute("aria-expanded", "true");
+  await loadProactive();
+}
+$("proactive-row").addEventListener("click", () => void openProactive());
+$("proactive-close").addEventListener("click", () =>
+  $("proactive-dialog").close(),
+);
+$("proactive-dialog").addEventListener("close", () =>
+  $("proactive-row").setAttribute("aria-expanded", "false"),
+);
+async function loadInsights() {
+  try {
+    renderInsights($("insights-body"), await api("insights"));
+  } catch (error) {
+    $("insights-feedback").textContent = `Could not load: ${error.message}.`;
+  }
+}
+$("open-insights").addEventListener("click", () => {
+  $("proactive-dialog").close();
+  $("insights-feedback").textContent = "";
+  $("insights-export-box").hidden = true;
+  $("insights-dialog").showModal();
+  void loadInsights();
+});
+$("insights-close").addEventListener("click", () =>
+  $("insights-dialog").close(),
+);
+$("insights-export-button").addEventListener("click", async () => {
+  try {
+    const data = await api("insights/export");
+    const textValue = JSON.stringify(data, null, 2);
+    $("insights-export").textContent = textValue;
+    $("insights-export-box").hidden = false;
+    $("insights-export-box").open = true;
+    try {
+      const url = URL.createObjectURL(
+        new Blob([textValue], { type: "application/json" }),
+      );
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "hearth-insights.json";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch {
+      /* The JSON stays visible below for copying. */
+    }
+    $("insights-feedback").textContent =
+      `Exported ${data.items.length} rating${data.items.length === 1 ? "" : "s"}. The JSON is also shown below.`;
+  } catch (error) {
+    $("insights-feedback").textContent = `Not exported: ${error.message}.`;
+  }
+});
+$("insights-delete").addEventListener("click", async () => {
+  if (
+    !window.confirm(
+      "Delete all your ratings and Today card counts? Like other deletes, Pi Durable keeps committed history in the App's private store; it is not securely erased.",
+    )
+  )
+    return;
+  try {
+    const result = await api("insights/delete", { confirm: true });
+    $("insights-export-box").hidden = true;
+    $("insights-export").textContent = "";
+    $("insights-feedback").textContent =
+      `Deleted ${result.deleted} rating${result.deleted === 1 ? "" : "s"}.`;
+    feedbackItems = {};
+    for (const id of feedbackRows.keys()) paintFeedbackRow(id);
+    await loadInsights();
+  } catch (error) {
+    $("insights-feedback").textContent = `Not deleted: ${error.message}.`;
+  }
+});
+// 👍/👎 under committed assistant replies, stored locally without text.
+function feedbackFor(entry) {
+  if (!selected || !Number.isSafeInteger(entry?.id)) return null;
+  const row = node("div", "", "feedback-row");
+  feedbackRows.set(entry.id, row);
+  paintFeedbackRow(entry.id);
+  return row;
+}
+function paintFeedbackRow(entryId) {
+  const row = feedbackRows.get(entryId);
+  if (!row) return;
+  const ui = feedbackUi.get(entryId) ?? { open: false, draft: new Set() };
+  feedbackUi.set(entryId, ui);
+  const sessionId = selected;
+  renderFeedback(row, feedbackItems[String(entryId)], ui, {
+    toggle: () => {
+      ui.open = !ui.open;
+      paintFeedbackRow(entryId);
+    },
+    reason: (reason) => {
+      if (ui.draft.has(reason)) ui.draft.delete(reason);
+      else ui.draft.add(reason);
+      paintFeedbackRow(entryId);
+    },
+    rate: async (rating, reasons) => {
+      try {
+        await api(`sessions/${sessionId}/feedback`, {
+          entryId,
+          rating,
+          ...(rating === "down" ? { reasons } : {}),
+        });
+        if (selected !== sessionId) return;
+        if (rating === "clear") delete feedbackItems[String(entryId)];
+        else feedbackItems[String(entryId)] = { rating, reasons };
+        ui.open = false;
+        ui.draft = new Set();
+        paintFeedbackRow(entryId);
+      } catch (error) {
+        feedback(`Rating not saved: ${error.message}.`);
+      }
+    },
+  });
+}
+async function loadFeedback(id) {
+  feedbackSession = id;
+  feedbackItems = {};
+  feedbackUi = new Map();
+  try {
+    const result = await api(`sessions/${id}/feedback`);
+    if (feedbackSession !== id || selected !== id) return;
+    feedbackItems = result.items ?? {};
+    for (const entryId of feedbackRows.keys()) paintFeedbackRow(entryId);
+  } catch {
+    /* Ratings stay blank; rating again records a fresh one. */
+  }
+}
+// Unref'd so a non-browser host (tests) is never kept alive by the poll.
+setInterval(() => void loadToday(), 60000)?.unref?.();
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void loadToday();
+});
 try {
   await bootstrap();
   await loadModels();
   const sessions = await listSessions();
   void loadApps();
+  void loadToday();
+  void loadProactive();
   setConnection("Connected");
   if (sessions.length) {
     await select(sessions[sessions.length - 1]);

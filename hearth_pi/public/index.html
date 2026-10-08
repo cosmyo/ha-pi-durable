@@ -40,6 +40,15 @@
         <div id="sessions" aria-label="Select a session"></div>
         <div class="drawer-footer">
           <button
+            id="today-row"
+            type="button"
+            aria-controls="today-dialog"
+            aria-expanded="false"
+          >
+            <span>Today</span>
+            <span id="today-badge" class="badge" hidden></span>
+          </button>
+          <button
             id="apps-row"
             type="button"
             aria-controls="apps-dialog"
@@ -60,6 +69,15 @@
           >
             <span>Home permissions</span>
             <span id="permissions-mode-row" class="muted">Read-only</span>
+          </button>
+          <button
+            id="proactive-row"
+            type="button"
+            aria-controls="proactive-dialog"
+            aria-expanded="false"
+          >
+            <span>Briefings &amp; watchers</span>
+            <span id="proactive-summary" class="muted"></span>
           </button>
           <button
             id="account"
@@ -86,7 +104,8 @@
             aria-label="Conversations"
           >
             <span class="chevron" aria-hidden="true">‹</span
-            ><span aria-hidden="true">Chats</span>
+            ><span aria-hidden="true">Chats</span
+            ><span id="today-dot" class="dot" aria-hidden="true" hidden></span>
           </button>
           <div class="topbar-title">
             <h2 id="title">A little warmth. A little more certainty.</h2>
@@ -148,6 +167,9 @@
               </div>
             </div>
             <section id="approvals" aria-label="Exact action reviews"></section>
+            <button id="scroll-pill" type="button" class="scroll-pill" hidden>
+              <span aria-hidden="true">↓</span> New messages
+            </button>
           </div>
           <p id="feedback" role="status"></p>
           <form id="composer">
@@ -234,6 +256,53 @@
       <div class="actions">
         <button id="apps-new" type="button">Ask Hearth for an app</button>
         <button id="apps-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="today-dialog" aria-labelledby="today-heading">
+      <h2 id="today-heading">Today</h2>
+      <p class="muted">
+        Cards from your watchers and briefings. Hearth reads every value shown;
+        nothing here controls a device.
+      </p>
+      <p id="today-feedback" role="status" aria-live="polite"></p>
+      <div id="today-list"></div>
+      <div class="actions">
+        <button id="today-settings" type="button">
+          Briefings &amp; watchers
+        </button>
+        <button id="today-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="proactive-dialog" aria-labelledby="proactive-heading">
+      <h2 id="proactive-heading">Briefings &amp; watchers</h2>
+      <p class="muted">
+        They only read entities in your scope and add cards to Today. They never
+        control devices, call services or start a chat.
+      </p>
+      <p id="proactive-feedback" role="status" aria-live="polite"></p>
+      <div id="proactive-body"></div>
+      <div class="actions">
+        <button id="open-insights" type="button">Insights</button>
+        <button id="proactive-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="insights-dialog" aria-labelledby="insights-heading">
+      <h2 id="insights-heading">Insights</h2>
+      <p class="muted">
+        Your 👍/👎 ratings and Today card counts, stored only in this App. No
+        prompt or reply text is kept: just message numbers, ratings, reasons,
+        the model name and the time. Nothing is sent anywhere.
+      </p>
+      <p id="insights-feedback" role="status" aria-live="polite"></p>
+      <div id="insights-body"></div>
+      <details id="insights-export-box" hidden>
+        <summary>Exported JSON</summary>
+        <pre id="insights-export"></pre>
+      </details>
+      <div class="actions">
+        <button id="insights-export-button" type="button">Export</button>
+        <button id="insights-delete" type="button">Delete all</button>
+        <button id="insights-close" type="button">Close</button>
       </div>
     </dialog>
     <dialog id="app-approval" aria-label="Review app action">

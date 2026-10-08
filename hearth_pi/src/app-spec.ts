@@ -310,6 +310,36 @@ export type AppSpec = {
   scope: { entities: string[] };
   root: string;
   elements: Record<string, SpecElement>;
+  // Deterministic, controller-evaluated watchers; absent when there are none.
+  watchers?: WatcherSpec[];
+};
+// Watchers only ever create Today cards. They have no action field and no
+// way to name a service: the schema below is the whole vocabulary.
+export const WATCHER_LIMITS = {
+  perApp: 6,
+  perOwner: 20,
+  stateText: 60,
+  cardTitle: 60,
+  cardBody: 200,
+  minutes: 1440,
+  repeatMinutes: 5,
+  repeats: 5,
+  threshold: 1e9,
+} as const;
+// Index matches Date.getDay().
+export const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+export const timePattern = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+export type WatcherWhen =
+  | { kind: "transition"; entity: string; from?: string; to?: string }
+  | { kind: "threshold"; entity: string; above?: number; below?: number }
+  | { kind: "duration"; entity: string; state: string; minutes: number }
+  | { kind: "schedule"; at: string; days?: string[] };
+export type WatcherSpec = {
+  id: string;
+  when: WatcherWhen;
+  card: { title: string; body: string };
+  repeatAfterMinutes?: number;
+  maxRepeats?: number;
 };
 export type SpecError = {
   path: string;
@@ -336,44 +366,24 @@ const pointer = (...parts: (string | number)[]) =>
     .map((p) => `/${String(p).replaceAll("~", "~0").replaceAll("/", "~1")}`)
     .join("");
 
-export function validateSpec(
-  input: unknown,
-  context: ValidationContext,
-): Validation {
-  const errors: SpecError[] = [];
-  const warnings: string[] = [];
-  const fail = (path: string, code: string, message: string, hint?: string) => {
-    if (errors.length < LIMITS.errors)
-      errors.push({ path, code, message, ...(hint ? { hint } : {}) });
-  };
-  const done = (): Validation => ({ ok: false, errors, warnings });
-  let bytes = 0;
-  try {
-    bytes = Buffer.byteLength(JSON.stringify(input) ?? "");
-  } catch {
-    fail("", "not_json", "Spec must be plain JSON.");
-    return done();
-  }
-  if (bytes > LIMITS.specBytes) {
-    fail(
-      "",
-      "spec_too_large",
-      `Spec is ${bytes} bytes; the limit is ${LIMITS.specBytes}.`,
-      "Use fewer elements or shorter texts.",
-    );
-    return done();
-  }
-  if (!isRecord(input)) {
-    fail("", "not_object", "Spec must be a JSON object.");
-    return done();
-  }
-  const redact = context.redact ?? ((v: string) => v);
-  const plain = (
-    value: unknown,
-    path: string,
-    max: number,
-    options: { min?: number; multiline?: boolean } = {},
-  ): string | undefined => {
+type Fail = (
+  path: string,
+  code: string,
+  message: string,
+  hint?: string,
+) => void;
+type PlainCheck = (
+  value: unknown,
+  path: string,
+  max: number,
+  options?: { min?: number; multiline?: boolean },
+) => string | undefined;
+// Plain-text check shared by elements, watcher cards and owner watchers.
+function plainChecker(
+  fail: Fail,
+  redact: (value: string) => string,
+): PlainCheck {
+  return (value, path, max, options = {}) => {
     if (typeof value !== "string") {
       fail(path, "expected_text", "Expected a string.");
       return undefined;
@@ -408,12 +418,387 @@ export function validateSpec(
       }
     return redact(value);
   };
+}
+
+const WHEN_KEYS: Record<WatcherWhen["kind"], string[]> = {
+  transition: ["kind", "entity", "from", "to"],
+  threshold: ["kind", "entity", "above", "below"],
+  duration: ["kind", "entity", "state", "minutes"],
+  schedule: ["kind", "at", "days"],
+};
+// Validates one watcher. watchable(id) returns "" when the entity may be
+// watched, otherwise the reason it may not.
+function checkWatcher(
+  raw: unknown,
+  base: string,
+  report: Fail,
+  redact: (value: string) => string,
+  watchable: (entityId: string) => string,
+): WatcherSpec | undefined {
+  let failures = 0;
+  const fail: Fail = (...args) => {
+    failures++;
+    report(...args);
+  };
+  const plain = plainChecker(fail, redact);
+  if (!isRecord(raw)) {
+    fail(
+      base,
+      "watcher_not_object",
+      "Each watcher is {id, when, card, repeatAfterMinutes?, maxRepeats?}.",
+    );
+    return undefined;
+  }
+  for (const key of Object.keys(raw))
+    if (
+      !["id", "when", "card", "repeatAfterMinutes", "maxRepeats"].includes(key)
+    )
+      fail(
+        `${base}${pointer(key)}`,
+        "unknown_key",
+        `Unknown watcher key "${key}".`,
+        "Watchers have only id, when, card, repeatAfterMinutes and maxRepeats; they never run actions.",
+      );
+  const id = raw.id;
+  if (typeof id !== "string" || !idPattern.test(id))
+    fail(
+      `${base}/id`,
+      "invalid_id",
+      `Watcher id must match ${idPattern.source}.`,
+    );
+  const integer = (value: unknown, at: string, min: number, max: number) => {
+    if (
+      !Number.isSafeInteger(value) ||
+      (value as number) < min ||
+      (value as number) > max
+    ) {
+      fail(at, "integer_range", `Must be an integer ${min}-${max}.`);
+      return undefined;
+    }
+    return value as number;
+  };
+  let when: WatcherWhen | undefined;
+  const rawWhen = raw.when;
+  if (!isRecord(rawWhen))
+    fail(
+      `${base}/when`,
+      "watcher_when",
+      "when must be an object, e.g. {kind:'transition', entity, from?, to?}.",
+    );
+  else {
+    // The HAS/1 example form {entity, from?, to?} is a transition.
+    const kind =
+      rawWhen.kind ??
+      (Object.keys(rawWhen).every((k) => ["entity", "from", "to"].includes(k))
+        ? "transition"
+        : undefined);
+    if (typeof kind !== "string" || !Object.hasOwn(WHEN_KEYS, kind))
+      fail(
+        `${base}/when/kind`,
+        "watcher_kind",
+        "when.kind must be transition, threshold, duration or schedule.",
+      );
+    else {
+      const k = kind as WatcherWhen["kind"];
+      for (const key of Object.keys(rawWhen))
+        if (!WHEN_KEYS[k].includes(key))
+          fail(
+            `${base}/when${pointer(key)}`,
+            "unknown_key",
+            `A ${k} watcher has no "${key}".`,
+            `Allowed: ${WHEN_KEYS[k].join(", ")}.`,
+          );
+      const entity = () => {
+        const v = rawWhen.entity;
+        const at = `${base}/when/entity`;
+        if (typeof v !== "string" || !entityPattern.test(v)) {
+          fail(
+            at,
+            "entity_binding_required",
+            "Watch an exact entity ID string.",
+          );
+          return undefined;
+        }
+        const reason = watchable(v);
+        if (reason) {
+          fail(
+            at,
+            "entity_not_in_scope",
+            reason,
+            "Use only discovered, allowed entity IDs.",
+          );
+          return undefined;
+        }
+        return v;
+      };
+      const state = (key: string) =>
+        rawWhen[key] === undefined
+          ? undefined
+          : plain(
+              rawWhen[key],
+              `${base}/when/${key}`,
+              WATCHER_LIMITS.stateText,
+              {
+                min: 1,
+              },
+            );
+      const number = (key: string) => {
+        const v = rawWhen[key];
+        if (v === undefined) return undefined;
+        if (
+          typeof v !== "number" ||
+          !Number.isFinite(v) ||
+          Math.abs(v) > WATCHER_LIMITS.threshold
+        ) {
+          fail(
+            `${base}/when/${key}`,
+            "threshold_number",
+            `${key} must be a finite number.`,
+          );
+          return undefined;
+        }
+        return v;
+      };
+      if (k === "transition") {
+        const e = entity(),
+          from = state("from"),
+          to = state("to");
+        if (rawWhen.from === undefined && rawWhen.to === undefined)
+          fail(
+            `${base}/when`,
+            "watcher_transition",
+            "A transition needs to and/or from.",
+          );
+        else if (from !== undefined && from === to)
+          fail(
+            `${base}/when/to`,
+            "watcher_transition",
+            "from and to must differ.",
+          );
+        if (e)
+          when = {
+            kind: k,
+            entity: e,
+            ...(from !== undefined ? { from } : {}),
+            ...(to !== undefined ? { to } : {}),
+          };
+      } else if (k === "threshold") {
+        const e = entity(),
+          above = number("above"),
+          below = number("below");
+        if (rawWhen.above === undefined && rawWhen.below === undefined)
+          fail(
+            `${base}/when`,
+            "watcher_threshold",
+            "A threshold needs above and/or below.",
+          );
+        else if (above !== undefined && below !== undefined && above >= below)
+          fail(
+            `${base}/when/below`,
+            "watcher_threshold",
+            "above must be less than below.",
+          );
+        if (e)
+          when = {
+            kind: k,
+            entity: e,
+            ...(above !== undefined ? { above } : {}),
+            ...(below !== undefined ? { below } : {}),
+          };
+      } else if (k === "duration") {
+        const e = entity(),
+          s = state("state"),
+          minutes = integer(
+            rawWhen.minutes,
+            `${base}/when/minutes`,
+            1,
+            WATCHER_LIMITS.minutes,
+          );
+        if (rawWhen.state === undefined)
+          fail(
+            `${base}/when/state`,
+            "missing_prop",
+            "A duration watcher needs state.",
+          );
+        if (e && s !== undefined && minutes !== undefined)
+          when = { kind: k, entity: e, state: s, minutes };
+      } else {
+        const at = rawWhen.at;
+        if (typeof at !== "string" || !timePattern.test(at))
+          fail(
+            `${base}/when/at`,
+            "watcher_time",
+            'at must be a 24-hour local time like "07:30".',
+          );
+        let days: string[] | undefined;
+        if (rawWhen.days !== undefined) {
+          const list = rawWhen.days;
+          if (
+            !Array.isArray(list) ||
+            list.length < 1 ||
+            list.length > 7 ||
+            !list.every((d) => typeof d === "string" && WEEKDAYS.includes(d)) ||
+            new Set(list).size !== list.length
+          )
+            fail(
+              `${base}/when/days`,
+              "watcher_days",
+              `days must list distinct days from ${WEEKDAYS.join(", ")}.`,
+            );
+          else days = WEEKDAYS.filter((d) => list.includes(d));
+        }
+        if (typeof at === "string" && timePattern.test(at))
+          when = { kind: k, at, ...(days ? { days } : {}) };
+      }
+    }
+  }
+  let card: WatcherSpec["card"] | undefined;
+  if (!isRecord(raw.card))
+    fail(`${base}/card`, "watcher_card", "card must be {title, body?}.");
+  else {
+    for (const key of Object.keys(raw.card))
+      if (key !== "title" && key !== "body")
+        fail(
+          `${base}/card${pointer(key)}`,
+          "unknown_key",
+          `Unknown card key "${key}".`,
+        );
+    const title = plain(
+      raw.card.title,
+      `${base}/card/title`,
+      WATCHER_LIMITS.cardTitle,
+      {
+        min: 1,
+      },
+    );
+    const body =
+      raw.card.body === undefined
+        ? ""
+        : plain(raw.card.body, `${base}/card/body`, WATCHER_LIMITS.cardBody);
+    if (title !== undefined && body !== undefined) card = { title, body };
+  }
+  const repeat =
+    raw.repeatAfterMinutes === undefined
+      ? undefined
+      : integer(
+          raw.repeatAfterMinutes,
+          `${base}/repeatAfterMinutes`,
+          WATCHER_LIMITS.repeatMinutes,
+          WATCHER_LIMITS.minutes,
+        );
+  const maxRepeats =
+    raw.maxRepeats === undefined
+      ? undefined
+      : integer(
+          raw.maxRepeats,
+          `${base}/maxRepeats`,
+          1,
+          WATCHER_LIMITS.repeats,
+        );
+  if (when?.kind === "schedule" && raw.repeatAfterMinutes !== undefined)
+    fail(
+      `${base}/repeatAfterMinutes`,
+      "watcher_repeat",
+      "Schedules repeat by their days; repeatAfterMinutes is for entity watchers.",
+    );
+  if (raw.maxRepeats !== undefined && raw.repeatAfterMinutes === undefined)
+    fail(
+      `${base}/maxRepeats`,
+      "watcher_repeat",
+      "maxRepeats needs repeatAfterMinutes.",
+    );
+  if (failures || !when || !card || typeof id !== "string") return undefined;
+  return {
+    id,
+    when,
+    card,
+    ...(repeat !== undefined ? { repeatAfterMinutes: repeat } : {}),
+    ...(maxRepeats !== undefined ? { maxRepeats } : {}),
+  };
+}
+// A standalone watcher created by the owner: entities must be inside
+// Hearth's configured read scope.
+export function validateOwnerWatcher(
+  input: unknown,
+  context: ValidationContext,
+): { ok: true; watcher: WatcherSpec } | { ok: false; errors: SpecError[] } {
+  const errors: SpecError[] = [];
+  const watcher = checkWatcher(
+    input,
+    "",
+    (path, code, message, hint) => {
+      if (errors.length < LIMITS.errors)
+        errors.push({ path, code, message, ...(hint ? { hint } : {}) });
+    },
+    context.redact ?? ((v) => v),
+    (id) =>
+      context.readable.includes(id)
+        ? ""
+        : `${id} is outside Hearth's configured read scope.`,
+  );
+  return watcher ? { ok: true, watcher } : { ok: false, errors };
+}
+// Plain-language description of a validated watcher for people.
+export function describeWatcher(w: WatcherSpec): string {
+  const when = w.when;
+  const repeat = w.repeatAfterMinutes
+    ? `; repeats every ${w.repeatAfterMinutes} min up to ${w.maxRepeats ?? 1}×`
+    : "";
+  switch (when.kind) {
+    case "transition":
+      return `${when.entity} ${when.from !== undefined ? `changes from ${when.from}` : "changes"}${when.to !== undefined ? ` to ${when.to}` : ""}${repeat}`;
+    case "threshold":
+      return `${when.entity} ${[
+        when.above !== undefined ? `above ${when.above}` : "",
+        when.below !== undefined ? `below ${when.below}` : "",
+      ]
+        .filter(Boolean)
+        .join(" and ")}${repeat}`;
+    case "duration":
+      return `${when.entity} stays ${when.state} for ${when.minutes} min${repeat}`;
+    case "schedule":
+      return `Every ${when.days ? when.days.join(", ") : "day"} at ${when.at}`;
+  }
+}
+
+export function validateSpec(
+  input: unknown,
+  context: ValidationContext,
+): Validation {
+  const errors: SpecError[] = [];
+  const warnings: string[] = [];
+  const fail = (path: string, code: string, message: string, hint?: string) => {
+    if (errors.length < LIMITS.errors)
+      errors.push({ path, code, message, ...(hint ? { hint } : {}) });
+  };
+  const done = (): Validation => ({ ok: false, errors, warnings });
+  let bytes = 0;
+  try {
+    bytes = Buffer.byteLength(JSON.stringify(input) ?? "");
+  } catch {
+    fail("", "not_json", "Spec must be plain JSON.");
+    return done();
+  }
+  if (bytes > LIMITS.specBytes) {
+    fail(
+      "",
+      "spec_too_large",
+      `Spec is ${bytes} bytes; the limit is ${LIMITS.specBytes}.`,
+      "Use fewer elements or shorter texts.",
+    );
+    return done();
+  }
+  if (!isRecord(input)) {
+    fail("", "not_object", "Spec must be a JSON object.");
+    return done();
+  }
+  const plain = plainChecker(fail, context.redact ?? ((v: string) => v));
   for (const key of Object.keys(input)) {
     if (key === "id") {
       warnings.push("Ignored top-level id: Hearth assigns the appId.");
       continue;
     }
-    if (key === "watchers" || key === "visibleWhen")
+    if (key === "visibleWhen")
       fail(
         pointer(key),
         "unsupported_feature",
@@ -429,13 +814,14 @@ export function validateSpec(
         "scope",
         "root",
         "elements",
+        "watchers",
       ].includes(key)
     )
       fail(
         pointer(key),
         "unknown_key",
         `Unknown top-level key "${key}".`,
-        "Allowed: specVersion, title, summary, icon, scope, root, elements.",
+        "Allowed: specVersion, title, summary, icon, scope, root, elements, watchers.",
       );
   }
   if (input.specVersion !== SPEC_VERSION)
@@ -907,6 +1293,42 @@ export function validateSpec(
           "Reference it from a parent's children or delete it.",
         );
   }
+  const watchers: WatcherSpec[] = [];
+  if (input.watchers !== undefined) {
+    if (
+      !Array.isArray(input.watchers) ||
+      input.watchers.length > WATCHER_LIMITS.perApp
+    )
+      fail(
+        "/watchers",
+        "watchers_length",
+        `watchers must be an array of at most ${WATCHER_LIMITS.perApp}.`,
+      );
+    else
+      input.watchers.forEach((raw, i) => {
+        const watcher = checkWatcher(
+          raw,
+          pointer("watchers", i),
+          fail,
+          context.redact ?? ((v) => v),
+          (id) =>
+            scope.includes(id)
+              ? ""
+              : `${id} is not listed in scope.entities${context.readable.includes(id) ? "" : " and is outside Hearth's read scope"}.`,
+        );
+        if (!watcher) return;
+        if (watchers.some((w) => w.id === watcher.id))
+          fail(
+            pointer("watchers", i, "id"),
+            "duplicate_watcher",
+            `Watcher id "${watcher.id}" is used twice.`,
+          );
+        else {
+          watchers.push(watcher);
+          if (watcher.when.kind !== "schedule") used.add(watcher.when.entity);
+        }
+      });
+  }
   for (const id of scope)
     if (!used.has(id))
       warnings.push(`${id} is in scope.entities but no element uses it.`);
@@ -926,6 +1348,7 @@ export function validateSpec(
       scope: { entities: scope },
       root: root as string,
       elements,
+      ...(watchers.length ? { watchers } : {}),
     },
   };
 }
@@ -1082,6 +1505,8 @@ export type SpecDiff = {
   entitiesAdded: string[];
   entitiesRemoved: string[];
   titleChanged: boolean;
+  watchersAdded: string[];
+  watchersRemoved: string[];
 };
 export function diffSpecs(before: AppSpec | null, after: AppSpec): SpecDiff {
   const a = before?.elements ?? {};
@@ -1097,6 +1522,12 @@ export function diffSpecs(before: AppSpec | null, after: AppSpec): SpecDiff {
     entitiesAdded: after.scope.entities.filter((e) => !oldScope.includes(e)),
     entitiesRemoved: oldScope.filter((e) => !after.scope.entities.includes(e)),
     titleChanged: !!before && before.title !== after.title,
+    watchersAdded: (after.watchers ?? [])
+      .map((w) => w.id)
+      .filter((id) => !(before?.watchers ?? []).some((w) => w.id === id)),
+    watchersRemoved: (before?.watchers ?? [])
+      .map((w) => w.id)
+      .filter((id) => !(after.watchers ?? []).some((w) => w.id === id)),
   };
 }
 
@@ -1250,6 +1681,23 @@ export const TEMPLATES: { name: string; use: string; spec: AppSpec }[] = [
           children: [],
         },
       },
+      watchers: [
+        {
+          id: "washer_done",
+          when: {
+            kind: "transition",
+            entity: "sensor.washer_state",
+            from: "running",
+            to: "idle",
+          },
+          card: {
+            title: "Washer finished",
+            body: "Move the laundry to the dryer.",
+          },
+          repeatAfterMinutes: 30,
+          maxRepeats: 2,
+        },
+      ],
     },
   },
   {
@@ -1417,7 +1865,20 @@ export function describeCatalog() {
       "ToggleAction only for light/switch entities whose turn_on and turn_off are both configured services. A person taps it; Home permissions decide (Read-only disabled, Ask exact approval, Full within scope). You cannot press it.",
       "You cannot tick checklists, change counters/notes or press buttons; only people interact with apps.",
       "Update with app_update(appId, baseVersion, patch) using JSON Patch add/remove/replace on the spec. A stale baseVersion returns the current version; re-read with app_get and retry.",
+      `Optional "watchers" (at most ${WATCHER_LIMITS.perApp}): Hearth's controller evaluates them about once a minute and only creates a card in the owner's Today inbox. They never call services, press controls or message you. Watched entities must be in scope.entities.`,
     ],
+    watchers: {
+      shape:
+        '{"id":id,"when":When,"card":{"title":text,"body"?:text},"repeatAfterMinutes"?:5-1440,"maxRepeats"?:1-5}',
+      when: [
+        '{"kind":"transition","entity":id,"from"?:state,"to"?:state} — the state changes (e.g. running → idle). Changes out of unavailable/unknown are ignored unless "from" names them.',
+        '{"kind":"threshold","entity":id,"above"?:number,"below"?:number} — a numeric state crosses into the range.',
+        '{"kind":"duration","entity":id,"state":state,"minutes":1-1440} — stays in a state that long (as observed by Hearth).',
+        '{"kind":"schedule","at":"HH:MM","days"?:["mon",...]} — a reminder at a local time; a time missed while Hearth was off is delivered once, marked late.',
+      ],
+      notes:
+        "repeatAfterMinutes/maxRepeats repeat an entity watcher's card while its condition still holds. Card text is plain; the controller adds the entity's read value and time.",
+    },
     components: Object.entries(COMPONENTS).map(([type, c]) => ({
       type,
       description: c.description,

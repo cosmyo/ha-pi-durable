@@ -380,6 +380,18 @@ test("transcript app card shows diff summary and Open/Pin, with hostile titles a
       }),
       "No visible change",
     );
+    assert.equal(
+      diffSummary({
+        added: [],
+        removed: [],
+        changed: [],
+        entitiesAdded: [],
+        entitiesRemoved: [],
+        watchersAdded: ["washer_done"],
+        watchersRemoved: [],
+      }),
+      "watchers added: washer_done",
+    );
     const items = [
       {
         id: "app_1",

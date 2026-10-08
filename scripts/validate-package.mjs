@@ -83,6 +83,7 @@ for (const file of [
 for (const file of [
   "app.js",
   "apps.js",
+  "today.js",
   "render.js",
   // PROTOTYPE Home World modules (throwaway UI exploration).
   "world/prototype-world.js",

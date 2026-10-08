@@ -8,7 +8,9 @@ import {
   boundEntities,
   catalogSummary,
   describeCatalog,
+  describeWatcher,
   diffSpecs,
+  validateOwnerWatcher,
   validateSpec,
   type AppSpec,
   type ValidationContext,
@@ -134,12 +136,192 @@ test("unknown element and top-level keys are rejected", () => {
     "/css",
   );
 });
-test("watchers and visibleWhen are explicitly unsupported", () => {
+test("visibleWhen stays explicitly unsupported", () => {
   expectError(
-    mutate((s) => (s.watchers = [])),
+    mutate((s) => (s.visibleWhen = {})),
     "unsupported_feature",
+    "/visibleWhen",
+  );
+});
+const washerDone = () => ({
+  id: "washer_done",
+  when: { entity: "sensor.washer_state", from: "running", to: "idle" },
+  card: { title: "Washer finished", body: "Move laundry to the dryer." },
+  repeatAfterMinutes: 30,
+  maxRepeats: 2,
+});
+test("watchers: the HAS/1 example form normalizes to a transition; all four kinds validate", () => {
+  const result = mutate(
+    (s) =>
+      (s.watchers = [
+        washerDone(),
+        {
+          id: "power_high",
+          when: {
+            kind: "threshold",
+            entity: "sensor.washer_power",
+            above: 2000,
+          },
+          card: { title: "Washer power high" },
+        },
+        {
+          id: "dryer_idle_long",
+          when: {
+            kind: "duration",
+            entity: "sensor.dryer_state",
+            state: "idle",
+            minutes: 45,
+          },
+          card: { title: "Dryer idle 45 min" },
+        },
+        {
+          id: "filter",
+          when: { kind: "schedule", at: "07:30", days: ["sun", "mon"] },
+          card: { title: "Clean the lint filter" },
+        },
+      ]),
+  );
+  assert(result.ok, JSON.stringify(result));
+  assert.deepEqual(result.spec.watchers![0]!.when, {
+    kind: "transition",
+    entity: "sensor.washer_state",
+    from: "running",
+    to: "idle",
+  });
+  assert.equal(result.spec.watchers![1]!.card.body, "");
+  // A watched entity counts as used: no "unused scope" warning for it.
+  assert(!/sensor\.washer_power.*no element/.test(result.warnings.join(" ")));
+  assert.equal(
+    describeWatcher(result.spec.watchers![3]!),
+    "Every sun, mon at 07:30",
+  );
+  // No watchers key is stored when there are none (old specs are unchanged).
+  const none = mutate((s) => (s.watchers = []));
+  assert(none.ok && !("watchers" in none.spec));
+});
+test("watchers have no action vocabulary and reject out-of-scope or unsafe input with paths", () => {
+  for (const key of ["action", "service", "call", "data", "target"])
+    expectError(
+      mutate(
+        (s) => (s.watchers = [{ ...washerDone(), [key]: "light.turn_on" }]),
+      ),
+      "unknown_key",
+      `/watchers/0/${key}`,
+    );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [
+          {
+            ...washerDone(),
+            when: { kind: "transition", entity: "light.hall", to: "on" },
+          },
+        ]),
+    ),
+    "entity_not_in_scope",
+    "/watchers/0/when/entity",
+  );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [
+          {
+            ...washerDone(),
+            when: {
+              kind: "transition",
+              entity: "sensor.private_elsewhere",
+              to: "x",
+            },
+          },
+        ]),
+    ),
+    "entity_not_in_scope",
+    "/watchers/0/when/entity",
+  );
+  expectError(
+    mutate(
+      (s) => (s.watchers = [{ ...washerDone(), card: { title: "<script>x" } }]),
+    ),
+    "unsafe_text",
+    "/watchers/0/card/title",
+  );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [{ ...washerDone(), when: { kind: "cron", at: "*" } }]),
+    ),
+    "watcher_kind",
+    "/watchers/0/when/kind",
+  );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [
+          {
+            id: "late",
+            when: { kind: "schedule", at: "25:00" },
+            card: { title: "x" },
+          },
+        ]),
+    ),
+    "watcher_time",
+    "/watchers/0/when/at",
+  );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [
+          {
+            id: "rep",
+            when: { kind: "schedule", at: "07:00" },
+            card: { title: "x" },
+            repeatAfterMinutes: 10,
+          },
+        ]),
+    ),
+    "watcher_repeat",
+    "/watchers/0/repeatAfterMinutes",
+  );
+  expectError(
+    mutate(
+      (s) =>
+        (s.watchers = [
+          {
+            ...washerDone(),
+            when: {
+              kind: "threshold",
+              entity: "sensor.washer_power",
+              above: 5,
+              below: 1,
+            },
+          },
+        ]),
+    ),
+    "watcher_threshold",
+    "/watchers/0/when/below",
+  );
+  expectError(
+    mutate((s) => (s.watchers = [washerDone(), washerDone()])),
+    "duplicate_watcher",
+    "/watchers/1/id",
+  );
+  expectError(
+    mutate((s) => (s.watchers = Array.from({ length: 7 }, washerDone))),
+    "watchers_length",
     "/watchers",
   );
+  // Owner-created watchers are bound to Hearth's read scope instead.
+  assert(
+    validateOwnerWatcher(
+      { ...washerDone(), when: { entity: "light.hall", to: "on" } },
+      context,
+    ).ok,
+  );
+  const outside = validateOwnerWatcher(
+    { ...washerDone(), when: { entity: "lock.front_door", to: "unlocked" } },
+    context,
+  );
+  assert(!outside.ok && outside.errors[0]!.code === "entity_not_in_scope");
 });
 test("top-level id is ignored with a warning, not trusted", () => {
   const result = mutate((s) => (s.id = "app_999"));

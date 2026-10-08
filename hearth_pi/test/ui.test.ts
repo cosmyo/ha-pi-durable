@@ -377,3 +377,262 @@ test("assistant markdown renders as DOM elements and never interprets HTML", asy
     delete (globalThis as { document?: unknown }).document;
   }
 });
+
+// Regression for a live-install evidence screenshot: raw messages like
+// `ha_search_states {"query":"","offset":0}` and huge JSON tool results
+// pushed the actual reply far down the transcript. One assistant turn's
+// tool calls/results must collapse into a single friendly, collapsed-by-
+// default activity row instead.
+test("a turn's tool calls and results collapse into one friendly activity row; unknown tools fall back to their name; hostile names/args/results stay text; errors are visible while collapsed; long results truncate with Show more", async () => {
+  const { document, Event } = parseHTML(
+    '<html><body><div id="chat"></div></body></html>',
+  );
+  Object.defineProperty(globalThis, "document", {
+    value: document,
+    configurable: true,
+  });
+  try {
+    const { renderMessages } = await import(
+      new URL("../public/render.js", import.meta.url).href
+    );
+    const chat = document.getElementById("chat")!;
+    const hostileArg = "<script>alert(1)</script>";
+    const hostileText = '<img src=x onerror="alert(2)">';
+    const longResult = JSON.stringify({
+      items: Array.from({ length: 60 }, (_, i) => `${hostileText} entity_${i}`),
+    });
+    renderMessages(chat, {
+      view: {
+        entries: [
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "c1",
+                    name: "ha_search_states",
+                    arguments: { query: hostileArg, offset: 0 },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            model: [
+              {
+                role: "toolResult",
+                toolCallId: "c1",
+                toolName: "ha_search_states",
+                content: [{ type: "text", text: longResult }],
+                isError: false,
+              },
+            ],
+          },
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "c2",
+                    name: "a_future_unmapped_tool",
+                    arguments: { note: hostileArg },
+                  },
+                ],
+              },
+            ],
+          },
+          {
+            model: [
+              {
+                role: "toolResult",
+                toolCallId: "c2",
+                toolName: "a_future_unmapped_tool",
+                content: [{ type: "text", text: `${hostileText} failed` }],
+                isError: true,
+              },
+            ],
+          },
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Here is what I found." }],
+              },
+            ],
+          },
+        ],
+        docs: { "pi.live": {} },
+      },
+    });
+    const activities = chat.querySelectorAll(".message.activity");
+    assert.equal(
+      activities.length,
+      1,
+      "both tool calls of one turn collapse into a single activity row, not one row per call/result",
+    );
+    const details = activities[0]!.querySelector("details.activity-details")!;
+    assert.equal(details.hasAttribute("open"), false, "collapsed by default");
+    const summary = details.querySelector("summary.activity-summary")!;
+    assert.match(
+      summary.querySelector(".activity-summary-text")!.textContent!,
+      /Searched home/,
+      "known tool maps to a friendly verb",
+    );
+    assert.match(
+      details.textContent!,
+      /a_future_unmapped_tool/,
+      "unmapped tool falls back to its raw name instead of being hidden",
+    );
+    // Errors stay visible in the summary line itself, which is the only part
+    // shown while the <details> is collapsed.
+    assert.match(summary.textContent!, /issue/i);
+    assert.equal(activities[0]!.querySelector("img"), null);
+    assert.equal(activities[0]!.querySelector("script"), null);
+    assert(chat.textContent!.includes(hostileArg));
+    assert(chat.textContent!.includes(hostileText));
+    // The long tool result is truncated with an explicit "Show more".
+    const more = details.querySelector(".tool-result-more") as HTMLElement;
+    assert(more, "a long result renders truncated with a Show more control");
+    const pre = more.previousElementSibling as HTMLElement;
+    const truncatedLength = pre.textContent!.length;
+    more.dispatchEvent(new Event("click"));
+    assert(pre.textContent!.length > truncatedLength);
+    assert.equal(details.querySelector(".tool-result-more"), null);
+    // The final reply is plain assistant text, separate from the activity row.
+    const assistantArticles = chat.querySelectorAll(".message.assistant");
+    assert.equal(assistantArticles.length, 1);
+    assert.match(assistantArticles[0]!.textContent!, /Here is what I found\./);
+  } finally {
+    delete (globalThis as { document?: unknown }).document;
+  }
+});
+
+test("in-progress tool calls render one animated Working\u2026 line, not one raw row per tool", async () => {
+  const { document } = parseHTML(
+    '<html><body><div id="chat"></div></body></html>',
+  );
+  Object.defineProperty(globalThis, "document", {
+    value: document,
+    configurable: true,
+  });
+  try {
+    const { renderMessages } = await import(
+      new URL("../public/render.js", import.meta.url).href
+    );
+    const chat = document.getElementById("chat")!;
+    renderMessages(chat, {
+      view: {
+        entries: [],
+        docs: {
+          "pi.live": {
+            tools: [
+              {
+                callId: "a",
+                name: "ha_search_states",
+                status: "done",
+                output: "ok",
+              },
+              {
+                callId: "b",
+                name: "ha_state_detail",
+                status: "running",
+                output: "",
+              },
+            ],
+          },
+        },
+      },
+    });
+    const liveRows = chat.querySelectorAll(".activity-live");
+    assert.equal(
+      liveRows.length,
+      1,
+      "the whole in-progress round is one row, not one per tool slot",
+    );
+    assert.match(liveRows[0]!.textContent!, /Working/);
+    assert.match(
+      liveRows[0]!.textContent!,
+      /Read a device/,
+      "shows the currently running step",
+    );
+    assert.equal(chat.querySelectorAll(".message").length, 1);
+  } finally {
+    delete (globalThis as { document?: unknown }).document;
+  }
+});
+
+test("assistant replies are plain text with a Copy button using navigator.clipboard, with a fallback when it is unavailable", async () => {
+  const { document, Event } = parseHTML(
+    '<html><body><div id="chat"></div></body></html>',
+  );
+  Object.defineProperty(globalThis, "document", {
+    value: document,
+    configurable: true,
+  });
+  const previousNavigator = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "navigator",
+  );
+  try {
+    const { renderMessages } = await import(
+      new URL("../public/render.js", import.meta.url).href
+    );
+    let copied = "";
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: { writeText: async (t: string) => void (copied = t) },
+      },
+      configurable: true,
+    });
+    const chat = document.getElementById("chat")!;
+    renderMessages(chat, {
+      view: {
+        entries: [
+          {
+            model: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "Hello **there**" }],
+              },
+            ],
+          },
+        ],
+        docs: { "pi.live": {} },
+      },
+    });
+    assert.equal(chat.querySelectorAll(".message.assistant").length, 1);
+    const copyButton = chat.querySelector(".message-copy") as HTMLElement;
+    assert(copyButton, "assistant reply has a copy control");
+    copyButton.dispatchEvent(new Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(copied, "Hello **there**");
+    assert.equal(copyButton.textContent, "Copied");
+
+    // Without a Clipboard API, the fallback never throws and still reports a status.
+    delete (globalThis as { navigator?: unknown }).navigator;
+    renderMessages(chat, {
+      view: {
+        entries: [
+          {
+            model: [
+              { role: "assistant", content: [{ type: "text", text: "Again" }] },
+            ],
+          },
+        ],
+        docs: { "pi.live": {} },
+      },
+    });
+    const fallbackButton = chat.querySelector(".message-copy") as HTMLElement;
+    fallbackButton.dispatchEvent(new Event("click"));
+    assert.notEqual(fallbackButton.textContent, "");
+  } finally {
+    delete (globalThis as { document?: unknown }).document;
+    if (previousNavigator)
+      Object.defineProperty(globalThis, "navigator", previousNavigator);
+    else delete (globalThis as { navigator?: unknown }).navigator;
+  }
+});
