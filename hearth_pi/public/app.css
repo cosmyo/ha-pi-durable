@@ -1,4 +1,8 @@
 :root {
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
   color-scheme: dark;
   --bg: #121c1e;
   --panel: #192629;
@@ -28,7 +32,30 @@ body {
   background:
     radial-gradient(ellipse at 75% 0, #303a30 0, transparent 55%), var(--bg);
   color: var(--text);
+  /* body (border-box) owns the viewport; #app fills what the insets leave. */
   height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  -webkit-tap-highlight-color: transparent;
+}
+/* Inside Home Assistant's panel iframe the HA shell already sits under the
+   notch and above the home indicator, but iOS still reports the phone's
+   insets to the frame. Ignore them there and size to the frame itself. */
+html.embedded {
+  --sa-top: 0px;
+  --sa-right: 0px;
+  --sa-bottom: 0px;
+  --sa-left: 0px;
+  height: 100%;
+}
+html.embedded body {
+  height: 100%;
+}
+button,
+select,
+summary,
+a {
+  touch-action: manipulation;
 }
 h1 {
   font-size: 1.4rem;
@@ -84,7 +111,7 @@ dialog textarea:focus-visible {
 }
 /* A selected session with no messages yet gets a quiet hint, not a void. */
 #messages:empty::before {
-  content: "Ask about your home, or tap a starter above. Replies and action reviews appear here.";
+  content: "Ask about your home. Replies and action reviews appear here.";
   display: block;
   max-width: 420px;
   margin: 6vh auto;
@@ -114,7 +141,7 @@ dialog textarea:focus-visible {
    compact screens; see the COMPACT_QUERY-matching media query below. */
 #app {
   display: flex;
-  height: 100dvh;
+  flex: 1;
   min-height: 0;
 }
 #backdrop {
@@ -287,6 +314,18 @@ button.primary {
   flex-shrink: 0;
   min-width: 44px;
   font-size: 1.1rem;
+}
+#drawer-toggle {
+  gap: 2px;
+  padding-left: 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--teal);
+}
+#drawer-toggle .chevron {
+  font-size: 1.5rem;
+  line-height: 1;
+  margin-top: -2px;
 }
 /* A slim status line, shown only while the connection is not "Connected". */
 #connection {
@@ -786,8 +825,7 @@ dialog .actions {
     overflow-x: hidden;
   }
   body {
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) 0
-      env(safe-area-inset-left);
+    padding: var(--sa-top) var(--sa-right) var(--sa-bottom) var(--sa-left);
   }
   button {
     min-height: 40px;
@@ -812,8 +850,7 @@ dialog .actions {
   }
   #drawer {
     position: fixed;
-    inset: env(safe-area-inset-top) auto env(safe-area-inset-bottom)
-      env(safe-area-inset-left);
+    inset: var(--sa-top) auto var(--sa-bottom) var(--sa-left);
     width: min(85vw, 320px);
     z-index: 40;
     transform: translateX(-100%);
@@ -935,7 +972,7 @@ dialog .actions {
     width: 100%;
     max-height: 92dvh;
     margin: auto 0 0;
-    padding: 20px 16px max(20px, env(safe-area-inset-bottom));
+    padding: 20px 16px max(20px, var(--sa-bottom));
     border-radius: 18px 18px 0 0;
     overflow: auto;
   }

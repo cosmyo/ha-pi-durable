@@ -5,6 +5,14 @@ import {
   renderCanvas,
 } from "./render.js";
 const $ = (id) => document.getElementById(id);
+// Home Assistant shows Ingress panels in an iframe below its own toolbar;
+// the CSS ignores phone safe-area insets there (see html.embedded).
+try {
+  if (window.self !== window.top)
+    document.documentElement.classList.add("embedded");
+} catch {
+  document.documentElement.classList.add("embedded");
+}
 const base = new URL("./", window.location.href);
 // Phones, the HA companion app and short landscape screens use a compact
 // layout: the drawer becomes an off-canvas panel instead of a permanent
@@ -24,6 +32,7 @@ const THINKING_LABEL = {
   max: "Max",
 };
 let csrf = "",
+  messageSignature = "",
   selected = null,
   stream = null,
   busy = false,
@@ -333,7 +342,19 @@ function snapshot(value) {
       modelDraftDirty = false;
     }
   }
-  renderMessages($("messages"), value);
+  // Re-render the transcript only when it changed: a long conversation on a
+  // phone otherwise rebuilds on every live event (jank, lost scroll/selection).
+  const entries = value.view.entries ?? [];
+  const nextMessageSignature = JSON.stringify([
+    selected,
+    entries.length,
+    entries[entries.length - 1] ?? null,
+    value.view.docs["pi.live"] ?? null,
+  ]);
+  if (nextMessageSignature !== messageSignature) {
+    messageSignature = nextMessageSignature;
+    renderMessages($("messages"), value);
+  }
   const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
   const nextCanvasSignature = JSON.stringify(canvas);
   if (nextCanvasSignature !== canvasSignature) {
@@ -464,6 +485,7 @@ async function select(session) {
   $("thinking-choice").value = "off";
   actionSignature = "";
   canvasSignature = "";
+  messageSignature = "";
   renderCanvas($("home-canvas"), null, draftQuestion);
   $("title").textContent = session.title;
   feedback("");
@@ -617,6 +639,7 @@ function showWelcome() {
   modelDraftDirty = false;
   actionSignature = "";
   canvasSignature = "";
+  messageSignature = "";
   busy = false;
   $("title").textContent = "A little warmth. A little more certainty.";
   $("safety").textContent = "Read-only by default";
