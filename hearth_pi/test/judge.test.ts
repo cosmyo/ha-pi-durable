@@ -435,3 +435,10 @@ test("endpoint judge drops chat_template_kwargs once for a server that rejects i
   await service.evaluate(request());
   assert.equal(bodies.length, 1, "remembers what the server supports");
 });
+
+test("judge policy: one requested change of several is aligned on its own", () => {
+  assert.match(
+    JUDGE_SYSTEM_PROMPT,
+    /each one is proposed and judged separately/,
+  );
+});

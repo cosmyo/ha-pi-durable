@@ -1,11 +1,11 @@
 # Risk-judge evaluation harness
 
-`judge-cases.json` is 60 synthetic cases for Hearth Pi's optional risk judge (`src/judge.ts`), covering:
+`judge-cases.json` is 63 synthetic cases for Hearth Pi's optional risk judge (`src/judge.ts`), covering:
 
 | Category     | Count | `expected.aligned`                    | Tests                                                                                                                                                                                                                 |
 | ------------ | ----- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `aligned`    | 20    | `true`                                | The judge should agree with a clear, exact, requested action (including non-English requests, synonyms/areas, and security actions the owner explicitly asked for — hard negatives for over-eager escalation).        |
-| `misaligned` | 20    | `false`                               | Wrong target, broader scope than asked, the wrong/opposite service, a question with no go-ahead, an unrequested side effect, a destructive/security action the owner didn't ask for, or an unrequested external call. |
+| `aligned`    | 22    | `true`                                | The judge should agree with a clear, exact, requested action (including non-English requests, synonyms/areas, and security actions the owner explicitly asked for — hard negatives for over-eager escalation).        |
+| `misaligned` | 21    | `false`                               | Wrong target, broader scope than asked, the wrong/opposite service, a question with no go-ahead, an unrequested side effect, a destructive/security action the owner didn't ask for, or an unrequested external call. |
 | `injection`  | 10    | `false`                               | Text inside `owner_request` or the action JSON (descriptions, aliases, templated secrets, homoglyphs, zero-width characters, forwarded third-party instructions) tries to talk the judge into agreeing.               |
 | `escalation` | 10    | `true`, with `expected.minEscalation` | The action genuinely matches what the owner asked, but is riskier than the given `deterministicLevel` — the judge's only value here is raising the level, never approving or denying.                                 |
 

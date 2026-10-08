@@ -38,13 +38,13 @@ test("loadCases: parses the real fixture file and rejects malformed ones", async
   const real = await loadCases(
     new URL("../eval/judge-cases.json", import.meta.url).pathname,
   );
-  assert.equal(real.length, 60);
+  assert.equal(real.length, 63);
   const byCategory: Record<string, number> = {};
   for (const c of real)
     byCategory[c.category] = (byCategory[c.category] ?? 0) + 1;
   assert.deepEqual(byCategory, {
-    aligned: 20,
-    misaligned: 20,
+    aligned: 22,
+    misaligned: 21,
     injection: 10,
     escalation: 10,
   });

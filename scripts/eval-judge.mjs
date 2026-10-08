@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Evaluates a risk-judge adapter against the 60 synthetic cases in
+// Evaluates a risk-judge adapter against the synthetic cases in
 // hearth_pi/eval/judge-cases.json, through Hearth Pi's own judge module
 // (never a reimplementation of its prompt/parsing), and writes a Markdown
 // report. See hearth_pi/eval/README.md and hearth_pi/DOCS.md "Run the risk
