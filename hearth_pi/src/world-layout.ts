@@ -7,6 +7,12 @@ import { entityPattern, insist, object, text } from "./safety.js";
 // 16 columns by default; an owner floor plan may widen the grid (the map
 // then pans horizontally on narrow screens).
 export const WORLD_GRID = Object.freeze({ cols: 16, maxCols: 40, maxRows: 64 });
+// Registries change rarely: one bounded WebSocket read per 5 minutes, and a
+// failure (no admin token, HA down) is remembered for a minute.
+export const WORLD_REGISTRY_TTL = Object.freeze({
+  okMs: 300000,
+  failureMs: 60000,
+});
 export const WORLD_LIMITS = Object.freeze({
   devices: 64,
   rooms: 24,

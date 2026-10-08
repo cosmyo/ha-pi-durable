@@ -514,6 +514,39 @@ export function createHouse(ctx, { onClose }) {
     listToggle,
     editToggle,
   ]);
+  // Hearth's layout proposal: a clearly labelled preview with Keep/Discard,
+  // or a quiet pointer to a proposal that was not opened yet.
+  const bannerTitle = el("strong", { className: "wh-banner-title" });
+  const bannerText = el("p", { className: "wh-banner-text" });
+  const bannerNote = el("p", { className: "world-muted wh-banner-note" });
+  const keep = button("Keep", "world-primary wh-banner-button");
+  keep.setAttribute("aria-label", "Keep this layout as my Home World");
+  const discard = button("Discard", "world-secondary wh-banner-button");
+  discard.setAttribute("aria-label", "Discard this proposal");
+  const openProposal = button("Preview", "world-primary wh-banner-button");
+  openProposal.setAttribute("aria-label", "Preview Hearth's layout proposal");
+  keep.addEventListener("click", () => void ctx.keepPreview());
+  discard.addEventListener("click", () => void ctx.discardPreview());
+  openProposal.addEventListener("click", () => void ctx.openPreview());
+  const banner = el(
+    "section",
+    {
+      className: "wh-banner",
+      attrs: { "aria-label": "Layout proposal", hidden: "" },
+    },
+    [
+      el("div", { className: "wh-banner-copy" }, [
+        bannerTitle,
+        bannerText,
+        bannerNote,
+      ]),
+      el("div", { className: "wh-banner-actions" }, [
+        keep,
+        discard,
+        openProposal,
+      ]),
+    ],
+  );
   const feedback = el("p", {
     className: "wh-feedback",
     attrs: { role: "status", "aria-live": "polite" },
@@ -531,7 +564,7 @@ export function createHouse(ctx, { onClose }) {
       className: "world-view",
       attrs: { "aria-labelledby": "world-title" },
     },
-    [head, feedback, alerts, mapView, listHost],
+    [head, banner, feedback, alerts, mapView, listHost],
   );
   title.id = "world-title";
 
@@ -795,8 +828,31 @@ export function createHouse(ctx, { onClose }) {
         .map((d) => `${d.name}: ${ANOMALY_TEXT[d.anomaly]}`)
         .join(". ");
   }
+  function renderBanner() {
+    const preview = ctx.preview;
+    const pending = ctx.pendingDraft;
+    const draft = preview ?? pending;
+    banner.hidden = !draft;
+    element.classList.toggle("wh-previewing", !!preview);
+    if (!draft) return;
+    const plural = (n, word) => `${n} ${n === 1 ? word : `${word}s`}`;
+    const size = `${plural(draft.rooms, "room")}${draft.decor ? ` + ${plural(draft.decor, "outdoor space")}` : ""} · ${draft.cols}×${draft.rows}`;
+    bannerTitle.textContent = preview
+      ? "Preview · Hearth's proposal"
+      : "Hearth proposed a new layout";
+    bannerText.textContent = preview
+      ? `${size} · not saved yet. Keep makes it your Home World; Discard leaves yours unchanged.`
+      : `${size}. See it before deciding.`;
+    bannerNote.textContent = draft.note ?? "";
+    bannerNote.hidden = !draft.note;
+    keep.hidden = discard.hidden = !preview;
+    openProposal.hidden = !!preview;
+    keep.disabled = discard.disabled = ctx.previewBusy;
+  }
   function render() {
     const structure = ctx.structure;
+    if (ctx.preview && editing) editing = false;
+    renderBanner();
     devices = ctx.views();
     if (structure?.rooms.length) {
       const first = structure.rooms[0];
@@ -812,7 +868,8 @@ export function createHouse(ctx, { onClose }) {
       view === "list" ? "Show map" : "Show list",
     );
     editToggle.setAttribute("aria-pressed", String(editing));
-    editToggle.hidden = view === "list" || !structure?.rooms.length;
+    editToggle.hidden =
+      view === "list" || !structure?.rooms.length || !!ctx.preview;
     mapView.hidden = view !== "map";
     listHost.hidden = view !== "list";
     element.classList.toggle("wh-editing", editing);
@@ -841,7 +898,9 @@ export function createHouse(ctx, { onClose }) {
     if (view === "list") editing = false;
     render();
   });
-  editToggle.addEventListener("click", () => setEditing(!editing));
+  editToggle.addEventListener("click", () => {
+    if (!ctx.preview) setEditing(!editing);
+  });
   layer.addEventListener("click", (event) => {
     const target = event.target.closest?.(".wh-device");
     if (!target || editing || drag?.moved) return;
@@ -858,7 +917,7 @@ export function createHouse(ctx, { onClose }) {
     };
   };
   screen.addEventListener("pointerdown", (event) => {
-    if (!editing) return;
+    if (!editing || ctx.preview) return;
     const point = toGrid(event);
     const deviceTarget = event.target.closest?.(".wh-device");
     if (deviceTarget)

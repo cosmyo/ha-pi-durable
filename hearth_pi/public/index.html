@@ -148,8 +148,24 @@
             </button>
           </div>
           <p id="feedback" role="status"></p>
+          <div id="attachments" aria-label="Attached images" hidden></div>
           <form id="composer">
-            <label class="sr-only" for="message">Your message</label
+            <button
+              id="attach"
+              type="button"
+              aria-label="Attach images"
+              title="Attach images (a floor plan, a photo)"
+            >
+              <span aria-hidden="true">＋</span></button
+            ><input
+              id="attach-input"
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              tabindex="-1"
+              aria-hidden="true"
+            /><label class="sr-only" for="message">Your message</label
             ><textarea
               id="message"
               placeholder="What would you like to understand?"

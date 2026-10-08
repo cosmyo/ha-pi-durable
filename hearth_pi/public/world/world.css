@@ -267,6 +267,53 @@
 .wh-tool[hidden] {
   display: none;
 }
+/* Hearth's layout proposal: labelled preview with Keep / Discard. */
+.wh-banner {
+  margin: 4px 12px 0;
+  padding: 10px 12px;
+  border: 1px dashed var(--warm);
+  border-radius: 14px;
+  background: #2a2a22;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+}
+.wh-banner[hidden] {
+  display: none;
+}
+.wh-banner-copy {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.wh-banner-title {
+  color: var(--warm);
+  font-size: 0.88rem;
+}
+.wh-banner-text {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.wh-banner-note[hidden] {
+  display: none;
+}
+.wh-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.wh-banner-button {
+  min-width: 88px;
+  min-height: 44px;
+}
+.wh-banner-button[hidden] {
+  display: none;
+}
+.wh-previewing .wh-frame {
+  outline: 2px dashed var(--warm);
+  outline-offset: -2px;
+}
 .wh-feedback {
   margin: 0;
   padding: 0 16px;

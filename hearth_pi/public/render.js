@@ -148,6 +148,27 @@ const TOOL_META = {
     phrase: (n) => (n > 1 ? `Suggested ${n} memories` : "Suggested a memory"),
     args: (a) => (a?.text ? `“${truncate(a.text, 80)}” · review in Today` : ""),
   },
+  hearth_skill: {
+    icon: "📖",
+    label: "Read a Hearth skill",
+    phrase: (n) => (n > 1 ? `Read ${n} Hearth skills` : "Read a Hearth skill"),
+    args: (a) => (a?.name ? String(a.name) : ""),
+  },
+  world_layout_get: {
+    icon: "🏠",
+    label: "Read the Home World layout",
+    phrase: () => "Read the Home World layout",
+    args: () => "",
+  },
+  world_layout_propose: {
+    icon: "🏠",
+    label: "Proposed a Home World layout",
+    phrase: (n) =>
+      n > 1
+        ? `Proposed ${n} Home World layouts`
+        : "Proposed a Home World layout",
+    args: (a) => (a?.note ? truncate(a.note, 80) : ""),
+  },
   suggest_app_change: {
     icon: "💡",
     label: "Suggested an app change",
@@ -497,6 +518,74 @@ function appendTurnError(article, message) {
 // replaces the raw rendering of that message.
 // decorate(entry, message) may return an element appended to a committed
 // assistant reply (feedback controls).
+// Attached images as thumbnails from the owner-checked image route; the
+// snapshot carries only a reference ("<entry>/<index>"), never bytes.
+function userImages(message, sessionId) {
+  if (!Array.isArray(message.content) || !Number.isSafeInteger(sessionId))
+    return [];
+  return message.content
+    .filter(
+      (block) =>
+        block?.type === "image" &&
+        typeof block.image === "string" &&
+        /^[1-9][0-9]{0,12}\/[0-9]$/.test(block.image),
+    )
+    .map((block, index) => {
+      const img = document.createElement("img");
+      img.src = `api/sessions/${sessionId}/images/${block.image}`;
+      img.alt = `Attached image ${index + 1}`;
+      img.loading = "lazy";
+      img.decoding = "async";
+      img.className = "message-image";
+      return img;
+    });
+}
+// Chat card for a world_layout_propose result: what Hearth drew and a way
+// to the preview (Keep / Discard happen there). Plain text only.
+export function renderWorldProposal(message, openPreview) {
+  let result = message.details;
+  if (!result || result.kind !== "home_world_proposal")
+    try {
+      result = JSON.parse(
+        (message.content ?? []).find((b) => b.type === "text")?.text ?? "",
+      );
+    } catch {
+      return null;
+    }
+  if (
+    message.isError ||
+    !result ||
+    result.ok !== true ||
+    result.kind !== "home_world_proposal"
+  )
+    return null;
+  const count = (n, word) => `${n} ${n === 1 ? word : `${word}s`}`;
+  const card = node("article", "", "message app-result world-proposal");
+  card.append(
+    node("h3", "Home layout proposal"),
+    node(
+      "strong",
+      `${count(Number(result.rooms) || 0, "room")}${result.decor ? ` + ${count(Number(result.decor), "outdoor space")}` : ""} · ${Number(result.cols) || 16}×${Number(result.rows) || 0}`,
+      "app-result-title",
+    ),
+  );
+  if (result.note) card.append(node("p", String(result.note), "muted"));
+  if (Array.isArray(result.warnings) && result.warnings.length)
+    card.append(node("p", result.warnings.join(" "), "muted"));
+  card.append(
+    node(
+      "p",
+      "A preview: nothing is saved until you tap Keep. Your Home Assistant areas and devices are not changed.",
+      "muted app-result-note",
+    ),
+  );
+  const actions = node("div", "", "actions");
+  const open = button("Open preview", "approve", "Open the layout preview");
+  open.addEventListener("click", () => openPreview());
+  actions.append(open);
+  card.append(actions);
+  return card;
+}
 export function renderMessages(
   container,
   snapshot,
@@ -569,9 +658,16 @@ export function renderMessages(
       // user message (or any other future role): render as plain text.
       flushPending();
       const value = messageText(message);
-      if (!value && !message.errorMessage) continue;
+      const images = userImages(message, snapshot.view.conversation?.id);
+      if (!value && !images.length && !message.errorMessage) continue;
       const article = node("article", "", "message user");
-      article.append(node("h3", "You"), node("pre", value));
+      article.append(node("h3", "You"));
+      if (images.length) {
+        const row = node("div", "", "message-images");
+        row.append(...images);
+        article.append(row);
+      }
+      if (value) article.append(node("pre", value));
       fragment.append(article);
     }
   }

@@ -35,6 +35,17 @@ import {
   requestPattern,
   redactor,
 } from "./safety.js";
+import {
+  IMAGE_LIMITS,
+  countImages,
+  findImage,
+  inputHash,
+  parseImages,
+  transcriptBytes,
+  userContent,
+  withoutImageData,
+  type ImageAttachment,
+} from "./images.js";
 
 export class Runtime {
   readonly admission = new Serial();
@@ -168,7 +179,12 @@ export class Runtime {
             ?.requests ?? {};
         for (const [requestId, input] of Object.entries(requests))
           if (!input.submissionId)
-            await runtime.place(session.id, requestId, input.content);
+            await runtime.place(
+              session.id,
+              requestId,
+              input.content,
+              input.images,
+            );
       }
       harness.resume();
       return runtime;
@@ -471,16 +487,31 @@ export class Runtime {
       }, ctx);
     });
   }
+  /** Whether the session's committed model accepts image input. */
+  async imageInput(owner: string, id: number) {
+    const conversation = await this.session(owner, id);
+    const model =
+      (await this.harness.snapshot(AgentDoc, conversation.id, ctx))?.model ??
+      this.model;
+    const resolved = this.models.getModel(model.provider, model.modelId);
+    return {
+      model: { provider: model.provider, modelId: model.modelId },
+      images: !!resolved?.input.includes("image"),
+    };
+  }
   async submit(
     owner: string,
     id: number,
     requestId: unknown,
     content: unknown,
+    attachments?: unknown,
   ): Promise<number> {
     const key = text(requestId, 80);
     insist(requestPattern.test(key));
-    const message = this.redact(text(content, 4000));
+    const images = parseImages(attachments);
+    const message = this.redact(text(content, 4000, images.length ? 0 : 1));
     insist(this.redact(key) === key, "credentials_in_request_id");
+    const hash = inputHash(message, images);
     return this.admission.run(async () => {
       insist(!this.closing, "closing", 503);
       const conversation = await this.session(owner, id);
@@ -488,8 +519,26 @@ export class Runtime {
         await this.harness.snapshot(Inputs, conversation.id, ctx)
       )?.requests[key];
       if (previous) {
-        insist(previous.hash === digest(message), "idempotency_conflict", 409);
-        return previous.submissionId || this.place(id, key, previous.content);
+        insist(previous.hash === hash, "idempotency_conflict", 409);
+        return (
+          previous.submissionId ||
+          this.place(id, key, previous.content, previous.images)
+        );
+      }
+      if (images.length) {
+        // Never drop an image silently: a text-only model would only see a
+        // placeholder, so the owner is told instead.
+        insist(
+          (await this.list(owner)).find((s) => s.id === id)?.kind !==
+            "workspace",
+          "images_home_only",
+          403,
+        );
+        insist(
+          (await this.imageInput(owner, id)).images,
+          "model_no_image_input",
+          409,
+        );
       }
       const inspection = await this.harness.inspect(ctx);
       insist(
@@ -502,11 +551,15 @@ export class Runtime {
         "capacity",
         429,
       );
+      const entries = (await conversation.context(ctx)).entries;
       insist(
-        Buffer.byteLength(
-          JSON.stringify((await conversation.context(ctx)).entries),
-        ) < 524288,
+        transcriptBytes(entries) < 524288,
         "transcript_limit_create_session",
+        429,
+      );
+      insist(
+        countImages(entries) + images.length <= IMAGE_LIMITS.perConversation,
+        "image_limit_create_session",
         429,
       );
       await conversation.commit(async (tx) => {
@@ -517,8 +570,9 @@ export class Runtime {
           429,
         );
         inputs.requests[key] = {
-          hash: digest(message),
+          hash,
           content: message,
+          ...(images.length ? { images } : {}),
           submissionId: 0,
           admitted: Date.now(),
           ...((await tx.doc(Catalog)).items.find((s) => s.id === id)?.kind !==
@@ -527,28 +581,49 @@ export class Runtime {
             : {}),
         };
       }, ctx);
-      return this.place(id, key, message);
+      return this.place(id, key, message, images);
     });
   }
   private async place(
     id: number,
     requestId: string,
     content: string,
+    images?: readonly ImageAttachment[],
   ): Promise<number> {
     const conversation = (await this.harness.conversation(
       id as ConversationId,
       ctx,
     ))!;
     const submission = await conversation.submit(
-      { type: "input", content, requestId, whenBusy: "followUp" },
+      {
+        type: "input",
+        content: userContent(content, images),
+        requestId,
+        whenBusy: "followUp",
+      },
       ctx,
     );
     await conversation.commit(async (tx) => {
-      (await tx.doc(Inputs, conversation.id)).requests[
+      const input = (await tx.doc(Inputs, conversation.id)).requests[
         requestId
-      ]!.submissionId = submission.id;
+      ]!;
+      input.submissionId = submission.id;
+      // The durable user message now carries the images.
+      delete input.images;
     }, ctx);
     return submission.id;
+  }
+  /** One attached image of an owner's session, from its active transcript. */
+  async image(owner: string, id: number, entryId: number, index: number) {
+    const conversation = await this.session(owner, id);
+    return findImage(
+      (await conversation.context(ctx)).entries as unknown as {
+        id: number;
+        model?: readonly unknown[];
+      }[],
+      entryId,
+      index,
+    );
   }
   async snapshot(
     owner: string,
@@ -598,7 +673,14 @@ export class Runtime {
           thinkingLevel: committed.thinkingLevel,
           revision: committed.revision,
         },
-        view: view.value,
+        // Whether attachments can be sent: the committed model reads images.
+        imageInput:
+          !!committedModel &&
+          !!this.models
+            .getModel(committedModel.provider, committedModel.modelId)
+            ?.input.includes("image"),
+        // Image bytes are served by the image route, never in snapshots.
+        view: withoutImageData(view.value),
         homePermissions: this.homeActions
           ? await this.homeActions.settings(owner)
           : null,

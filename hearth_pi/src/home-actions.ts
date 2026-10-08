@@ -47,6 +47,22 @@ export function policyFingerprint(ha: HAClient): string {
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 // Full access may run a proposal without a person only when it is low risk,
 // or medium with an agreeing judge; never high/critical or judge-misaligned.
+// The judge may see only the owner's words: text blocks of a message with
+// attachments, never image data or other block types.
+export function requestText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .flatMap((block) =>
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
+        ? [(block as { text: string }).text]
+        : [],
+    )
+    .join("\n");
+}
 export function autoRunAllowed(risk: RiskAssessment, judge: JudgeRecord) {
   if (judge.verdict === "misaligned") return false;
   if (risk.level === "low") return true;
@@ -334,7 +350,7 @@ export class HomeActions {
     const inputs = Object.values((await tx.doc(Inputs, sessionId)).requests)
       .filter((i) => ids.has(i.submissionId as never))
       .sort((a, b) => b.admitted - a.admitted);
-    return inputs[0]?.content ?? "";
+    return requestText(inputs[0]?.content);
   }
   private async inputBinding(tx: Tx, sessionId: ConversationId) {
     const ids = (await tx.doc(LiveDoc, sessionId)).run?.inputs ?? [];

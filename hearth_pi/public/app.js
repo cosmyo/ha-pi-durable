@@ -3,6 +3,7 @@ import {
   renderMessages,
   renderProposals,
   renderCanvas,
+  renderWorldProposal,
 } from "./render.js";
 import {
   renderApp,
@@ -90,7 +91,11 @@ let csrf = "",
   feedbackRows = new Map(),
   feedbackUi = new Map(),
   permissionModeLabel = "Read-only",
-  accountSummaryText = "Account";
+  accountSummaryText = "Account",
+  imageInput = false,
+  attachments = [];
+// Unsent images by request ID, when sessionStorage cannot hold them.
+const pendingImages = new Map();
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
@@ -315,6 +320,11 @@ function controls() {
       ? "Isolated coding workspace · no HA or network access"
       : homeSafety;
   $("message").disabled = busy || !!saved || sending;
+  // Images: Home chats only; the model's image support is explained on tap.
+  $("attach").hidden = !!selected && selectedKind !== "home";
+  $("attach").disabled = !selected || $("message").disabled;
+  $("attach").setAttribute("aria-disabled", String(!imageInput));
+  $("message").required = !attachments.length;
   const loginCommand = /^\/login(?:\s|$)/.test($("message").value.trim());
   $("send").disabled =
     $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
@@ -356,6 +366,9 @@ const worldApi = {
   load: () => api("world"),
   values: () => api("world/values"),
   save: (body) => api("world/layout", body),
+  draft: () => api("world/draft"),
+  keepDraft: (body) => api("world/draft/keep", body),
+  discardDraft: (body) => api("world/draft/discard", body),
   reset: (body) => api("world/reset", body),
   migrate: (body) => api("world/migrate", body),
 };
@@ -577,6 +590,7 @@ function snapshot(value) {
     );
   }
   busy = !!value.view.docs["pi.live"]?.run;
+  imageInput = value.imageInput === true;
   worldSnapshot = value;
   $("task-status").textContent = busy
     ? "Durable task in progress"
@@ -685,6 +699,8 @@ async function select(session) {
   stream?.close();
   selected = session.id;
   selectedKind = session.kind ?? "home";
+  imageInput = false;
+  clearAttachments();
   modelSelection = null;
   modelDraftDirty = false;
   $("active-model").textContent = "Loading session model…";
@@ -730,18 +746,43 @@ async function select(session) {
 async function sendSaved() {
   const value = pending();
   if (!value || sending) return;
+  const id = selected;
+  const body = { requestId: value.requestId, content: value.content };
+  if (value.imageCount) {
+    const images = value.images ?? pendingImages.get(value.requestId);
+    if (!images) {
+      // The page reloaded and the images did not fit in session storage.
+      sessionStorage.removeItem(`hearth:pending:${id}`);
+      $("message").value = value.content;
+      feedback(
+        "The images of your unsent message were lost when the page reloaded. Attach them again, then send.",
+      );
+      controls();
+      return;
+    }
+    body.images = images;
+  }
   sending = true;
   controls();
-  const id = selected;
   try {
-    await api(`sessions/${id}/inputs`, value);
+    await api(`sessions/${id}/inputs`, body);
     sessionStorage.removeItem(`hearth:pending:${id}`);
+    pendingImages.delete(value.requestId);
     if (selected === id) {
       $("message").value = "";
+      clearAttachments();
       fitComposer();
       feedback("Input durably admitted.");
     }
   } catch (error) {
+    if (IMAGE_ERRORS[error.message]) {
+      // Refused before admission: nothing to retry; keep the draft.
+      sessionStorage.removeItem(`hearth:pending:${id}`);
+      pendingImages.delete(value.requestId);
+      if (selected === id) $("message").value = value.content;
+      feedback(IMAGE_ERRORS[error.message]);
+      return;
+    }
     feedback(
       `Not acknowledged: ${error.message}. Your original request ID is saved for retry.`,
     );
@@ -774,15 +815,189 @@ $("composer").addEventListener("submit", (event) => {
     return;
   }
   if (!selected || !inferenceReady) return;
+  const requestId = crypto.randomUUID();
+  const images = attachments.map((a) => ({
+    mimeType: a.mimeType,
+    data: a.data,
+  }));
   try {
-    sessionStorage.setItem(
-      `hearth:pending:${selected}`,
-      JSON.stringify({ requestId: crypto.randomUUID(), content }),
-    );
+    const record = { requestId, content };
+    if (images.length) {
+      record.imageCount = images.length;
+      try {
+        sessionStorage.setItem(
+          `hearth:pending:${selected}`,
+          JSON.stringify({ ...record, images }),
+        );
+      } catch {
+        // Too large for session storage: keep the images in memory.
+        pendingImages.set(requestId, images);
+        sessionStorage.setItem(
+          `hearth:pending:${selected}`,
+          JSON.stringify(record),
+        );
+      }
+    } else
+      sessionStorage.setItem(
+        `hearth:pending:${selected}`,
+        JSON.stringify(record),
+      );
     void sendSaved();
   } catch {
     feedback("Browser session storage unavailable; input was not sent.");
   }
+});
+// ------------------------------------------------ image attachments
+// Home chats can carry up to 4 images (a floor plan, a photo). The browser
+// re-encodes each as JPEG of at most 2048 px on its longest side, so HEIC
+// and other formats the browser can show are sent as JPEG; the server
+// checks type, size and count again.
+const ATTACH_MAX = 4;
+const ATTACH_SIDE = 2048;
+const ATTACH_BYTES = 4 * 1024 * 1024;
+const IMAGE_ERRORS = {
+  model_no_image_input:
+    "This chat's model can't read images. Choose a model with image input from the model chip, or describe it in words.",
+  image_heic_unsupported:
+    "HEIC images can't be read. Choose JPEG or PNG, or take a screenshot of it.",
+  image_type_unsupported: "Only JPEG, PNG and WebP images can be attached.",
+  image_type_mismatch: "That image could not be read. Try another one.",
+  image_too_large:
+    "That image is too large. Try a smaller one or a screenshot.",
+  image_count: `At most ${ATTACH_MAX} images per message.`,
+  image_dimensions: "That image is too large. Try a smaller one.",
+  invalid_image: "That image could not be read. Try another one.",
+  image_limit_create_session:
+    "This chat already holds many images. Start a new chat to attach more.",
+  images_home_only: "Images can only be attached in Home chats.",
+};
+function clearAttachments() {
+  for (const a of attachments) URL.revokeObjectURL?.(a.url);
+  attachments = [];
+  renderAttachments();
+}
+function renderAttachments() {
+  const host = $("attachments");
+  host.hidden = !attachments.length;
+  host.replaceChildren(
+    ...attachments.map((a, index) => {
+      const item = node("figure", "", "attachment");
+      const img = document.createElement("img");
+      img.src = a.url;
+      img.alt = `Attached image ${index + 1}`;
+      const remove = node("button", "", "attachment-remove");
+      remove.type = "button";
+      const mark = node("span", "✕", "attachment-x");
+      mark.setAttribute("aria-hidden", "true");
+      remove.append(mark);
+      remove.setAttribute("aria-label", `Remove image ${index + 1}`);
+      remove.addEventListener("click", () => {
+        URL.revokeObjectURL?.(a.url);
+        attachments = attachments.filter((x) => x !== a);
+        renderAttachments();
+        controls();
+      });
+      item.append(img, remove);
+      return item;
+    }),
+  );
+}
+const canvasBlob = (canvas, quality) =>
+  new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+function decodeImage(file) {
+  if (typeof createImageBitmap === "function")
+    return createImageBitmap(file).catch(() => decodeWithElement(file));
+  return decodeWithElement(file);
+}
+function decodeWithElement(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("decode"));
+    };
+    img.src = url;
+  });
+}
+async function prepareImage(file) {
+  let source;
+  try {
+    source = await decodeImage(file);
+  } catch {
+    throw new Error(
+      "This image can't be read here. Choose a JPEG or PNG, or take a screenshot of it.",
+    );
+  }
+  const width = source.width,
+    height = source.height;
+  let scale = Math.min(1, ATTACH_SIDE / Math.max(width, height, 1));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const g = canvas.getContext("2d");
+    // Plans with transparent backgrounds stay readable as JPEG.
+    g.fillStyle = "#ffffff";
+    g.fillRect(0, 0, canvas.width, canvas.height);
+    g.drawImage(source, 0, 0, canvas.width, canvas.height);
+    const blob = await canvasBlob(canvas, attempt ? 0.75 : 0.88);
+    if (blob && blob.size <= ATTACH_BYTES) {
+      source.close?.();
+      const data = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1]);
+        reader.onerror = () => reject(new Error("read"));
+        reader.readAsDataURL(blob);
+      });
+      return {
+        mimeType: "image/jpeg",
+        data,
+        url: URL.createObjectURL(blob),
+      };
+    }
+    scale *= 0.75;
+  }
+  source.close?.();
+  throw new Error("That image is too large even after shrinking it.");
+}
+$("attach").addEventListener("click", () => {
+  if (!imageInput) {
+    feedback(IMAGE_ERRORS.model_no_image_input);
+    return;
+  }
+  if (attachments.length >= ATTACH_MAX) {
+    feedback(IMAGE_ERRORS.image_count);
+    return;
+  }
+  $("attach-input").click();
+});
+$("attach-input").addEventListener("change", async () => {
+  const input = $("attach-input");
+  const files = [...(input.files ?? [])].slice(
+    0,
+    ATTACH_MAX - attachments.length,
+  );
+  input.value = "";
+  if (!files.length) return;
+  feedback("Preparing images…");
+  let note = "";
+  for (const file of files)
+    try {
+      attachments.push(await prepareImage(file));
+    } catch (error) {
+      note = error.message;
+    }
+  renderAttachments();
+  controls();
+  feedback(
+    note ||
+      "Images attached. They are sent with your next message, only to this chat's model.",
+  );
 });
 $("message").addEventListener("input", () => {
   fitComposer();
@@ -1341,7 +1556,13 @@ const appHandlers = {
   },
 };
 function appResultCard(message) {
-  return message.role === "toolResult" && APP_TOOL.test(message.toolName)
+  if (message.role !== "toolResult") return null;
+  if (message.toolName === "world_layout_propose")
+    return renderWorldProposal(
+      message,
+      () => void openWorld({ preview: true }),
+    );
+  return APP_TOOL.test(message.toolName)
     ? renderAppResult(message, appHandlers)
     : null;
 }

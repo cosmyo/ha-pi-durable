@@ -32,6 +32,12 @@ export const ModelSelection = defineDoc<{ revision: number }>({
 export type Input = {
   hash: string;
   content: string;
+  // Attached images, kept only until the input is placed in the transcript
+  // (the durable user message then carries them).
+  images?: {
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+    data: string;
+  }[];
   submissionId: number;
   admitted: number;
   homePermission?: PermissionBinding;

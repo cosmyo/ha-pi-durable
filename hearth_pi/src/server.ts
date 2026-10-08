@@ -46,7 +46,11 @@ function appVersion(): Promise<string> {
   return appVersionPromise;
 }
 
-async function body(req: IncomingMessage, limit = 8192): Promise<unknown> {
+async function body(
+  req: IncomingMessage,
+  limit = 8192,
+  timeoutMs = 5000,
+): Promise<unknown> {
   insist(
     req.headers["content-type"] === "application/json",
     "json_required",
@@ -63,7 +67,7 @@ async function body(req: IncomingMessage, limit = 8192): Promise<unknown> {
     const chunks: Buffer[] = [];
     const timer = setTimeout(
       () => reject(new Fault(408, "body_timeout")),
-      5000,
+      timeoutMs,
     );
     req.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
@@ -164,6 +168,7 @@ export function appServer(
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
   const rates = new Map<string, { count: number; until: number }>();
+  let largeBodies = 0;
   const stringify = (data: unknown) =>
     JSON.stringify(data, (_key, val: unknown) =>
       typeof val === "string" ? redact(val) : val,
@@ -177,7 +182,9 @@ export function appServer(
   });
   server.maxConnections = 100;
   server.headersTimeout = 10000;
-  server.requestTimeout = 15000;
+  // Long enough for a message with attached images on a slow phone link;
+  // other bodies keep their own 5-second read deadline.
+  server.requestTimeout = 60000;
   server.keepAliveTimeout = 5000;
   async function handle(req: IncomingMessage, res: ServerResponse) {
     res.setHeader("Cache-Control", "no-store");
@@ -185,7 +192,7 @@ export function appServer(
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader(
       "Content-Security-Policy",
-      `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'self' ${config.origin}; form-action 'self'`,
+      `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; object-src 'none'; frame-ancestors 'self' ${config.origin}; form-action 'self'`,
     );
     try {
       insist(!runtime.closing, "closing", 503);
@@ -449,6 +456,13 @@ export function appServer(
         return json(res, 200, await world.get(owner));
       if (req.method === "GET" && path === "/api/world/values")
         return json(res, 200, await world.values(owner));
+      // Hearth's pending layout proposal: preview, then Keep or Discard.
+      if (req.method === "GET" && path === "/api/world/draft")
+        return json(res, 200, await world.draft(owner));
+      if (req.method === "POST" && path === "/api/world/draft/keep")
+        return json(res, 200, await world.keepDraft(owner, await body(req)));
+      if (req.method === "POST" && path === "/api/world/draft/discard")
+        return json(res, 200, await world.discardDraft(owner, await body(req)));
       const worldRoute = /^\/api\/world\/(layout|reset|migrate|actions)$/.exec(
         path,
       );
@@ -511,13 +525,31 @@ export function appServer(
         throw new Fault(404, "not_found");
       }
       const route =
-        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete|feedback))?$/.exec(
+        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete|feedback|images\/([1-9][0-9]{0,12})\/([0-9])))?$/.exec(
           path,
         );
       if (route) {
         const id = Number(route[1]);
         const operation = route[2];
         const conversation = await runtime.session(owner, id);
+        // An attached image of this owner's session, by transcript entry and
+        // position. Bytes were validated on admission and are re-identified.
+        if (req.method === "GET" && route[3] && route[4]) {
+          const image = await runtime.image(
+            owner,
+            id,
+            Number(route[3]),
+            Number(route[4]),
+          );
+          res.writeHead(200, {
+            "Content-Type": image.mimeType,
+            "Content-Length": image.bytes.length,
+            "Content-Disposition": "inline",
+            // Transcript entries are immutable; private to this browser.
+            "Cache-Control": "private, max-age=86400",
+          });
+          return res.end(image.bytes);
+        }
         if (req.method === "POST" && operation === "delete") {
           const v = object(await body(req), ["confirm"]);
           insist(v.confirm === true, "confirmation_required");
@@ -693,8 +725,23 @@ export function appServer(
           );
         }
         if (req.method === "POST" && operation === "inputs") {
-          const v = object(await body(req), ["requestId", "content"]);
-          const content = text(v.content, 16000);
+          // Attached images make this the one large body: base64 of at most
+          // 10 MB of images, read within 55 seconds on a slow phone link.
+          // Few such bodies are buffered at once.
+          insist(largeBodies < 4, "capacity", 429);
+          largeBodies++;
+          let raw: unknown;
+          try {
+            raw = await body(req, 14 * 1024 * 1024, 55000);
+          } finally {
+            largeBodies--;
+          }
+          const v = object(raw, ["requestId", "content", "images"]);
+          const content = text(
+            v.content,
+            16000,
+            v.images === undefined ? 1 : 0,
+          );
           if (/^\/login\b/.test(content.trim())) {
             const command = /^\/login(?:\s+(anthropic|openai-codex))?$/.exec(
               content.trim(),
@@ -726,6 +773,7 @@ export function appServer(
               id,
               v.requestId,
               v.content,
+              v.images,
             ),
           });
         }

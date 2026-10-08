@@ -383,3 +383,19 @@ test("judge history replays at most the last 4 exchanges of this judge session",
   assert.match(seen.at(-1)!.history[0]!.user, /request 3/);
   assert.equal(new Set(seen.map((s) => s.sessionId)).size, 1);
 });
+
+test("the judge sees only the text of a message with attached images", async () => {
+  const { requestText } = await import("../src/home-actions.js");
+  const content = [
+    { type: "text", text: "Turn on the study lamp" },
+    { type: "image", data: "IMAGE-DATA-CANARY", mimeType: "image/jpeg" },
+  ];
+  assert.equal(requestText(content), "Turn on the study lamp");
+  assert.equal(requestText("plain words"), "plain words");
+  assert.equal(
+    requestText([{ type: "image", data: "x", mimeType: "image/png" }]),
+    "",
+  );
+  assert.equal(requestText(undefined), "");
+  assert.doesNotMatch(JSON.stringify(requestText(content)), /CANARY/);
+});

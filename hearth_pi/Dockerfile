@@ -17,6 +17,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./package.json
 COPY public ./public
+# Bundled Hearth skills: trusted, read-only App content (never model-writable).
+COPY skills ./skills
 # Narrow bootstrap reads root-owned Supervisor options and reowns known DB files.
 # main.js permanently drops to UID/GID 1000 before harness/network/model work.
 USER 0:0

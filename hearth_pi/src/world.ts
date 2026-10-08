@@ -23,7 +23,10 @@ import {
   validateCustom,
   validatePrototypeLayout,
   worldEntities,
+  WORLD_REGISTRY_TTL,
+  UNASSIGNED_ROOM,
   type Anomaly,
+  type AutoLayout,
   type DeviceKind,
   type RegistryProjection,
   type WorldCustom,
@@ -31,17 +34,68 @@ import {
 
 export const WORLD_RATES = Object.freeze({
   valuesPerMinute: 12,
-  registryTtlMs: 300000,
-  registryFailureTtlMs: 60000,
+  registryTtlMs: WORLD_REGISTRY_TTL.okMs,
+  registryFailureTtlMs: WORLD_REGISTRY_TTL.failureMs,
 });
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) =>
   info.deltasSinceBase >= 31;
+// A layout Hearth proposed in a Home chat (world_layout_propose): shown as
+// a preview until the owner keeps or discards it; never the saved layout.
+// One per owner; a new proposal replaces it.
+export const WORLD_DRAFT_TTL_MS = 7 * 86400000;
+export type WorldDraft = {
+  id: string;
+  conversationId: number;
+  created: number;
+  expires: number;
+  note: string;
+  custom: WorldCustom;
+};
 export type WorldOwnerLayout = {
   revision: number;
   custom: WorldCustom | null;
   migrated: boolean;
   updated: number;
+  // Absent in documents written before drafts existed.
+  draft?: WorldDraft | null;
 };
+export const liveDraft = (stored: WorldOwnerLayout | undefined, now: number) =>
+  stored?.draft && stored.draft.expires > now ? stored.draft : null;
+// The auto house for the current scope and (cached) registry projection.
+export function buildWorld(
+  projection: RegistryProjection | null,
+  scope: readonly string[],
+) {
+  const entities = worldEntities(scope, projection);
+  return {
+    registry: !entities.length
+      ? ("empty" as const)
+      : projection
+        ? ("ok" as const)
+        : ("unavailable" as const),
+    layout: autoLayout(projection, entities),
+  };
+}
+export function draftSummary(
+  draft: WorldDraft,
+  auto: AutoLayout,
+  scope: readonly string[],
+) {
+  const merged = mergeLayout(auto, draft.custom, scope);
+  return {
+    id: draft.id,
+    conversationId: draft.conversationId,
+    created: draft.created,
+    expires: draft.expires,
+    note: draft.note,
+    // Rooms of areas; the Unassigned shed and outdoor spaces are separate.
+    rooms: merged.rooms.filter((r) => !r.decor && r.id !== UNASSIGNED_ROOM)
+      .length,
+    decor: merged.rooms.filter((r) => r.decor).length,
+    cols: merged.grid.cols,
+    rows: merged.grid.rows,
+  };
+}
 // One writer (the controller); owners are bounded by the authorized users.
 export const WorldLayouts = defineDoc<{
   owners: Record<string, WorldOwnerLayout>;
@@ -64,11 +118,6 @@ export type WorldValue = {
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 export class WorldStore {
-  private registryCache: {
-    at: number;
-    projection: RegistryProjection | null;
-  } | null = null;
-  private registryLoad: Promise<RegistryProjection | null> | null = null;
   private reads = new Map<string, { count: number; until: number }>();
   constructor(
     private runtime: Runtime,
@@ -78,28 +127,8 @@ export class WorldStore {
   private get scope() {
     return this.ha.policy.entities;
   }
-  // Registries change rarely: one bounded WebSocket read per 5 minutes, and
-  // a failure (no admin token, HA down) is remembered for a minute.
-  private async projection(): Promise<RegistryProjection | null> {
-    const now = this.now();
-    const cached = this.registryCache;
-    if (
-      cached &&
-      now - cached.at <
-        (cached.projection
-          ? WORLD_RATES.registryTtlMs
-          : WORLD_RATES.registryFailureTtlMs)
-    )
-      return cached.projection;
-    this.registryLoad ??= this.ha
-      .registry()
-      .catch(() => null)
-      .then((projection) => {
-        this.registryCache = { at: this.now(), projection };
-        this.registryLoad = null;
-        return projection;
-      });
-    return this.registryLoad;
+  private projection(): Promise<RegistryProjection | null> {
+    return this.ha.cachedRegistry(this.now);
   }
   private async ownerLayout(owner: string): Promise<WorldOwnerLayout> {
     const doc = await this.runtime.harness.snapshot(WorldLayouts, ctx);
@@ -117,27 +146,20 @@ export class WorldStore {
     return worldEntities(this.scope, await this.projection());
   }
   private async auto() {
-    const projection = await this.projection();
-    const entities = worldEntities(this.scope, projection);
-    return {
-      registry: !entities.length
-        ? ("empty" as const)
-        : projection
-          ? ("ok" as const)
-          : ("unavailable" as const),
-      layout: autoLayout(projection, entities),
-    };
+    return buildWorld(await this.projection(), this.scope);
   }
   private present(
     stored: WorldOwnerLayout,
     auto: Awaited<ReturnType<WorldStore["auto"]>>,
   ) {
+    const draft = liveDraft(stored, this.now());
     return {
       revision: stored.revision,
       customized: !!stored.custom,
       migrated: stored.migrated,
       registry: auto.registry,
       ...mergeLayout(auto.layout, stored.custom, this.scope),
+      draft: draft ? draftSummary(draft, auto.layout, this.scope) : null,
     };
   }
   // Structure only (no state reads): rooms, devices, customization.
@@ -283,6 +305,58 @@ export class WorldStore {
       layout.migrated = true;
     });
     return this.present(stored, auto);
+  }
+  // The pending proposal merged like a saved layout, for the preview.
+  // `revision` stays the saved layout's, the base for Keep.
+  async draft(owner: string) {
+    const [stored, auto] = await Promise.all([
+      this.ownerLayout(owner),
+      this.auto(),
+    ]);
+    const draft = liveDraft(stored, this.now());
+    insist(draft, "world_draft_not_found", 404);
+    return {
+      ...this.present({ ...stored, custom: draft.custom }, auto),
+      preview: true,
+    };
+  }
+  // Keep = the same validation and revision check as saving from the
+  // editor; the draft becomes the owner's layout and is removed.
+  async keepDraft(owner: string, body: unknown) {
+    const v = object(body, ["baseRevision", "draftId"]);
+    insist(Number.isSafeInteger(v.baseRevision) && Number(v.baseRevision) >= 0);
+    const draftId = text(v.draftId, 40);
+    const draft = liveDraft(await this.ownerLayout(owner), this.now());
+    insist(draft && draft.id === draftId, "world_draft_not_found", 404);
+    const custom = validateCustom(draft.custom, this.scope, (s) =>
+      this.runtime.redact(this.ha.sanitize(s)),
+    );
+    const stored = await this.commit(owner, (layout) => {
+      const current = liveDraft(layout, this.now());
+      insist(current && current.id === draftId, "world_draft_not_found", 404);
+      insist(layout.revision === v.baseRevision, "world_layout_conflict", 409);
+      layout.custom = custom;
+      layout.draft = null;
+    });
+    return this.present(stored, await this.auto());
+  }
+  // Discarding never touches the saved layout or its revision.
+  async discardDraft(owner: string, body: unknown) {
+    const v = object(body, ["draftId"]);
+    const draftId = text(v.draftId, 40);
+    const stored = await this.runtime.harness.commit(async (tx) => {
+      const doc = await tx.doc(WorldLayouts);
+      const current = doc.owners[owner];
+      const draft = liveDraft(current, this.now());
+      insist(
+        current && draft && draft.id === draftId,
+        "world_draft_not_found",
+        404,
+      );
+      current.draft = null;
+      return copy(current);
+    }, ctx);
+    return this.present(stored, await this.auto());
   }
   private async commit(
     owner: string,

@@ -45,6 +45,9 @@ export const ANOMALY_TEXT = {
   leak: "Leak detected",
 };
 export const FRAME_MS = 1000 / 30;
+// Drafted (never sent) by "Set up with Hearth…" in the editor.
+export const SETUP_PROMPT =
+  "Set up my Home World. Read how my home is drawn now, then ask me for a floor plan I can attach (a photo or a screenshot) and propose a layout as a preview.";
 const VALUES_EVERY_MS = 30000;
 const VALUES_MIN_GAP_MS = 5000;
 const ACTIVE_STATES = new Set([
@@ -779,7 +782,8 @@ export function createEditPanel(ctx, { onDone, onSelectRoom } = {}) {
   const room = () => ctx.structure?.rooms.find((r) => r.id === selected);
   const width = stepper("Width", (d) => {
     const r = room();
-    if (r) ctx.edit.room(r.id, { w: clamp(r.w + d, 2, 16 - r.x) });
+    const cols = ctx.structure?.grid.cols || 16;
+    if (r) ctx.edit.room(r.id, { w: clamp(r.w + d, 2, cols - r.x) });
   });
   const height = stepper("Height", (d) => {
     const r = room();
@@ -800,7 +804,7 @@ export function createEditPanel(ctx, { onDone, onSelectRoom } = {}) {
       const r = room();
       if (r)
         ctx.edit.room(r.id, {
-          x: clamp(r.x + dx, 0, 16 - r.w),
+          x: clamp(r.x + dx, 0, (ctx.structure?.grid.cols || 16) - r.w),
           y: clamp(r.y + dy, 0, 64 - r.h),
         });
     });
@@ -844,6 +848,10 @@ export function createEditPanel(ctx, { onDone, onSelectRoom } = {}) {
   hat.addEventListener("change", () => ctx.edit.character({ hat: hat.value }));
   const pet = el("input", { attrs: { type: "checkbox" } });
   pet.addEventListener("change", () => ctx.edit.pet(pet.checked));
+  // Hearth can lay the house out from a floor plan in a Home chat; this only
+  // drafts the request there (nothing is sent).
+  const setup = button("Set up with Hearth…", "world-secondary");
+  setup.addEventListener("click", () => ctx.setupWithHearth());
   const reset = button("Reset to auto layout", "world-danger");
   reset.addEventListener("click", () => {
     if (
@@ -882,6 +890,14 @@ export function createEditPanel(ctx, { onDone, onSelectRoom } = {}) {
           el("span", { text: "Pet companion" }),
         ]),
       ]),
+      el("fieldset", {}, [
+        el("legend", { text: "From a floor plan" }),
+        el("p", {
+          className: "world-muted",
+          text: "Hearth can draw your home from a plan photo or screenshot and show it as a preview first.",
+        }),
+        setup,
+      ]),
       status,
       reset,
     ]),
@@ -914,6 +930,7 @@ export function createEditPanel(ctx, { onDone, onSelectRoom } = {}) {
       );
     hat.value = structure.character.hat;
     pet.checked = structure.pet;
+    setup.disabled = !ctx.canAsk();
     status.textContent = ctx.saveStatus();
     const focused = document.activeElement;
     if (focused && deviceList.contains(focused)) return;
@@ -976,15 +993,30 @@ export async function mountWorld(host) {
     valuesTimer = 0,
     toggling = new Set(),
     notice = "",
+    preview = null,
+    previewBusy = false,
     wantStrip = false;
   const notify = () => {
     for (const listener of listeners) listener();
   };
-  const views = () => placeDevices(structure).map((d) => deviceView(d, values));
+  const views = () =>
+    placeDevices(preview ?? structure).map((d) => deviceView(d, values));
   const ctx = {
     host,
+    // While previewing Hearth's proposal, the map and list show the draft;
+    // the saved layout (and its revision, the base for Keep) stays aside.
     get structure() {
-      return structure;
+      return preview ?? structure;
+    },
+    get preview() {
+      return preview ? preview.draft : null;
+    },
+    // A pending proposal the owner has not opened yet.
+    get pendingDraft() {
+      return !preview && structure?.draft ? structure.draft : null;
+    },
+    get previewBusy() {
+      return previewBusy;
     },
     get values() {
       return values;
@@ -1017,6 +1049,86 @@ export async function mountWorld(host) {
     ask(device) {
       host.ask(askAbout(device));
     },
+    setupWithHearth() {
+      host.ask(SETUP_PROMPT);
+    },
+    async openPreview() {
+      try {
+        const draft = await host.api.draft();
+        preview = draft?.preview && draft.draft ? draft : null;
+        notice = preview
+          ? ""
+          : "This proposal is no longer available. Ask Hearth for a new one.";
+        if (preview) ctx.selected = null;
+      } catch (error) {
+        preview = null;
+        notice =
+          error?.message === "world_draft_not_found"
+            ? "This proposal is no longer available (kept, discarded, replaced or expired). Ask Hearth for a new one."
+            : "Could not load the preview. Try again shortly.";
+      }
+      notify();
+    },
+    closePreview() {
+      preview = null;
+      notify();
+    },
+    async keepPreview() {
+      if (!preview || !structure || previewBusy) return;
+      previewBusy = true;
+      notify();
+      try {
+        adopt(
+          await host.api.keepDraft({
+            baseRevision: structure.revision,
+            draftId: preview.draft.id,
+          }),
+        );
+        preview = null;
+        notice =
+          "Kept. This is your Home World now; edit it any time or reset to the automatic layout.";
+      } catch (error) {
+        if (error?.message === "world_layout_conflict") {
+          try {
+            adopt(await host.api.load());
+          } catch {
+            /* keep what we have */
+          }
+          notice =
+            "Home World changed elsewhere since this proposal. Review it and tap Keep again to replace that change.";
+        } else if (error?.message === "world_draft_not_found") {
+          preview = null;
+          notice =
+            "This proposal is no longer available. Ask Hearth for a new one.";
+          try {
+            adopt(await host.api.load());
+          } catch {
+            /* keep what we have */
+          }
+        } else notice = `Not kept: ${error?.message ?? "error"}.`;
+      } finally {
+        previewBusy = false;
+        notify();
+      }
+    },
+    async discardPreview() {
+      if (!preview || previewBusy) return;
+      previewBusy = true;
+      notify();
+      try {
+        adopt(await host.api.discardDraft({ draftId: preview.draft.id }));
+        notice = "Discarded. Your Home World is unchanged.";
+      } catch (error) {
+        notice =
+          error?.message === "world_draft_not_found"
+            ? "This proposal was already gone. Your Home World is unchanged."
+            : `Not discarded: ${error?.message ?? "error"}.`;
+      } finally {
+        preview = null;
+        previewBusy = false;
+        notify();
+      }
+    },
     async toggle(device) {
       if (toggling.has(device.entityId)) return;
       toggling.add(device.entityId);
@@ -1040,6 +1152,7 @@ export async function mountWorld(host) {
           onClose: () => {
             house?.destroy();
             house = null;
+            preview = null;
             host.showView(null);
             syncValues();
           },
@@ -1048,6 +1161,7 @@ export async function mountWorld(host) {
       }
       if (options.entityId) ctx.select(options.entityId);
       if (options.edit) house.setEditing(true);
+      if (options.preview) void ctx.openPreview();
       syncValues();
       notify();
     },
@@ -1055,6 +1169,7 @@ export async function mountWorld(host) {
       if (!house) return;
       house.destroy();
       house = null;
+      preview = null;
       host.showView(null);
       syncValues();
     },
