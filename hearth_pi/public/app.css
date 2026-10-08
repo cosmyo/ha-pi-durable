@@ -2134,3 +2134,143 @@ dialog .pro-field label {
   white-space: nowrap;
   text-align: right;
 }
+
+/* --------------------- Suggestions (Today) and Memory --------------------- */
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.suggestions-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.today-card.suggestion {
+  border-style: dashed;
+  border-color: #5c7a72;
+}
+.today-card.suggestion.unread {
+  border-color: var(--teal);
+}
+.today-card.suggestion.conflict {
+  border-style: solid;
+  border-color: var(--warm);
+}
+.memory-quote {
+  font-size: 0.98rem;
+  color: var(--text);
+}
+.suggestion-stale,
+.memory-warning {
+  margin: 4px 0;
+  color: var(--warm);
+  font-size: 0.82rem;
+}
+.suggestion-conflict {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #2d2a22;
+  font-size: 0.86rem;
+}
+.suggestion-conflict p {
+  margin: 4px 0 0;
+}
+.suggestion-patch {
+  margin-top: 6px;
+  font-size: 0.8rem;
+}
+.suggestion-patch summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+}
+.suggestion-patch li {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+.feedback-hint {
+  margin: 6px 0 0;
+  font-size: 0.76rem;
+  color: var(--teal);
+}
+#memory-feedback {
+  margin: 0;
+  color: var(--warm);
+  font-size: 0.84rem;
+}
+#memory-feedback:empty {
+  display: none;
+}
+.memory-usage {
+  margin: 8px 0 4px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.memory-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.memory-add > button {
+  align-self: flex-start;
+}
+.memory-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.memory-edit label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.memory-edit textarea {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: var(--bg);
+  min-height: 66px;
+}
+.memory-count {
+  align-self: flex-end;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.memory-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.memory-list > li {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #1b2a29;
+  padding: 10px 12px;
+  overflow-wrap: anywhere;
+}
+.memory-list > li.trimmed {
+  opacity: 0.7;
+  border-style: dashed;
+}
+.memory-list > li.memory-empty {
+  border-style: dashed;
+}
+.memory-text {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+#memory-dialog button {
+  min-height: 44px;
+}
+@media (max-width: 720px), (max-height: 560px) {
+  .memory-list .today-actions button {
+    flex: 1 1 auto;
+  }
+}

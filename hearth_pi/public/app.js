@@ -16,6 +16,7 @@ import {
   askPrompt,
   renderFeedback,
   renderInsights,
+  renderMemory,
   renderProactiveSettings,
   renderToday,
 } from "./today.js";
@@ -79,6 +80,11 @@ let csrf = "",
   transcriptEmpty = true,
   appResultCount = -1,
   todayData = null,
+  todayUi = { editing: null },
+  sessionUsesApp = false,
+  suggestionResultCount = -1,
+  memoryData = null,
+  memoryUi = { editing: null, draft: "" },
   feedbackSession = null,
   feedbackItems = {},
   feedbackRows = new Map(),
@@ -445,18 +451,28 @@ function snapshot(value) {
   if (transcriptChanged) {
     messageSignature = nextMessageSignature;
     feedbackRows = new Map();
+    const toolResults = entries
+      .flatMap((e) => e.model ?? [])
+      .filter((m) => m.role === "toolResult");
+    // A chat that built or changed an app gets the 👎 "may suggest a fix" hint.
+    const results = toolResults.filter((m) => APP_TOOL.test(m.toolName)).length;
+    sessionUsesApp = results > 0;
     renderMessages($("messages"), value, appResultCard, feedbackFor);
     transcriptEmpty = entries.length === 0;
     renderPinned();
     // A new app_create/app_update result refreshes the Apps list and pins.
-    const results = entries
-      .flatMap((e) => e.model ?? [])
-      .filter(
-        (m) => m.role === "toolResult" && APP_TOOL.test(m.toolName),
-      ).length;
     if (results !== appResultCount) {
       if (appResultCount >= 0 && results > appResultCount) void loadApps();
       appResultCount = results;
+    }
+    // A new suggestion refreshes the Today badge.
+    const suggested = toolResults.filter((m) =>
+      SUGGEST_TOOL.test(m.toolName),
+    ).length;
+    if (suggested !== suggestionResultCount) {
+      if (suggestionResultCount >= 0 && suggested > suggestionResultCount)
+        void loadToday();
+      suggestionResultCount = suggested;
     }
   }
   const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
@@ -1215,6 +1231,7 @@ $("apply-model").addEventListener("click", async () => {
 renderCanvas($("home-canvas"), null, draftQuestion);
 // --- Apps: household mini-apps rendered by trusted code from the API ---
 const APP_TOOL = /^app_(create|update)$/;
+const SUGGEST_TOOL = /^suggest_(memory|app_change)$/;
 const APP_ERRORS = {
   home_read_only:
     "Home permissions are Read-only, so this control is disabled. Change it in Home permissions.",
@@ -1609,6 +1626,89 @@ $("settings-insights-row").addEventListener("click", () => {
   closeSettingsSheet();
   openInsights();
 });
+// --- Settings → Memory: owner-approved household facts ---
+function memoryFeedback(value) {
+  $("memory-feedback").textContent = value;
+}
+function paintMemory() {
+  if (!memoryData) return;
+  $("memory-summary").textContent =
+    `${memoryData.items.length} item${memoryData.items.length === 1 ? "" : "s"}`;
+  renderMemory($("memory-body"), memoryData, memoryUi, memoryHandlers);
+}
+async function loadMemory() {
+  try {
+    memoryData = await api("memory");
+    paintMemory();
+  } catch (error) {
+    memoryFeedback(`Could not load: ${error.message}.`);
+  }
+}
+function memoryError(error) {
+  return error.message === "invalid_memory_text"
+    ? "Use one line of plain text, up to 200 characters."
+    : error.message === "memory_full"
+      ? "Memory is full. Forget an item first."
+      : error.message === "memory_duplicate"
+        ? "That is already remembered."
+        : error.message;
+}
+async function memoryAction(path, payload, message) {
+  try {
+    const result = await api(path, payload);
+    memoryData = result;
+    memoryUi.editing = null;
+    paintMemory();
+    memoryFeedback(typeof message === "function" ? message(result) : message);
+    return true;
+  } catch (error) {
+    memoryFeedback(`Not saved: ${memoryError(error)}`);
+    return false;
+  }
+}
+const memoryHandlers = {
+  add: async (value) => {
+    if (
+      await memoryAction("memory/add", { text: value }, (result) =>
+        result.added
+          ? "Remembered. Hearth uses it from the next message."
+          : "That is already remembered.",
+      )
+    ) {
+      memoryUi.draft = "";
+      paintMemory();
+    }
+  },
+  startEdit: (id) => {
+    memoryUi.editing = id;
+    paintMemory();
+    if (id) document.getElementById(`memory-edit-${id}`)?.focus?.();
+  },
+  edit: (item, value) =>
+    void memoryAction("memory/edit", { id: item.id, text: value }, "Saved."),
+  forget: (item) => {
+    if (
+      !window.confirm(
+        "Forget this? Hearth stops receiving it from its next request. Earlier chats and the App's private store keep committed history; it is not securely erased.",
+      )
+    )
+      return;
+    void memoryAction("memory/forget", { id: item.id }, "Forgotten.");
+  },
+};
+function openMemory() {
+  closeSettingsSheet();
+  memoryFeedback("");
+  memoryUi.editing = null;
+  $("memory-dialog").showModal();
+  $("memory-row").setAttribute("aria-expanded", "true");
+  void loadMemory();
+}
+$("memory-row").addEventListener("click", openMemory);
+$("memory-close").addEventListener("click", () => $("memory-dialog").close());
+$("memory-dialog").addEventListener("close", () =>
+  $("memory-row").setAttribute("aria-expanded", "false"),
+);
 // --- Sheets: Home permissions and Model open as dialogs from several entry points ---
 function openPermissions() {
   closeSettingsSheet();
@@ -1667,7 +1767,7 @@ function paintToday() {
   if (!todayData) return;
   paintTodayBadge();
   if ($("today-dialog").open)
-    renderToday($("today-list"), todayData, todayHandlers);
+    renderToday($("today-list"), todayData, todayHandlers, todayUi);
 }
 async function loadToday() {
   try {
@@ -1692,7 +1792,78 @@ async function todayAction(path, payload, message) {
     );
   }
 }
+// Owner decisions on suggestions: each is an authenticated, CSRF-checked
+// request bound to the suggestion's hash; the response carries fresh Today.
+async function suggestionAction(path, payload, message) {
+  try {
+    const { decision, ...today } = await api(path, payload);
+    todayData = today;
+    todayUi.editing = null;
+    paintToday();
+    if (decision?.ok === false && decision.conflict) {
+      todayFeedback(
+        decision.conflict.code === "version_conflict"
+          ? `Not applied: the app changed since this suggestion (now v${decision.conflict.currentVersion}). Nothing was changed.`
+          : `Not applied: ${decision.conflict.message} Nothing was changed.`,
+      );
+      return;
+    }
+    if (decision?.kind === "app_change" && decision.ok) {
+      void loadApps();
+      if (openAppId === decision.appId) void openApp(decision.appId);
+    }
+    todayFeedback(typeof message === "function" ? message(decision) : message);
+  } catch (error) {
+    todayFeedback(
+      error.message === "invalid_memory_text"
+        ? "Use one line of plain text, up to 200 characters."
+        : error.message === "memory_full"
+          ? "Memory is full. Forget an item in Settings → Memory first."
+          : error.message === "snooze_tonight_passed"
+            ? "It is already evening; choose Tomorrow instead."
+            : `Not saved: ${error.message}.`,
+    );
+  }
+}
+const suggestionHandlers = {
+  accept: (s, text) =>
+    void suggestionAction(
+      "suggestions/accept",
+      { id: s.id, hash: s.hash, ...(text === undefined ? {} : { text }) },
+      (decision) =>
+        decision?.kind === "memory"
+          ? "Saved to memory. Hearth uses it from the next message."
+          : `App updated to v${decision?.version}. Revert under Versions if needed.`,
+    ),
+  edit: (id) => {
+    todayUi.editing = id;
+    paintToday();
+    if (id) document.getElementById(`suggestion-edit-${id}`)?.focus?.();
+  },
+  reject: (s) =>
+    void suggestionAction(
+      "suggestions/reject",
+      { id: s.id, hash: s.hash },
+      "Rejected. Hearth won't suggest this again for 60 days.",
+    ),
+  snooze: (s, until) =>
+    void suggestionAction(
+      "suggestions/snooze",
+      { id: s.id, until },
+      `Snoozed until ${until === "1h" ? "an hour from now" : until === "tonight" ? "19:00" : "tomorrow 08:00"}.`,
+    ),
+  dismiss: (s) =>
+    void suggestionAction("suggestions/dismiss", { id: s.id }, "Dismissed."),
+  askAgain: (s) => {
+    $("today-dialog").close();
+    void draftFromApp(
+      `Please suggest this change to my app "${s.app.title}" (${s.app.appId}) again against its current version: ${s.app.summary}`,
+      s.app.title,
+    );
+  },
+};
 const todayHandlers = {
+  suggestion: suggestionHandlers,
   dismiss: (card) =>
     void todayAction("today/dismiss", { id: card.id }, "Dismissed."),
   snooze: (card, until) =>
@@ -1731,7 +1902,7 @@ async function openToday() {
     todayFeedback("Today is unavailable right now.");
     return;
   }
-  renderToday($("today-list"), todayData, todayHandlers);
+  renderToday($("today-list"), todayData, todayHandlers, todayUi);
   // Opening the inbox marks what is shown as seen; the "New" labels stay
   // until the next refresh so you can still tell which cards were new.
   if (todayData.unread)
@@ -1960,6 +2131,7 @@ function paintFeedbackRow(entryId) {
   const ui = feedbackUi.get(entryId) ?? { open: false, draft: new Set() };
   feedbackUi.set(entryId, ui);
   const sessionId = selected;
+  ui.appHint = sessionUsesApp;
   renderFeedback(row, feedbackItems[String(entryId)], ui, {
     toggle: () => {
       ui.open = !ui.open;

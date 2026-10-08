@@ -22,6 +22,8 @@ import type { LocalEndpoints } from "./local.js";
 import { AppStore } from "./apps.js";
 import { Proactive } from "./proactive.js";
 import { FeedbackStore } from "./feedback.js";
+import { MemoryStore } from "./memory.js";
+import { SuggestionStore } from "./suggestions.js";
 
 // Cached once per process: the package version shown read-only in the
 // Settings \u2192 About sheet. Never written to, never user-controlled.
@@ -139,6 +141,23 @@ export function appServer(
       sanitize: (value) => actions.engine.ha.sanitize(value),
     });
   const feedback = new FeedbackStore(runtime);
+  const memory = new MemoryStore(runtime);
+  const suggestions = new SuggestionStore(runtime, actions.engine.ha);
+  // Today = watcher/briefing cards plus the owner's open suggestions; new
+  // suggestions count toward the same unread badge.
+  const todayView = async (
+    owner: string,
+    base?: Awaited<ReturnType<Proactive["today"]>>,
+  ) => {
+    const today = base ?? (await proactive.today(owner));
+    const open = await suggestions.list(owner);
+    const unseen = open.items.filter(
+      (s) =>
+        s.status === "pending" &&
+        Math.max(s.created, s.snoozedUntil) > today.lastSeen,
+    ).length;
+    return { ...today, unread: today.unread + unseen, suggestions: open };
+  };
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
@@ -328,23 +347,57 @@ export function appServer(
         });
       }
       if (req.method === "GET" && path === "/api/today")
-        return json(res, 200, await proactive.today(owner));
+        return json(res, 200, await todayView(owner));
       const todayRoute = /^\/api\/today\/(seen|dismiss|snooze|asked)$/.exec(
         path,
       );
       if (todayRoute && req.method === "POST") {
         const v = await body(req);
         const operation = todayRoute[1];
-        return json(
-          res,
-          200,
+        if (operation === "asked")
+          return json(res, 200, await proactive.asked(owner, v));
+        const result =
           operation === "seen"
             ? await proactive.seen(owner, v)
             : operation === "dismiss"
               ? await proactive.dismiss(owner, v)
+              : await proactive.snooze(owner, v);
+        return json(res, 200, {
+          ...(await todayView(owner, result)),
+          ...("snoozedUntil" in result
+            ? { snoozedUntil: result.snoozedUntil }
+            : {}),
+        });
+      }
+      const suggestionRoute =
+        /^\/api\/suggestions\/(accept|reject|snooze|dismiss)$/.exec(path);
+      if (suggestionRoute && req.method === "POST") {
+        const v = await body(req);
+        const operation = suggestionRoute[1];
+        const decision =
+          operation === "accept"
+            ? await suggestions.accept(owner, v)
+            : operation === "reject"
+              ? await suggestions.reject(owner, v)
               : operation === "snooze"
-                ? await proactive.snooze(owner, v)
-                : await proactive.asked(owner, v),
+                ? await suggestions.snooze(owner, v)
+                : await suggestions.dismiss(owner, v);
+        return json(res, 200, { decision, ...(await todayView(owner)) });
+      }
+      if (req.method === "GET" && path === "/api/memory")
+        return json(res, 200, await memory.list(owner));
+      const memoryRoute = /^\/api\/memory\/(add|edit|forget)$/.exec(path);
+      if (memoryRoute && req.method === "POST") {
+        const v = await body(req);
+        const operation = memoryRoute[1];
+        return json(
+          res,
+          200,
+          operation === "add"
+            ? await memory.add(owner, v)
+            : operation === "edit"
+              ? await memory.edit(owner, v)
+              : await memory.forget(owner, v),
         );
       }
       if (req.method === "GET" && path === "/api/proactive")

@@ -113,13 +113,88 @@ function lite(meta: AppMeta) {
     createdBy: meta.createdBy,
   };
 }
-async function readSpec(tx: Tx, appId: string, version: number) {
+export type AppPatchOp = {
+  op: "add" | "remove" | "replace";
+  path: string;
+  value?: unknown;
+};
+export type AppPatchPlan =
+  | { ok: true; spec: AppSpec; diff: SpecDiff; warnings: string[] }
+  | {
+      ok: false;
+      errors: SpecError[];
+      warnings: string[];
+      currentVersion?: number;
+    };
+// The one app-change validation shared by app_update, change suggestions and
+// their acceptance: owner's app, exact baseVersion, patch, full revalidation
+// against the current read/service scope, and a real change.
+export function planAppPatch(
+  ha: HAClient,
+  meta: AppMeta | undefined,
+  appId: string,
+  baseVersion: number,
+  current: AppSpec | null,
+  patch: readonly AppPatchOp[],
+): AppPatchPlan {
+  if (!meta || (meta.version === baseVersion && !current))
+    return {
+      ok: false,
+      warnings: [],
+      errors: [
+        {
+          path: "/appId",
+          code: "app_not_found",
+          message: `No app ${appId}.`,
+          hint: "Use app_list.",
+        },
+      ],
+    };
+  if (meta.version !== baseVersion)
+    return {
+      ok: false,
+      warnings: [],
+      currentVersion: meta.version,
+      errors: [
+        {
+          path: "/baseVersion",
+          code: "version_conflict",
+          message: `baseVersion ${baseVersion} is stale; the current version is ${meta.version}.`,
+          hint: "Call app_get, then patch the current spec with that baseVersion.",
+        },
+      ],
+    };
+  if (!current) throw new Error("app_version_missing");
+  const patched = applyPatch(current, patch as AppPatchOp[]);
+  if (!patched.ok) return { ok: false, warnings: [], errors: patched.errors };
+  const v = validateSpec(patched.value, validationContext(ha));
+  if (!v.ok) return v;
+  if (digest(v.spec) === digest(current))
+    return {
+      ok: false,
+      warnings: [],
+      errors: [
+        {
+          path: "/patch",
+          code: "no_change",
+          message: "The patch does not change the app.",
+        },
+      ],
+    };
+  return {
+    ok: true,
+    spec: v.spec,
+    diff: diffSpecs(current, v.spec),
+    warnings: v.warnings,
+  };
+}
+export async function readSpec(tx: Tx, appId: string, version: number) {
   const spec = (await tx.doc(AppVersion, versionKey(appId, version), null))
     .spec;
   insist(spec, "app_version_missing", 500);
   return copy(spec) as AppSpec;
 }
-async function appendVersion(
+export async function appendVersion(
   tx: Tx,
   meta: AppMeta,
   spec: AppSpec,
@@ -290,52 +365,18 @@ export function appTools(ha: HAClient) {
         const meta = index.items.find(
           (a) => a.id === args.appId && a.owner === owner,
         );
-        if (!meta)
-          return {
-            ok: false,
-            warnings: [],
-            errors: [
-              {
-                path: "/appId",
-                code: "app_not_found",
-                message: `No app ${args.appId}.`,
-                hint: "Use app_list.",
-              },
-            ],
-          };
-        if (meta.version !== args.baseVersion)
-          return {
-            ok: false,
-            warnings: [],
-            currentVersion: meta.version,
-            errors: [
-              {
-                path: "/baseVersion",
-                code: "version_conflict",
-                message: `baseVersion ${args.baseVersion} is stale; the current version is ${meta.version}.`,
-                hint: "Call app_get, then patch the current spec with that baseVersion.",
-              },
-            ],
-          };
-        const current = await readSpec(tx, meta.id, meta.version);
-        const patched = applyPatch(current, args.patch);
-        if (!patched.ok)
-          return { ok: false, warnings: [], errors: patched.errors };
-        const v = validateSpec(patched.value, validationContext(ha));
-        if (!v.ok) return v;
-        if (digest(v.spec) === digest(current))
-          return {
-            ok: false,
-            warnings: [],
-            errors: [
-              {
-                path: "/patch",
-                code: "no_change",
-                message: "The patch does not change the app.",
-              },
-            ],
-          };
-        const diff = diffSpecs(current, v.spec);
+        const v = planAppPatch(
+          ha,
+          meta,
+          args.appId,
+          args.baseVersion,
+          meta && meta.version === args.baseVersion
+            ? await readSpec(tx, meta.id, meta.version)
+            : null,
+          args.patch,
+        );
+        if (!v.ok || !meta) return v as AppToolResult;
+        const diff = v.diff;
         await appendVersion(
           tx,
           meta,

@@ -317,6 +317,25 @@ type BriefingTarget = {
   labels: Map<string, string>;
 } | null;
 
+// Snooze choices shared by Today cards and suggestions: 1h, tonight (19:00
+// local today) or tomorrow (08:00 local).
+export function snoozeUntil(choice: unknown, now: number) {
+  const d = new Date(now);
+  if (choice === "1h") return now + 3600000;
+  if (choice === "tonight") {
+    const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 19, 0);
+    insist(t.getTime() > now, "snooze_tonight_passed", 409);
+    return t.getTime();
+  }
+  insist(choice === "tomorrow", "invalid_snooze");
+  return new Date(
+    d.getFullYear(),
+    d.getMonth(),
+    d.getDate() + 1,
+    8,
+    0,
+  ).getTime();
+}
 export class Proactive {
   private serial = new Serial();
   private timer?: ReturnType<typeof setInterval>;
@@ -782,21 +801,7 @@ export class Proactive {
   }
   // 1h, tonight (19:00 local today) or tomorrow (08:00 local).
   snoozeUntil(choice: unknown, now = this.now()) {
-    const d = new Date(now);
-    if (choice === "1h") return now + 3600000;
-    if (choice === "tonight") {
-      const t = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 19, 0);
-      insist(t.getTime() > now, "snooze_tonight_passed", 409);
-      return t.getTime();
-    }
-    insist(choice === "tomorrow", "invalid_snooze");
-    return new Date(
-      d.getFullYear(),
-      d.getMonth(),
-      d.getDate() + 1,
-      8,
-      0,
-    ).getTime();
+    return snoozeUntil(choice, now);
   }
   async snooze(owner: string, body: unknown) {
     const { id, v } = this.cardId(body, ["until"]);

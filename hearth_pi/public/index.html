@@ -264,6 +264,15 @@
             <span id="proactive-summary" class="muted"></span>
           </button>
           <button
+            id="memory-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="memory-dialog"
+          >
+            <span>Memory</span>
+            <span id="memory-summary" class="muted"></span>
+          </button>
+          <button
             id="settings-insights-row"
             type="button"
             class="settings-list-row"
@@ -329,6 +338,21 @@
       <div class="actions">
         <button id="open-insights" type="button">Insights</button>
         <button id="proactive-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="memory-dialog" aria-labelledby="memory-heading">
+      <h2 id="memory-heading">Memory</h2>
+      <p class="muted">
+        Facts and preferences you approved, like names, rooms and habits. Home
+        chats get them as owner-approved context: they never grant permissions,
+        widen scope or override safety rules. Forget removes an item from future
+        requests; earlier chats and the App's private store keep committed
+        history, so it is not a secure erase.
+      </p>
+      <p id="memory-feedback" role="status" aria-live="polite"></p>
+      <div id="memory-body"></div>
+      <div class="actions">
+        <button id="memory-close" type="button">Close</button>
       </div>
     </dialog>
     <dialog id="insights-dialog" aria-labelledby="insights-heading">

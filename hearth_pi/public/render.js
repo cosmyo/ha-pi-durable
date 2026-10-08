@@ -142,6 +142,20 @@ const TOOL_META = {
     phrase: (n) => (n > 1 ? `Proposed ${n} actions` : "Proposed an action"),
     args: (a) => [a?.service, a?.entityId].filter(Boolean).join(" · "),
   },
+  suggest_memory: {
+    icon: "💡",
+    label: "Suggested a memory",
+    phrase: (n) => (n > 1 ? `Suggested ${n} memories` : "Suggested a memory"),
+    args: (a) => (a?.text ? `“${truncate(a.text, 80)}” · review in Today` : ""),
+  },
+  suggest_app_change: {
+    icon: "💡",
+    label: "Suggested an app change",
+    phrase: (n) =>
+      n > 1 ? `Suggested ${n} app changes` : "Suggested an app change",
+    args: (a) =>
+      a?.summary ? `${truncate(a.summary, 80)} · review in Today` : "",
+  },
   ha_automation_config: {
     icon: "🤖",
     label: "Read an automation",

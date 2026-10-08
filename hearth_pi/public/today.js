@@ -3,6 +3,7 @@
 // untrusted and only ever set as textContent; every value shown comes from
 // the controller's reads, with its as-of time.
 import { node } from "./render.js";
+import { diffSummary } from "./apps.js";
 
 export const FEEDBACK_REASON_LABELS = {
   wrong_value: "Wrong value",
@@ -148,9 +149,206 @@ function cardElement(card, data, handlers) {
   article.append(actions, choices);
   return article;
 }
-export function renderToday(container, data, handlers) {
+// ---- Suggestions (L1 memory / L2 app changes) ----
+// Hearth only files these; nothing changes until the owner taps Accept.
+function patchLine(op) {
+  const value =
+    op.value === undefined ? "" : ` → ${JSON.stringify(op.value) ?? ""}`;
+  const line = `${op.op} ${op.path}${value}`;
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
+}
+function suggestionCard(s, data, handlers, ui) {
+  const conflict = s.status === "conflict";
+  const unread =
+    !conflict && Math.max(s.created, s.snoozedUntil) > (data.lastSeen ?? 0);
+  const article = node(
+    "article",
+    "",
+    `today-card suggestion${conflict ? " conflict" : ""}${unread ? " unread" : ""}`,
+  );
+  const meta = node("p", "", "today-meta");
+  meta.append(
+    node(
+      "span",
+      s.kind === "memory" ? "Suggestion · Memory" : "Suggestion · App change",
+      "today-source",
+    ),
+    node(
+      "span",
+      `${day(s.created)} · from ${s.conversationTitle}`,
+      "today-time",
+    ),
+  );
+  if (unread) meta.append(node("span", "New", "today-new"));
+  article.append(meta);
+  const actions = node("div", "", "today-actions");
+  if (s.kind === "memory") {
+    article.append(node("h3", "Remember this?", "today-title"));
+    const editing = ui.editing === s.id;
+    if (editing) {
+      const box = node("div", "", "memory-edit");
+      const area = document.createElement("textarea");
+      area.id = `suggestion-edit-${s.id}`;
+      area.maxLength = 200;
+      area.rows = 3;
+      area.value = s.memory.text;
+      const label = node("label", "Memory text (plain text, 200 characters)");
+      label.htmlFor = area.id;
+      box.append(label, area);
+      article.append(box);
+      const save = button("Save to memory", "approve", "Save edited memory");
+      save.addEventListener("click", () => handlers.accept(s, area.value));
+      const cancel = button("Cancel", "", "Cancel editing");
+      cancel.addEventListener("click", () => handlers.edit(null));
+      actions.append(save, cancel);
+    } else
+      article.append(
+        node("p", `“${s.memory.text}”`, "today-body memory-quote"),
+      );
+    if (s.reason) article.append(node("p", `Why: ${s.reason}`, "muted"));
+    if (!editing) {
+      const accept = button("Accept", "approve", "Accept memory suggestion");
+      accept.addEventListener("click", () => handlers.accept(s));
+      const edit = button("Edit", "", "Edit memory suggestion");
+      edit.addEventListener("click", () => handlers.edit(s.id));
+      actions.append(accept, edit);
+    }
+  } else {
+    const app = s.app;
+    article.append(
+      node(
+        "h3",
+        conflict ? `Couldn't apply to ${app.title}` : `Change “${app.title}”`,
+        "today-title",
+      ),
+    );
+    if (app.summary) article.append(node("p", app.summary, "today-body"));
+    article.append(node("p", diffSummary(app.diff), "app-diff"));
+    const stale =
+      typeof s.currentVersion === "number" &&
+      s.currentVersion !== app.baseVersion;
+    if (conflict) {
+      const box = node("div", "", "suggestion-conflict");
+      box.setAttribute("role", "status");
+      box.append(
+        node(
+          "strong",
+          s.conflict?.code === "version_conflict"
+            ? `Conflict: the app changed since this suggestion (v${app.baseVersion} → now v${s.conflict.currentVersion}).`
+            : `Not applied: ${s.conflict?.message ?? "the app changed."}`,
+        ),
+        node(
+          "p",
+          "Nothing was changed. Ask Hearth to suggest it again for the current version, or dismiss it.",
+          "muted",
+        ),
+      );
+      article.append(box);
+    } else
+      article.append(
+        node(
+          "p",
+          stale
+            ? `Based on v${app.baseVersion}; the app is now v${s.currentVersion}. Accepting will show a conflict.`
+            : s.currentVersion === null
+              ? "This app was deleted."
+              : `Applies to v${app.baseVersion} as a new version you can revert.`,
+          stale ? "suggestion-stale" : "muted",
+        ),
+      );
+    const details = node("details", "", "suggestion-patch");
+    details.append(node("summary", `Exact changes (${app.patch.length})`));
+    const list = node("ul", "", "insight-list");
+    for (const op of app.patch.slice(0, 12))
+      list.append(node("li", patchLine(op)));
+    if (app.patch.length > 12)
+      list.append(node("li", `…and ${app.patch.length - 12} more`, "muted"));
+    details.append(list);
+    article.append(details);
+    if (conflict) {
+      const ask = button(
+        "Ask Hearth again",
+        "approve",
+        `Ask Hearth again about ${app.title}`,
+      );
+      ask.addEventListener("click", () => handlers.askAgain(s));
+      const dismiss = button(
+        "Dismiss",
+        "",
+        `Dismiss suggestion for ${app.title}`,
+      );
+      dismiss.addEventListener("click", () => handlers.dismiss(s));
+      actions.append(ask, dismiss);
+    } else {
+      const accept = button(
+        "Accept",
+        "approve",
+        `Accept change to ${app.title}`,
+      );
+      accept.addEventListener("click", () => handlers.accept(s));
+      actions.append(accept);
+    }
+  }
+  if (!conflict && ui.editing !== s.id) {
+    const reject = button("Reject", "", "Reject suggestion");
+    reject.addEventListener("click", () => handlers.reject(s));
+    const snooze = button("Snooze", "", "Snooze suggestion");
+    snooze.setAttribute("aria-expanded", "false");
+    actions.append(reject, snooze);
+    const choices = node("div", "", "today-snooze");
+    choices.hidden = true;
+    const evening = new Date();
+    evening.setHours(19, 0, 0, 0);
+    for (const [until, label] of [
+      ["1h", "1 hour"],
+      ["tonight", "Tonight 19:00"],
+      ["tomorrow", "Tomorrow 08:00"],
+    ]) {
+      if (until === "tonight" && evening.getTime() <= Date.now()) continue;
+      const choice = button(label, "chip", `Snooze suggestion until ${label}`);
+      choice.addEventListener("click", () => handlers.snooze(s, until));
+      choices.append(choice);
+    }
+    snooze.addEventListener("click", () => {
+      choices.hidden = !choices.hidden;
+      snooze.setAttribute("aria-expanded", String(!choices.hidden));
+    });
+    article.append(actions, choices);
+  } else article.append(actions);
+  return article;
+}
+export function renderSuggestions(container, data, handlers, ui = {}) {
+  const open = data.suggestions?.items ?? [];
+  if (!open.length) return false;
+  const box = node("section", "", "suggestions");
+  box.setAttribute("aria-label", "Suggestions");
+  box.append(
+    node("h3", "Suggestions", "suggestions-heading"),
+    node(
+      "p",
+      "Hearth only suggests. Nothing changes until you accept, and suggestions can't change Home permissions, scope or settings.",
+      "muted today-footnote",
+    ),
+  );
+  for (const s of open)
+    box.append(suggestionCard(s, data, handlers.suggestion, ui));
+  container.append(box);
+  return true;
+}
+export function renderToday(container, data, handlers, ui = {}) {
   const fragment = document.createDocumentFragment();
-  if (!data.cards.length) {
+  const suggested = handlers.suggestion
+    ? renderSuggestions(fragment, data, handlers, ui)
+    : false;
+  if (suggested && !data.cards.length)
+    fragment.append(
+      node(
+        "p",
+        "No watcher or briefing cards right now.",
+        "muted today-footnote",
+      ),
+    );
+  else if (!data.cards.length) {
     const empty = node("div", "", "today-empty");
     empty.append(
       node("h3", "Nothing new yet"),
@@ -177,6 +375,14 @@ export function renderToday(container, data, handlers) {
   if (data.cards.length && data.snoozed)
     fragment.append(
       node("p", `${data.snoozed} more snoozed.`, "muted today-footnote"),
+    );
+  if (data.suggestions?.snoozed)
+    fragment.append(
+      node(
+        "p",
+        `${data.suggestions.snoozed} snoozed suggestion${data.suggestions.snoozed === 1 ? "" : "s"} will come back later.`,
+        "muted today-footnote",
+      ),
     );
   if (data.suppressed)
     fragment.append(
@@ -557,7 +763,7 @@ export function renderFeedback(container, state, ui, handlers) {
       node(
         "span",
         state.rating === "down" && state.reasons.length
-          ? `Saved · ${state.reasons.map((r) => FEEDBACK_REASON_LABELS[r] ?? r).join(", ")}`
+          ? `Saved · ${state.reasons.map((r) => FEEDBACK_REASON_LABELS[r] ?? r).join(", ")}${ui.appHint ? " · Hearth may suggest a fix" : ""}`
           : "Saved on this device",
         "feedback-saved",
       ),
@@ -577,6 +783,122 @@ export function renderFeedback(container, state, ui, handlers) {
     save.addEventListener("click", () => handlers.rate("down", [...ui.draft]));
     chips.append(save);
     fragment.append(chips);
+    // This chat built or changed an app: with a reason, Hearth may offer an
+    // app fix on your next message here (a suggestion you accept or reject).
+    if (ui.appHint)
+      fragment.append(
+        node(
+          "p",
+          "Hearth may suggest a fix to the app next time you write here. You decide in Today.",
+          "feedback-hint",
+        ),
+      );
   }
+  container.replaceChildren(fragment);
+}
+
+// ---- Settings → Memory ----
+// ui: {editing: id|null}. Item text is untrusted when shown: textContent only.
+function kb(bytes) {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+function memoryTextArea(id, value, labelText) {
+  const wrap = node("div", "", "memory-edit");
+  const area = document.createElement("textarea");
+  area.id = id;
+  area.maxLength = 200;
+  area.rows = 2;
+  area.value = value;
+  const label = node("label", labelText);
+  label.htmlFor = id;
+  const count = node("span", `${value.length}/200`, "memory-count");
+  area.addEventListener("input", () => {
+    count.textContent = `${area.value.length}/200`;
+  });
+  wrap.append(label, area, count);
+  return { wrap, area };
+}
+export function memorySourceLabel(item) {
+  return item.source?.kind === "suggestion"
+    ? `Accepted suggestion · ${item.sourceTitle || "chat"}`
+    : "You wrote this";
+}
+export function renderMemory(container, data, ui, handlers) {
+  const fragment = document.createDocumentFragment();
+  const limit = data.limits?.contextBytes ?? 4096;
+  const usage = node(
+    "p",
+    `${data.items.length} item${data.items.length === 1 ? "" : "s"} · ${kb(data.usedBytes)} of ${kb(limit)} shared with Hearth`,
+    "memory-usage",
+  );
+  fragment.append(usage);
+  if (data.trimmed)
+    fragment.append(
+      node(
+        "p",
+        `${data.trimmed} oldest item${data.trimmed === 1 ? " is" : "s are"} over the ${kb(limit)} limit and not shared with Hearth. Forget or shorten newer items to include ${data.trimmed === 1 ? "it" : "them"}.`,
+        "memory-warning",
+      ),
+    );
+  const add = node("div", "", "memory-add");
+  const { wrap, area } = memoryTextArea(
+    "memory-new",
+    ui.draft ?? "",
+    "Add something Hearth should know",
+  );
+  area.placeholder = "e.g. The study fan is called Breezy";
+  area.addEventListener("input", () => {
+    ui.draft = area.value;
+  });
+  const save = button("Remember", "approve", "Remember this");
+  save.addEventListener("click", () => handlers.add(area.value));
+  add.append(wrap, save);
+  fragment.append(add);
+  const list = node("ul", "", "memory-list");
+  if (!data.items.length)
+    list.append(
+      node(
+        "li",
+        "Nothing remembered yet. Add a fact above, or accept a memory suggestion from Hearth in Today.",
+        "muted memory-empty",
+      ),
+    );
+  for (const item of data.items) {
+    const row = node("li", "", item.inContext ? "" : "trimmed");
+    if (ui.editing === item.id) {
+      const edit = memoryTextArea(
+        `memory-edit-${item.id}`,
+        item.text,
+        "Edit memory",
+      );
+      const actions = node("div", "", "today-actions");
+      const saveEdit = button("Save", "approve", "Save memory");
+      saveEdit.addEventListener("click", () =>
+        handlers.edit(item, edit.area.value),
+      );
+      const cancel = button("Cancel", "", "Cancel editing");
+      cancel.addEventListener("click", () => handlers.startEdit(null));
+      actions.append(saveEdit, cancel);
+      row.append(edit.wrap, actions);
+    } else {
+      row.append(node("p", item.text, "memory-text"));
+      row.append(
+        node(
+          "span",
+          `${memorySourceLabel(item)} · ${day(item.updated)}${item.inContext ? "" : " · Not shared (over limit)"}`,
+          "app-asof",
+        ),
+      );
+      const actions = node("div", "", "today-actions");
+      const edit = button("Edit", "", `Edit memory: ${item.text}`);
+      edit.addEventListener("click", () => handlers.startEdit(item.id));
+      const forget = button("Forget", "", `Forget memory: ${item.text}`);
+      forget.addEventListener("click", () => handlers.forget(item));
+      actions.append(edit, forget);
+      row.append(actions);
+    }
+    list.append(row);
+  }
+  fragment.append(list);
   container.replaceChildren(fragment);
 }

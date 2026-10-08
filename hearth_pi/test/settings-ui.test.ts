@@ -141,6 +141,24 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
             sources: { apps: [], canvases: [] },
             watchers: [],
           });
+        if (path.endsWith("/api/memory"))
+          return Response.json({
+            items: [
+              {
+                id: "m_1",
+                text: "Bedtime is around 23:00",
+                source: { kind: "owner" },
+                sourceTitle: "",
+                created: Date.now(),
+                updated: Date.now(),
+                inContext: true,
+              },
+            ],
+            revision: 1,
+            usedBytes: 26,
+            trimmed: 0,
+            limits: { text: 200, items: 60, contextBytes: 4096 },
+          });
         if (path.endsWith("/api/insights"))
           return Response.json({
             feedback: {
@@ -209,6 +227,7 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
       "permissions-row",
       "account",
       "proactive-row",
+      "memory-row",
       "settings-insights-row",
       "open-world",
       "settings-about-row",
@@ -275,6 +294,35 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
     );
     assert(requests.some((r) => r.endsWith("/api/proactive")));
     (document.getElementById("proactive-dialog") as any).close();
+
+    // Memory row: closes Settings, opens Memory and loads GET /api/memory;
+    // it is not a drawer row.
+    reopenSettings();
+    requests.length = 0;
+    document
+      .getElementById("memory-row")!
+      .dispatchEvent(new window.Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      document.getElementById("memory-dialog")!.hasAttribute("open"),
+      true,
+    );
+    assert.equal(
+      document.getElementById("settings-dialog")!.hasAttribute("open"),
+      false,
+    );
+    assert(
+      requests.some((r) => r.startsWith("GET ") && r.endsWith("/api/memory")),
+    );
+    assert.match(
+      document.getElementById("memory-body")!.textContent!,
+      /Bedtime is around 23:00/,
+    );
+    assert.equal(
+      document.getElementById("memory-summary")!.textContent,
+      "1 item",
+    );
+    (document.getElementById("memory-dialog") as any).close();
 
     // Insights row: a new direct entry point into the same Insights dialog
     // that Briefings & watchers also opens (no duplicated rendering logic).
