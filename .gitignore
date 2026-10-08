@@ -18,3 +18,4 @@ test-results/
 *.db-*
 *.pem
 *.key
+/hearth_pi/eval/report.md

@@ -130,3 +130,108 @@ for (const [path, content] of [
 console.log(
   "App packaging: manifest defaults/permissions, versions, exact pins/lockfile, complete local build context and browser syntax verified. Container execution is a separate gate.",
 );
+
+// --- hearth_judge: the second, local llama.cpp risk-judge add-on. ---
+const judgeConfig = parse(await read("hearth_judge/config.yaml"));
+assert.equal(judgeConfig.slug, "hearth_judge");
+assert.deepEqual(judgeConfig.arch, ["aarch64", "amd64"]);
+assert.equal(judgeConfig.url, repository.url);
+assert.equal(judgeConfig.stage, "experimental");
+assert.equal(judgeConfig.backup, "cold");
+// Reachable only on the internal hassio network: no port/ingress/HA-API/
+// Supervisor-admin/host surface at all.
+for (const field of [
+  "ports",
+  "webui",
+  "image",
+  "ingress",
+  "ingress_port",
+  "panel_admin",
+  "hassio_api",
+  "hassio_role",
+  "homeassistant_api",
+  "auth_api",
+  "docker_api",
+  "host_network",
+  "host_dbus",
+  "host_pid",
+  "full_access",
+  "privileged",
+  "devices",
+  "map",
+])
+  assert(
+    !Object.hasOwn(judgeConfig, field),
+    `hearth_judge/config.yaml: unexpected permission ${field}`,
+  );
+assert.deepEqual(
+  Object.keys(judgeConfig.options).sort(),
+  Object.keys(judgeConfig.schema).sort(),
+);
+const judgeModels = JSON.parse(await read("hearth_judge/models.json"));
+const modelKeys = Object.keys(judgeModels);
+assert(modelKeys.length > 0, "hearth_judge/models.json: no models listed");
+assert.equal(
+  judgeConfig.schema.model,
+  `list(${modelKeys.join("|")})`,
+  "hearth_judge/config.yaml schema.model must list exactly models.json's keys",
+);
+assert(
+  modelKeys.includes(judgeConfig.options.model),
+  "hearth_judge/config.yaml options.model must be one of models.json's keys",
+);
+for (const [key, entry] of Object.entries(judgeModels)) {
+  for (const field of ["label", "repo", "revision", "file", "sha256"])
+    assert(
+      typeof entry[field] === "string" && entry[field].length > 0,
+      `hearth_judge/models.json: ${key}.${field} missing`,
+    );
+  // A real, pinned, lower-case sha256 — never a "TODO" placeholder. run.sh
+  // additionally refuses to start on any model whose pin fails this same
+  // check, so a future unverified entry cannot silently ship.
+  assert.match(
+    entry.sha256,
+    /^[0-9a-f]{64}$/,
+    `hearth_judge/models.json: ${key}.sha256 is not a verified 64-char hex digest`,
+  );
+  assert.match(
+    entry.revision,
+    /^[0-9a-f]{40}$/,
+    `hearth_judge/models.json: ${key}.revision is not a pinned 40-char git commit`,
+  );
+}
+const judgeDockerfile = await read("hearth_judge/Dockerfile");
+// Pinned by digest, never the floating ":server" tag alone.
+assert.match(
+  judgeDockerfile,
+  /FROM ghcr\.io\/ggml-org\/llama\.cpp:server@sha256:[a-f0-9]{64}/,
+);
+assert.match(judgeDockerfile, /ENTRYPOINT \[\]/);
+assert.match(judgeDockerfile, /CMD \["\/run\.sh"\]/);
+const judgeRun = await read("hearth_judge/run.sh");
+// Verifies, never trusts, the downloaded model; refuses to start without a
+// pinned hash; never opens the Web UI; hardcodes the single-slot design so
+// the cached policy prefix stays valid (not an owner-configurable option).
+for (const must of [
+  "sha256sum -c",
+  "refusing to start",
+  "--no-webui",
+  "-np 1",
+  "--cache-prompt",
+  "gosu",
+])
+  assert(
+    judgeRun.includes(must),
+    `hearth_judge/run.sh: missing expected "${must}"`,
+  );
+for (const file of [
+  "README.md",
+  "DOCS.md",
+  "CHANGELOG.md",
+  "LICENSE",
+  ".dockerignore",
+])
+  await access(`hearth_judge/${file}`);
+console.log(
+  "hearth_judge packaging: manifest permissions/options, pinned image digest and sha256-verified model list, and run.sh's refuse-without-a-hash/no-webui/single-slot invariants verified. Container execution is a separate gate.",
+);

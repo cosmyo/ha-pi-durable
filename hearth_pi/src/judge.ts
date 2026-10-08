@@ -254,7 +254,15 @@ export class PiRuntimeJudge implements JudgeAdapter {
 
 type Resolve = (host: string) => Promise<string[]>;
 // A private-network OpenAI-compatible server (e.g. llama.cpp on the same
-// Raspberry Pi), configured only by App options.
+// Raspberry Pi), configured only by App options. Tuned for small/local
+// models (see hearth_judge/): temperature 0, a small fixed max_tokens and
+// JSON-schema-constrained output (falling back to plain JSON with the same
+// strict parseVerdict() if a server rejects response_format) keep a tiny
+// model's reply both fast and reliably parseable. A model this size is
+// expected to take seconds, not milliseconds, to answer — see
+// "Run the risk judge on your Home Assistant host" in DOCS.md for measured
+// latency guidance; risk_judge_timeout_ms must stay above it or calls will
+// fail closed to "no agreement" before the model replies.
 export class EndpointJudge implements JudgeAdapter {
   readonly id: string;
   private schemaSupported = true;

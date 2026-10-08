@@ -1,0 +1,27 @@
+name: Hearth Judge
+version: "0.1.0"
+slug: hearth_judge
+url: https://github.com/cosmyo/ha-pi-durable
+description: Experimental local risk-judge server for Hearth Pi (llama.cpp, CPU-only)
+arch:
+  - aarch64
+  - amd64
+stage: experimental
+startup: services
+boot: auto
+init: true
+timeout: 120
+backup: cold
+# No ingress, no Home Assistant/Supervisor API, no "ports:" key: this add-on is
+# reachable only by other add-ons on the internal hassio network, by hostname
+# (local install: http://local-hearth_judge:8080), never from the LAN or HA UI.
+options:
+  model: qwen3-1.7b-q4_0
+  threads: 3
+  ctx_size: 2048
+  api_key: ""
+schema:
+  model: list(qwen3-1.7b-q4_0|qwen3.5-2b-q4_0)
+  threads: int(1,8)
+  ctx_size: int(512,8192)
+  api_key: password

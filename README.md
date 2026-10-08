@@ -58,6 +58,10 @@ The complete App build context is `hearth_pi/`. It requests Ingress, HA's scoped
 
 All authorization/action/entity lists start empty; coding is disabled. Configure exact trusted operator IDs and the HTTPS origin used by your browser. Sidebar admin visibility is not server authorization or proof of current HA role membership. Authorized IDs are trusted App operators, including access to its shared provider setup; don't add untrusted household/guest accounts.
 
+### Optional: run the risk judge on your own host (`hearth_judge`, experimental)
+
+This repository also ships **Hearth Judge**, a second, independent add-on (`hearth_judge/`) that serves a small open-weight model on your Home Assistant host through the official `ghcr.io/ggml-org/llama.cpp` server, so [Admin mode's optional risk judge](hearth_pi/DOCS.md#admin-access-mode-unreleased-source-slice) can run entirely on-host instead of calling a cloud model. It declares no `ports:` (reachable only on the internal `hassio` network), downloads and sha256-verifies one pinned model into its own `/data` on first start, and never gets Home Assistant or Supervisor API access. Install it from the same repository card, then set Hearth Pi's `risk_judge_model` to `endpoint/<model>` and `risk_judge_url` to its internal address. [Hearth Judge install/options](hearth_judge/DOCS.md) and the [60-case evaluation harness](hearth_pi/eval/).
+
 ## Providers and privacy
 
 - `offline`: demonstration only; no inference.
