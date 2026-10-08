@@ -194,22 +194,73 @@ type Login = {
 type Check = { at: number; ok: boolean };
 const short = (value: string | undefined, max = 200) =>
   (value ?? "").slice(0, max);
+// `getProvider` is optional so the many Subscription test fakes (which only
+// implement the original login/logout/hasConfiguredAuth/getAuth surface)
+// stay valid; only forceRefresh() below needs it, and only in production.
+type SubscriptionRuntime = Pick<
+  ModelRuntime,
+  "login" | "logout" | "hasConfiguredAuth" | "getAuth"
+> & { getProvider?: ModelRuntime["getProvider"] };
+// Likewise `modify` is optional: only the real PrivateCredentials store
+// passed in production supports it, so forceRefresh() is a no-op elsewhere.
+type SubscriptionCredential = {
+  expires: number | undefined;
+  modify?: PrivateCredentials["modify"];
+};
 export class Subscription {
   private login?: Login;
   private check?: Check;
   private operation = new Serial();
+  /** In-flight forced refresh, shared by every concurrent caller (single-flight per credential). */
+  private forcedRefresh?: Promise<boolean>;
   constructor(
-    readonly runtime: Pick<
-      ModelRuntime,
-      "login" | "logout" | "hasConfiguredAuth" | "getAuth"
-    >,
-    private readonly credential: { expires: number | undefined } = {
+    readonly runtime: SubscriptionRuntime,
+    private readonly credential: SubscriptionCredential = {
       expires: undefined,
     },
     readonly provider: SubscriptionProvider = "openai-codex",
     readonly enabled: boolean = provider !== "anthropic" ||
       anthropicAuthEnabled(),
   ) {}
+  /**
+   * Force an OAuth token refresh regardless of its recorded expiry, for a 401
+   * the provider returned despite a locally valid-looking token (clock drift,
+   * early revocation). Concurrent callers share one in-flight refresh. The
+   * rotated token is persisted atomically by the existing credential store
+   * under its own write lock; this never logs or returns the token. Returns
+   * false when there is nothing to refresh, refresh is unsupported here (no
+   * provider/store wired, e.g. in narrow test fakes), or the refresh itself
+   * failed (e.g. a revoked refresh token) — callers then fall back to the
+   * existing sign-in-again failure.
+   */
+  forceRefresh(signal?: AbortSignal): Promise<boolean> {
+    if (this.forcedRefresh) return this.forcedRefresh;
+    const attempt = this.runForceRefresh(signal).finally(() => {
+      if (this.forcedRefresh === attempt) this.forcedRefresh = undefined;
+    });
+    this.forcedRefresh = attempt;
+    return attempt;
+  }
+  private async runForceRefresh(signal?: AbortSignal): Promise<boolean> {
+    if (!this.enabled) return false;
+    const oauth = this.runtime.getProvider?.(this.provider)?.auth.oauth;
+    const modify = this.credential.modify?.bind(this.credential);
+    if (!oauth || !modify) return false;
+    let attempted = false;
+    try {
+      await modify(this.provider, async (current) => {
+        if (current?.type !== "oauth") return undefined; // signed out meanwhile
+        attempted = true;
+        const refreshSignal = signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(15000)])
+          : AbortSignal.timeout(15000);
+        return await oauth.refresh(current, refreshSignal);
+      });
+    } catch {
+      return false;
+    }
+    return attempted;
+  }
   static async open(
     dataDir: string,
     seeds: string[],

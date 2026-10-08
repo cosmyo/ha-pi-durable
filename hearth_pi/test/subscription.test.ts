@@ -337,3 +337,92 @@ test("verify refreshes a near-expiry token through real Pi and reports only meta
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("forceRefresh rotates and persists a token on a 401 regardless of recorded expiry, with concurrent callers sharing one refresh", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-force-refresh-")),
+    previous = globalThis.fetch;
+  const token = (n: string) =>
+    `eyJhbGciOiJub25lIn0.${Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" } })).toString("base64url")}.${n}`;
+  let refreshes = 0;
+  globalThis.fetch = (async (url, init) => {
+    assert.equal(String(url), "https://auth.openai.com/oauth/token");
+    assert.match(String(init?.body), /grant_type=refresh_token/);
+    refreshes++;
+    return Response.json({
+      access_token: token(`synthetic-forced-rotated-access-${refreshes}`),
+      refresh_token: `synthetic-forced-rotated-refresh-${refreshes}`,
+      expires_in: 3600,
+    });
+  }) as typeof fetch;
+  try {
+    const store = new PrivateCredentials(join(dir, "chatgpt-oauth.json"));
+    const original = token("synthetic-forced-original-access");
+    await store.modify("openai-codex", async () => ({
+      ...credential,
+      access: original,
+      // Far from expiry: the ordinary proactive window would not refresh
+      // this token, but a 401 means it is already invalid regardless.
+      expires: Date.now() + 86400000,
+    }));
+    const { subscription } = await Subscription.open(dir, []);
+    // Single-flight: three concurrent callers (three concurrent turns hitting
+    // a 401 for the same credential) share exactly one network refresh.
+    const [a, b, c] = await Promise.all([
+      subscription.forceRefresh(),
+      subscription.forceRefresh(),
+      subscription.forceRefresh(),
+    ]);
+    assert.deepEqual([a, b, c], [true, true, true]);
+    assert.equal(refreshes, 1, "concurrent callers shared one refresh");
+    const rotated = await store.read("openai-codex");
+    assert(rotated?.type === "oauth");
+    assert.equal(rotated.access, token("synthetic-forced-rotated-access-1"));
+    assert.equal(rotated.refresh, "synthetic-forced-rotated-refresh-1");
+    assert.doesNotMatch(
+      JSON.stringify(subscription.status("owner")),
+      /synthetic-forced-(original|rotated)/,
+    );
+    // A later, separate call forces another refresh (not reusing the settled promise).
+    assert.equal(await subscription.forceRefresh(), true);
+    assert.equal(refreshes, 2);
+    // A revoked refresh token fails closed: forceRefresh reports false, the
+    // previously rotated credential is left untouched, and the owner still
+    // sees the existing configured/sign-in-again state rather than a new one.
+    globalThis.fetch = (async () =>
+      new Response("synthetic-forced-refresh-error", {
+        status: 400,
+      })) as typeof fetch;
+    assert.equal(await subscription.forceRefresh(), false);
+    assert.equal(subscription.status("owner").configured, true);
+    const afterFailure = await store.read("openai-codex");
+    assert(afterFailure?.type === "oauth");
+    assert.equal(
+      afterFailure.access,
+      token("synthetic-forced-rotated-access-2"),
+    );
+  } finally {
+    globalThis.fetch = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("forceRefresh is a no-op without a wired provider/credential store (narrow test fakes, logged-out credential)", async () => {
+  const bare = new Subscription({
+    getAuth: async () => undefined,
+    hasConfiguredAuth: () => false,
+    logout: async () => {},
+    login: async () => credential,
+  });
+  assert.equal(await bare.forceRefresh(), false);
+  const dir = await mkdtemp(join(tmpdir(), "hearth-force-refresh-noop-"));
+  try {
+    const store = new PrivateCredentials(join(dir, "chatgpt-oauth.json"));
+    const { subscription } = await Subscription.open(dir, []);
+    assert.equal(subscription.status("owner").configured, false);
+    // Nothing stored: the refresh runner sees no oauth credential and no-ops.
+    assert.equal(await subscription.forceRefresh(), false);
+    assert.equal((await store.list()).length, 0);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

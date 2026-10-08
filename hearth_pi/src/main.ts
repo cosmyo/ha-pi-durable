@@ -36,6 +36,7 @@ try {
     config,
     native,
     secrets,
+    subscriptions,
   );
   // Mutable default: a saved local endpoint supplies its chosen model.
   const model = { provider, modelId };

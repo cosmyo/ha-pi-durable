@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { Config } from "./config.js";
 import { redactor } from "./safety.js";
+import type { Subscription } from "./subscription.js";
 
 export function supportsThinking(
   models: Models,
@@ -28,15 +29,16 @@ export function supportsThinking(
     : true;
 }
 
+// Shared with the 401 provider-request retry below: both need to recognize
+// the same "sign-in expired/rejected" shape, one to classify it for the
+// owner and the other to decide whether a credential refresh can help.
+const AUTH_FAILURE_PATTERN =
+  /\b401\b|unauthori[sz]ed|authentication|expired|invalid[ _-]?(api[ _-]?key|token)|sign[ -]?in|log[ -]?in/i;
 // Provider error text is never passed through: it can echo request data or
 // credentials. Classify it into a fixed, owner-actionable message instead.
 export function providerFailure(raw: string | undefined): string {
   const text = raw ?? "";
-  if (
-    /\b401\b|unauthori[sz]ed|authentication|expired|invalid[ _-]?(api[ _-]?key|token)|sign[ -]?in|log[ -]?in/i.test(
-      text,
-    )
-  )
+  if (AUTH_FAILURE_PATTERN.test(text))
     return "Provider sign-in expired or was rejected. Open the login dialog and sign in again.";
   if (
     /\b429\b|rate[ _-]?limit|quota|usage[ _-]?limit|too many requests/i.test(
@@ -54,7 +56,23 @@ export function providerFailure(raw: string | undefined): string {
 }
 
 // Filter before Pi commits provider events, including error/partial fields.
-export function safeModels(models: Models, secrets: string[]): Models {
+/**
+ * Per-call OAuth credential refresh on a 401, for the subscription providers
+ * (keyed by provider id) that support it. A real provider's 401 is always its
+ * request's first and only event: the HTTP response is checked before any
+ * "start"/content event is emitted (see openai-codex-responses.js,
+ * anthropic-messages.js), so peeking the first event below never discards
+ * real streamed content on retry.
+ */
+export type CredentialRefreshers = ReadonlyMap<
+  string,
+  Pick<Subscription, "forceRefresh">
+>;
+export function safeModels(
+  models: Models,
+  secrets: string[],
+  refreshers?: CredentialRefreshers,
+): Models {
   const redact = redactor(secrets);
   const streamSimple: Models["streamSimple"] = (model, transcript, options) => {
     const stream = createAssistantMessageEventStream();
@@ -71,15 +89,36 @@ export function safeModels(models: Models, secrets: string[]): Models {
           Buffer.byteLength(JSON.stringify(transcript)) > 262144
         )
           throw new Error("budget");
-        const source = models.streamSimple(model, transcript, {
+        const signal = options?.signal
+          ? AbortSignal.any([options.signal, abort.signal])
+          : abort.signal;
+        const requestOptions = {
           ...options,
           maxTokens: 2048,
-          transport: "sse",
-          signal: options?.signal
-            ? AbortSignal.any([options.signal, abort.signal])
-            : abort.signal,
-        });
-        for await (const event of source) {
+          transport: "sse" as const,
+          signal,
+        };
+        let source = models.streamSimple(model, transcript, requestOptions);
+        let iterator = source[Symbol.asyncIterator]();
+        let step = await iterator.next();
+        // Before any event of this turn (so before any tool call) reaches the
+        // caller: a 401 despite a locally valid-looking token refreshes once,
+        // at most, and retries this same provider request once. Tool calls are
+        // only ever executed from a finalized message downstream, never from
+        // this not-yet-forwarded first event, so nothing here can re-run a
+        // tool side effect.
+        if (
+          !step.done &&
+          step.value.type === "error" &&
+          AUTH_FAILURE_PATTERN.test(step.value.error.errorMessage ?? "") &&
+          (await refreshers?.get(model.provider)?.forceRefresh(signal))
+        ) {
+          source = models.streamSimple(model, transcript, requestOptions);
+          iterator = source[Symbol.asyncIterator]();
+          step = await iterator.next();
+        }
+        while (!step.done) {
+          const event = step.value;
           const serialized = JSON.stringify(event);
           if (Buffer.byteLength(serialized) > 131072)
             throw new Error("output_limit");
@@ -101,6 +140,7 @@ export function safeModels(models: Models, secrets: string[]): Models {
           if (safe.type === "error")
             safe.error.errorMessage = providerFailure(safe.error.errorMessage);
           stream.push(safe);
+          step = await iterator.next();
         }
       } catch {
         stream.push({
@@ -133,6 +173,11 @@ export async function configuredModels(
   config: Config,
   native: ModelRuntime,
   secrets: string[],
+  // Every subscription provider's model call goes through the one wrapped
+  // `models` collection below (sessions can select any signed-in OAuth
+  // provider's model, not only the configured default), so every entry here
+  // gets 401-retry refresh, keyed by provider id.
+  subscriptions: readonly Subscription[] = [],
 ): Promise<{
   models: Models;
   provider: string;
@@ -152,8 +197,11 @@ export async function configuredModels(
       !native.getModel(config.provider, config.model)
     )
       throw new Error("unsupported_model");
+    const refreshers: CredentialRefreshers = new Map(
+      subscriptions.map((s) => [s.provider, s]),
+    );
     return {
-      models: safeModels(native, secrets),
+      models: safeModels(native, secrets, refreshers),
       provider: config.provider,
       modelId: config.model,
     };
