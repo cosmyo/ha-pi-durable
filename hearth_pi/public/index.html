@@ -253,6 +253,17 @@
     <dialog id="settings-dialog" aria-labelledby="settings-heading">
       <h2 id="settings-heading">Settings</h2>
       <div class="settings-groups">
+        <section class="settings-group" aria-label="You">
+          <button
+            id="you-row"
+            type="button"
+            class="settings-list-row"
+            aria-controls="you-dialog"
+          >
+            <span>You</span>
+            <span id="you-summary" class="muted"></span>
+          </button>
+        </section>
         <section class="settings-group" aria-label="Home">
           <button
             id="permissions-row"
@@ -386,6 +397,78 @@
       <div id="memory-body"></div>
       <div class="actions">
         <button id="memory-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="you-dialog" aria-labelledby="you-heading">
+      <h2 id="you-heading">You</h2>
+      <p class="muted">
+        Personal to you: your name, tone and reply language for Home chats, and
+        your default model for new chats. Other owners never see this, it is
+        never shown to the risk judge, and it can never grant permissions or
+        change scope.
+      </p>
+      <p id="you-feedback" role="status" aria-live="polite"></p>
+      <div class="you-form">
+        <label for="you-name">What should Hearth call you?</label>
+        <input
+          id="you-name"
+          type="text"
+          maxlength="40"
+          placeholder="Not set"
+          autocomplete="off"
+        />
+        <span id="you-tone-label">Tone</span>
+        <div class="segmented" role="group" aria-labelledby="you-tone-label">
+          <button type="button" data-tone="" aria-pressed="true">
+            Not set
+          </button>
+          <button type="button" data-tone="concise" aria-pressed="false">
+            Concise
+          </button>
+          <button type="button" data-tone="warm" aria-pressed="false">
+            Warm
+          </button>
+          <button type="button" data-tone="neutral" aria-pressed="false">
+            Neutral
+          </button>
+          <button type="button" data-tone="playful" aria-pressed="false">
+            Playful
+          </button>
+        </div>
+        <label for="you-language">Reply language</label>
+        <select id="you-language">
+          <option value="">Not set</option>
+          <option value="match">Match my messages</option>
+          <option value="en">English</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="it">Italian</option>
+          <option value="pt">Portuguese</option>
+          <option value="nl">Dutch</option>
+          <option value="pl">Polish</option>
+          <option value="ro">Romanian</option>
+          <option value="sv">Swedish</option>
+          <option value="ja">Japanese</option>
+          <option value="zh">Chinese</option>
+        </select>
+        <label for="you-model-choice">Default model for new chats</label>
+        <select id="you-model-choice"></select>
+        <label for="you-thinking-choice">Default thinking</label>
+        <select id="you-thinking-choice" disabled>
+          <option value="">Installation default</option>
+          <option value="off">Off</option>
+          <option value="minimal">Minimal</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="xhigh">Extra high</option>
+          <option value="max">Max</option>
+        </select>
+        <button id="you-save" type="button">Save</button>
+      </div>
+      <div class="actions">
+        <button id="you-close" type="button">Close</button>
       </div>
     </dialog>
     <dialog id="insights-dialog" aria-labelledby="insights-heading">

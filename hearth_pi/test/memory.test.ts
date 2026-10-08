@@ -230,7 +230,7 @@ test("suggest_memory and suggest_app_change only file pending suggestions; nothi
 });
 
 test("proposal schema has no kind that can change permissions, scope, credentials, providers or settings", async () => {
-  assert.deepEqual([...SUGGESTION_KINDS], ["memory", "app_change"]);
+  assert.deepEqual([...SUGGESTION_KINDS], ["memory", "app_change", "code"]);
   for (const kind of [
     "home_permissions",
     "permissions",
@@ -245,14 +245,13 @@ test("proposal schema has no kind that can change permissions, scope, credential
     "model",
     "settings",
     "instructions",
-    "code",
     "",
     7,
     null,
   ])
     assert.throws(() => suggestionKind(kind), /suggestion_kind_not_allowed/);
   const f = fakeHA();
-  const [memoryTool, appTool] = suggestionTools(f.ha);
+  const [memoryTool, appTool, codeTool] = suggestionTools(f.ha);
   assert.deepEqual(Object.keys(memoryTool!.parameters.properties), [
     "text",
     "reason",
@@ -263,7 +262,15 @@ test("proposal schema has no kind that can change permissions, scope, credential
     "patch",
     "summary",
   ]);
-  for (const tool of [memoryTool!, appTool!])
+  // L3 code suggestions: plain prose plus the exact evidence it is based
+  // on \u2014 no field for code, a diff/patch or any permission/scope/setting.
+  assert.deepEqual(Object.keys(codeTool!.parameters.properties), [
+    "title",
+    "problem",
+    "proposal",
+    "evidence",
+  ]);
+  for (const tool of [memoryTool!, appTool!, codeTool!])
     assert.equal(
       (tool.parameters as { additionalProperties?: unknown })
         .additionalProperties,

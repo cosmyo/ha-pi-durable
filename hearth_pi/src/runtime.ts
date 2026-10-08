@@ -10,11 +10,14 @@ import {
   LiveDoc,
   type Extension,
   type ConversationId,
+  type Tx,
 } from "@earendil-works/pi-durable";
 import type { Models } from "@earendil-works/pi-ai/models";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { supportsThinking } from "./models.js";
 import { LOCAL_PROVIDER } from "./local.js";
+import { ownerKey } from "./memory.js";
+import { OwnerProfile } from "./profile.js";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
@@ -211,6 +214,37 @@ export class Runtime {
     insist(conversation, "session_not_found", 404);
     return conversation;
   }
+  // A new Home chat's model/thinking: the owner's Settings > You default
+  // when it is still a currently selectable model (an owner may sign out of
+  // an OAuth provider or an App restart may drop a model after it was set),
+  // otherwise the installation default, exactly as before OwnerProfile
+  // existed. Code/workspace sessions are unaffected \u2014 see create() below.
+  private async ownerDefaults(tx: Tx, owner: string) {
+    const profile = await tx.doc(OwnerProfile, ownerKey(owner), null);
+    const defaultModel = profile.defaultModel;
+    const valid =
+      !!defaultModel &&
+      this.modelChoices().some(
+        (m) =>
+          m.provider === defaultModel.provider && m.id === defaultModel.modelId,
+      ) &&
+      (!profile.defaultThinking ||
+        supportsThinking(
+          this.models,
+          defaultModel.provider,
+          defaultModel.modelId,
+          profile.defaultThinking,
+        ));
+    return valid
+      ? {
+          model: {
+            provider: defaultModel!.provider,
+            modelId: defaultModel!.modelId,
+          },
+          thinkingLevel: profile.defaultThinking ?? this.defaultThinkingLevel,
+        }
+      : { model: this.model, thinkingLevel: this.defaultThinkingLevel };
+  }
   async create(
     owner: string,
     title: unknown,
@@ -251,9 +285,13 @@ export class Runtime {
         const conversation = await tx.createConversation({
           ownership: { kind: "ownerless" },
         });
+        const { model, thinkingLevel } =
+          kind === "home"
+            ? await this.ownerDefaults(tx, owner)
+            : { model: this.model, thinkingLevel: this.defaultThinkingLevel };
         await configure(tx, conversation.id, {
-          model: this.model,
-          thinkingLevel: this.defaultThinkingLevel,
+          model,
+          thinkingLevel,
           extensions: this.groups[kind],
         });
         catalog.items.push({

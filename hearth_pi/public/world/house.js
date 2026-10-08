@@ -23,8 +23,12 @@ import {
   recentLines,
   reducedMotion,
   roomAt,
+  roomLabelX,
   roomName,
+  scrollLeftFor,
+  spawnRoom,
   thinkLabel,
+  visibleTagIds,
   wallsOf,
   watchVisibility,
   worldSummary,
@@ -479,6 +483,10 @@ export function createHouse(ctx, { onClose }) {
     drag = null,
     selectedRoom = "",
     attentionExpanded = false,
+    dialogueExpanded = false,
+    dialogueKey = "",
+    scrolledToSpawn = false,
+    roomLabelEls = [],
     announced = new Set();
   const canvas = el("canvas", {
     className: "wh-canvas",
@@ -680,6 +688,7 @@ export function createHouse(ctx, { onClose }) {
   function renderLayer() {
     const structure = ctx.structure;
     const items = [];
+    roomLabelEls = [];
     if (!structure) return layer.replaceChildren();
     const rows = structure.grid.rows;
     const cols = structure.grid.cols || 16;
@@ -690,11 +699,11 @@ export function createHouse(ctx, { onClose }) {
     }
     for (const room of structure.rooms) {
       const label = el("span", { className: "wh-room-label", text: room.name });
-      label.style.left = pct(room.x + 0.15, cols);
       label.style.top = pct(room.y + 0.12, rows);
-      label.style.maxWidth = pct(room.w - 0.3, cols);
+      roomLabelEls.push({ room, label });
       items.push(label);
     }
+    const tagIds = visibleTagIds(devices);
     for (const device of devices) {
       const target = button(
         "",
@@ -707,17 +716,7 @@ export function createHouse(ctx, { onClose }) {
       if (device.entityId === ctx.selected)
         target.setAttribute("aria-pressed", "true");
       if (device.anomaly) target.classList.add("wh-anomaly");
-      if (
-        [
-          "thermo",
-          "humidity",
-          "sensor",
-          "climate",
-          "printer",
-          "battery",
-        ].includes(device.kind) &&
-        device.observedAt
-      )
+      if (tagIds.has(device.entityId))
         target.append(el("span", { className: "wh-tag", text: device.value }));
       items.push(target);
     }
@@ -725,6 +724,44 @@ export function createHouse(ctx, { onClose }) {
     screen.style.aspectRatio = `${cols} / ${Math.max(1, rows)}`;
     // Wide floor plans keep readable tiles and pan sideways on phones.
     screen.style.minWidth = cols > 16 ? `${cols * MIN_TILE_PX}px` : "";
+    positionLabels();
+  }
+  // Keeps each room label inside the room's visible part as the map pans:
+  // called again on scroll so a label never clips at the left edge.
+  function positionLabels() {
+    const structure = ctx.structure;
+    if (!structure || !roomLabelEls.length) return;
+    const cols = structure.grid.cols || 16;
+    const contentPx =
+      screen.getBoundingClientRect().width || frame.clientWidth || 1;
+    const tilePx = contentPx / cols;
+    const viewLeft = tilePx ? frame.scrollLeft / tilePx : 0;
+    const viewRight = viewLeft + (tilePx ? frame.clientWidth / tilePx : cols);
+    for (const { room, label } of roomLabelEls) {
+      const lx = roomLabelX(room, viewLeft, viewRight);
+      label.style.left = pct(lx, cols);
+      label.style.maxWidth = pct(
+        Math.max(0.5, room.x + room.w - lx - 0.15),
+        cols,
+      );
+    }
+  }
+  frame.addEventListener("scroll", positionLabels, { passive: true });
+  // On open, scroll so the avatar's room is visible (centered) when the
+  // plan is wider than the screen; only once, so later re-renders (a
+  // refreshed value, an edit) never yank the owner's own scroll back.
+  function scrollToSpawnOnce(structure) {
+    if (scrolledToSpawn || !structure?.rooms.length) return;
+    const room = spawnRoom(structure) ?? structure.rooms[0];
+    const contentPx = screen.getBoundingClientRect().width || frame.clientWidth;
+    if (!contentPx) return;
+    scrolledToSpawn = true;
+    frame.scrollLeft = scrollLeftFor(
+      frame.clientWidth,
+      contentPx,
+      structure.grid.cols || 16,
+      room,
+    );
   }
   function renderBottom() {
     if (editing) {
@@ -781,19 +818,41 @@ export function createHouse(ctx, { onClose }) {
       const attention = attentionView(devices);
       if (ctx.think.busy)
         body.append(el("p", { className: "wh-status", text: currentLabel() }));
-      for (const line of recentLines(ctx.snapshot, 2))
+      // Only Hearth's latest line, shown in full (wrapped, not clipped by
+      // older lines or by the chat already visible elsewhere): plain speech,
+      // up to ~4 lines, with an expand for anything longer.
+      const hearthLine = recentLines(ctx.snapshot, 6)
+        .filter((line) => line.who === "Hearth")
+        .pop();
+      if (hearthLine) {
+        if (hearthLine.text !== dialogueKey) {
+          dialogueKey = hearthLine.text;
+          dialogueExpanded = false;
+        }
         body.append(
           el(
             "div",
             {
-              className: `wh-line ${line.who === "You" ? "wh-you" : "wh-hearth"}`,
+              className: `wh-line wh-hearth${dialogueExpanded ? " wh-expanded" : ""}`,
             },
             [
-              el("span", { className: "wh-who", text: line.who }),
-              el("span", { className: "wh-text", text: line.text }),
+              el("span", { className: "wh-who", text: "Hearth" }),
+              el("span", { className: "wh-text", text: hearthLine.text }),
             ],
           ),
         );
+        if (hearthLine.text.length > 220) {
+          const expand = button(
+            dialogueExpanded ? "Show less" : "Show more",
+            "wh-expand",
+          );
+          expand.addEventListener("click", () => {
+            dialogueExpanded = !dialogueExpanded;
+            render();
+          });
+          body.append(expand);
+        }
+      }
       if (attention.items.length || attention.group) {
         const list = el("div", { className: "wh-attention" });
         list.append(el("span", { className: "wh-who", text: "Needs a look" }));
@@ -879,8 +938,8 @@ export function createHouse(ctx, { onClose }) {
     renderBanner();
     devices = ctx.views();
     if (structure?.rooms.length) {
-      const first = structure.rooms[0];
-      actor.place({ x: first.x + first.w / 2, y: first.y + first.h / 2 });
+      const home = spawnRoom(structure) ?? structure.rooms[0];
+      actor.place({ x: home.x + home.w / 2, y: home.y + home.h / 2 });
     }
     if (actor.follow(ctx.think, devices)) loop.animate();
     summary.textContent = `Home World map. ${worldSummary(structure, devices)} The list view has the same devices and actions.`;
@@ -910,6 +969,7 @@ export function createHouse(ctx, { onClose }) {
       renderLayer();
       renderBottom();
       loop.invalidate();
+      scrollToSpawnOnce(structure);
     }
   }
   function setEditing(next) {
@@ -1026,6 +1086,7 @@ export function createHouse(ctx, { onClose }) {
       loop.stop();
       unwatch();
       unsubscribe();
+      frame.removeEventListener("scroll", positionLabels);
       document.removeEventListener("keydown", onKey);
       element.remove();
     },

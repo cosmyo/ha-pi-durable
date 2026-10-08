@@ -162,6 +162,88 @@ test("Today cards render hostile text and values only as text, with as-of, late 
   }
 });
 
+test("Today briefing card renders a model-written summary as plain text, or a quiet Summary unavailable line", async () => {
+  const { target, renderToday } = await load();
+  try {
+    const withSummary = {
+      id: "c_10",
+      key: "k10",
+      kind: "briefing",
+      source: { kind: "briefing", slot: "morning", from: null, title: "Home" },
+      title: "Morning briefing",
+      body: "From Home: 1 reading.",
+      values: [
+        {
+          entityId: "sensor.example_temp",
+          label: "Study",
+          state: "21",
+          unit: "\u00b0C",
+          available: true,
+          reason: "",
+          observedAt: now,
+        },
+      ],
+      summary: {
+        text: hostile,
+        model: "openai-codex/gpt-5.6-luna",
+        latencyMs: 820,
+      },
+      created: now,
+      scheduledFor: now,
+      late: false,
+      repeat: 0,
+      snoozedUntil: 0,
+    };
+    const withoutSummary = {
+      ...withSummary,
+      id: "c_11",
+      key: "k11",
+      created: now - 1000,
+      summary: { text: "", model: "off", latencyMs: 0 },
+    };
+    const notRequested = {
+      ...withSummary,
+      id: "c_12",
+      key: "k12",
+      created: now - 2000,
+      summary: null,
+    };
+    renderToday(
+      target,
+      {
+        lastSeen: now,
+        snoozed: 0,
+        suppressed: 0,
+        unread: 0,
+        cards: [withSummary, withoutSummary, notRequested],
+      },
+      {
+        dismiss: () => {},
+        snooze: () => {},
+        ask: () => {},
+        openApp: () => {},
+      },
+    );
+    noExecutableMarkup(target);
+    const cards = target.querySelectorAll(".today-card");
+    assert.equal(cards.length, 3);
+    // Hostile summary text renders as plain text, never markup.
+    assert.match(cards[0]!.textContent!, /<script>alert\(2\)<\/script>/);
+    assert.match(
+      cards[0]!.textContent!,
+      /Model-written summary.*openai-codex\/gpt-5\.6-luna.*820 ms/,
+    );
+    assert.match(cards[1]!.textContent!, /Summary unavailable/);
+    assert.equal(
+      cards[2]!.querySelector(".today-summary"),
+      null,
+      "no opt-in: no summary section at all",
+    );
+  } finally {
+    delete (globalThis as { document?: unknown }).document;
+  }
+});
+
 test("settings form builds only read-only watcher payloads; feedback chips submit enum reasons only", async () => {
   const {
     target,
@@ -217,11 +299,17 @@ test("settings form builds only read-only watcher payloads; feedback chips submi
         watchersEnabled: true,
         checkEverySeconds: 60,
         briefings: {
-          morning: { enabled: false, at: "07:30", source: null },
+          morning: {
+            enabled: false,
+            at: "07:30",
+            source: null,
+            summary: false,
+          },
           evening: {
             enabled: true,
             at: "20:30",
             source: { kind: "app", appId: "app_1" },
+            summary: true,
           },
         },
         sources: {
@@ -272,6 +360,13 @@ test("settings form builds only read-only watcher payloads; feedback chips submi
       (evening.querySelector("select") as HTMLSelectElement).value,
       "app:app_1",
     );
+    // The summary opt-in checkbox reflects the saved setting and is off by
+    // default on the other slot.
+    const [morningSummary, eveningSummary] = [
+      ...target.querySelectorAll('input[id$="-summary"]'),
+    ] as HTMLInputElement[];
+    assert.equal(morningSummary!.checked, false);
+    assert.equal(eveningSummary!.checked, true);
     [...evening.querySelectorAll("button")]
       .find((b) => b.textContent === "Save")!
       .dispatchEvent(new Event("click"));
@@ -285,7 +380,12 @@ test("settings form builds only read-only watcher payloads; feedback chips submi
       [
         "briefing",
         "evening",
-        { enabled: true, at: "20:30", source: { kind: "app", appId: "app_1" } },
+        {
+          enabled: true,
+          at: "20:30",
+          source: { kind: "app", appId: "app_1" },
+          summary: true,
+        },
       ],
       ["remove", "w_1"],
       ["enabled", false],

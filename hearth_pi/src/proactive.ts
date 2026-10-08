@@ -49,6 +49,12 @@ export const PROACTIVE_LIMITS = {
   ledgerAgeMs: 21 * 86400000,
   briefingValues: 12,
   lateAfterMs: 5 * 60000,
+  // Optional per-briefing model-written summary (owner opt-in, off by
+  // default): at most this many attempts are reserved per owner per rolling
+  // day, and a summary's stored text is capped to this many characters.
+  briefingSummariesPerDay: 4,
+  summaryDayMs: 86400000,
+  summaryChars: 400,
 } as const;
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) =>
   info.deltasSinceBase >= 31;
@@ -61,6 +67,9 @@ export type BriefingSetting = {
   enabled: boolean;
   at: string;
   source: BriefingSource | null;
+  // Owner opt-in, off by default: one extra tool-less model call after the
+  // card's values are delivered. See BriefingSummarizer below.
+  summary: boolean;
 };
 export type OwnerWatcher = {
   id: string;
@@ -126,6 +135,33 @@ export type CardSource =
       from: BriefingSource | null;
       title: string;
     };
+// Owner opt-in, per briefing. The call is made once, after the card's
+// values are already committed and delivered (see Proactive.tick): a crash
+// before it runs leaves the card delivered without a summary, never
+// retried and never duplicated. Any failure, timeout, missing model or a
+// spent daily rate limit is an empty-text result, shown quietly as
+// "Summary unavailable" next to the card's own read values - never a
+// guess - and never blocking delivery of those values.
+export type BriefingSummaryResult = {
+  text: string;
+  model: string;
+  latencyMs: number;
+};
+export type BriefingSummaryRequest = {
+  title: string;
+  // Exactly the card's own delivered values: entity names, states, units,
+  // read times and reason/anomaly flags. Nothing else is ever passed in.
+  values: readonly CardValue[];
+  signal: AbortSignal;
+};
+// Injected, never imported: concrete implementations (src/briefing-summary.ts)
+// own the actual model call, keeping this module's closure free of fetch,
+// the Pi model runtime or any provider client (see test/proactive.test.ts's
+// static closure check). Exactly the StateReader pattern above.
+export interface BriefingSummarizer {
+  // Never throws: any failure is an empty-text BriefingSummaryResult.
+  summarize(request: BriefingSummaryRequest): Promise<BriefingSummaryResult>;
+}
 export type TodayCard = {
   id: string;
   key: string;
@@ -134,6 +170,9 @@ export type TodayCard = {
   title: string;
   body: string;
   values: CardValue[];
+  // null: no summary was requested for this card (every non-briefing card,
+  // and a briefing whose owner left "Add a short summary" off).
+  summary: BriefingSummaryResult | null;
   created: number;
   scheduledFor: number;
   late: boolean;
@@ -151,6 +190,10 @@ type OwnerToday = {
   cards: TodayCard[];
   lastSeen: number;
   recent: number[];
+  // Timestamps of reserved briefing-summary attempts in the last 24h (see
+  // PROACTIVE_LIMITS.briefingSummariesPerDay); reserved whether or not the
+  // model call that follows actually succeeds.
+  summaries: number[];
   signals: TodaySignals;
 };
 export const TodayInbox = defineDoc<{
@@ -180,14 +223,15 @@ const defaultSettings = (): OwnerSettings => ({
   next: 1,
   watchers: [],
   briefings: {
-    morning: { enabled: false, at: "07:30", source: null },
-    evening: { enabled: false, at: "20:30", source: null },
+    morning: { enabled: false, at: "07:30", source: null, summary: false },
+    evening: { enabled: false, at: "20:30", source: null, summary: false },
   },
 });
 const blankToday = (): OwnerToday => ({
   cards: [],
   lastSeen: 0,
   recent: [],
+  summaries: [],
   signals: { created: 0, dismissed: 0, snoozed: 0, asked: 0, suppressed: 0 },
 });
 const fingerprint = (value: unknown) => JSON.stringify(value);
@@ -310,7 +354,12 @@ type Reading =
       at: number;
     }
   | { ok: false; reason: CardValue["reason"]; at: number };
-type PlannedCard = Omit<TodayCard, "id" | "snoozedUntil"> & { owner: string };
+type PlannedCard = Omit<TodayCard, "id" | "snoozedUntil"> & {
+  owner: string;
+  // Briefing cards only: the owner's "Add a short summary" toggle was on
+  // when this card was planned. Stripped before the card is stored.
+  summaryRequested?: boolean;
+};
 type BriefingTarget = {
   title: string;
   entities: string[];
@@ -346,6 +395,7 @@ export class Proactive {
   private readonly now: () => number;
   private readonly intervalMs: number;
   private readonly sanitize: (value: string) => string;
+  private readonly summarizer?: BriefingSummarizer;
   constructor(
     private harness: Harness,
     private reader: StateReader,
@@ -356,11 +406,15 @@ export class Proactive {
       sanitize?: (value: string) => string;
       // Authorized owners; watchers of anyone else are not evaluated.
       owners?: () => readonly string[];
+      // Optional model-written briefing summary (see BriefingSummarizer).
+      // Absent: every opted-in briefing shows "Summary unavailable".
+      summarizer?: BriefingSummarizer;
     } = {},
   ) {
     this.now = options.now ?? Date.now;
     this.intervalMs = options.intervalMs ?? PROACTIVE_LIMITS.intervalMs;
     this.sanitize = options.sanitize ?? ((v) => v);
+    this.summarizer = options.summarizer;
   }
   start() {
     if (this.timer || this.delay || this.stopped) return;
@@ -638,6 +692,7 @@ export class Proactive {
               key: `${job.key}@${due}`,
               kind: "reminder",
               values: [],
+              summary: null,
               created: now,
               scheduledFor: due,
               late: now - due > PROACTIVE_LIMITS.lateAfterMs,
@@ -662,6 +717,7 @@ export class Proactive {
             key: `${job.key}#${result.fire.episode}.${result.fire.repeat}`,
             kind: "watcher",
             values: [this.value(when.entity, reading)],
+            summary: null,
             created: now,
             scheduledFor: 0,
             late: false,
@@ -695,6 +751,8 @@ export class Proactive {
             ? `From ${b.target.title}: ${values.length} reading${values.length === 1 ? "" : "s"}${missing ? `, ${missing} unavailable` : ""}.`
             : "The chosen source no longer exists. Choose another in Briefings & watchers.",
           values,
+          summary: null,
+          summaryRequested: b.setting.summary === true,
           created: now,
           scheduledFor: b.due,
           late: now - b.due > PROACTIVE_LIMITS.lateAfterMs,
@@ -704,47 +762,125 @@ export class Proactive {
       const stale = Object.keys(runtime.watches).filter((k) => !keep.has(k));
       if (!updates.size && !planned.length && !stale.length)
         return { reads: readings.size, cards: 0 };
-      const delivered = await this.harness.commit(async (tx) => {
-        const doc = await tx.doc(WatchRuntime);
-        const today = await tx.doc(TodayInbox);
-        for (const key of stale) delete doc.watches[key];
-        for (const [key, state] of updates) doc.watches[key] = state;
-        let count = 0;
-        for (const card of planned) {
-          if (Object.hasOwn(doc.ledger, card.key)) continue;
-          doc.ledger[card.key] = now;
-          // Assign, then edit through the document (not the plain object).
-          if (!today.owners[card.owner])
-            today.owners[card.owner] = blankToday();
-          const inbox = today.owners[card.owner]!;
-          inbox.recent = inbox.recent.filter((t) => now - t < 3600000);
-          if (
-            card.kind !== "briefing" &&
-            inbox.recent.length >= PROACTIVE_LIMITS.cardsPerHour
-          ) {
-            inbox.signals.suppressed++;
-            continue;
+      // Cards opted in to a summary whose daily rate limit was reserved in
+      // the commit below, carried out to the controller for one tool-less
+      // model call each, after their card is already durably delivered.
+      type SummaryTarget = {
+        owner: string;
+        id: string;
+        title: string;
+        values: CardValue[];
+      };
+      const { count, summaryTargets } = await this.harness.commit(
+        async (tx) => {
+          const doc = await tx.doc(WatchRuntime);
+          const today = await tx.doc(TodayInbox);
+          for (const key of stale) delete doc.watches[key];
+          for (const [key, state] of updates) doc.watches[key] = state;
+          let count = 0;
+          const summaryTargets: SummaryTarget[] = [];
+          for (const card of planned) {
+            if (Object.hasOwn(doc.ledger, card.key)) continue;
+            doc.ledger[card.key] = now;
+            // Assign, then edit through the document (not the plain object).
+            if (!today.owners[card.owner])
+              today.owners[card.owner] = blankToday();
+            const inbox = today.owners[card.owner]!;
+            inbox.recent = inbox.recent.filter((t) => now - t < 3600000);
+            if (
+              card.kind !== "briefing" &&
+              inbox.recent.length >= PROACTIVE_LIMITS.cardsPerHour
+            ) {
+              inbox.signals.suppressed++;
+              continue;
+            }
+            if (card.kind !== "briefing") inbox.recent.push(now);
+            const { owner: cardOwner, summaryRequested, ...rest } = card;
+            const id = `c_${today.next++}`;
+            inbox.cards.push({ ...rest, id, snoozedUntil: 0 });
+            inbox.signals.created++;
+            count++;
+            if (card.kind === "briefing" && summaryRequested) {
+              const pushed = inbox.cards[inbox.cards.length - 1]!;
+              // Defensive default: a document committed before this field
+              // existed hydrates without it.
+              inbox.summaries = (inbox.summaries ?? []).filter(
+                (t) => now - t < PROACTIVE_LIMITS.summaryDayMs,
+              );
+              if (
+                !this.summarizer ||
+                inbox.summaries.length >=
+                  PROACTIVE_LIMITS.briefingSummariesPerDay
+              ) {
+                // No model wired, or the owner's daily reservation is spent:
+                // quietly unavailable, with no attempt and no reservation.
+                pushed.summary = { text: "", model: "off", latencyMs: 0 };
+              } else {
+                inbox.summaries.push(now);
+                // Reserved placeholder: if the process never reaches the
+                // second commit below (crash, restart), the card stays
+                // exactly like this: delivered, quietly without a summary.
+                pushed.summary = { text: "", model: "", latencyMs: 0 };
+                // Copied out of the document draft: it must not be read
+                // after this commit settles (see copy() above).
+                summaryTargets.push({
+                  owner: cardOwner,
+                  id,
+                  title: pushed.title,
+                  values: copy(pushed.values),
+                });
+              }
+            }
           }
-          if (card.kind !== "briefing") inbox.recent.push(now);
-          const { owner: _owner, ...rest } = card;
-          inbox.cards.push({
-            ...rest,
-            id: `c_${today.next++}`,
-            snoozedUntil: 0,
+          for (const inbox of Object.values(today.owners)) {
+            inbox.cards = inbox.cards
+              .filter((c) => now - c.created < PROACTIVE_LIMITS.cardAgeMs)
+              .slice(-PROACTIVE_LIMITS.cardsPerOwner);
+          }
+          for (const [key, at] of Object.entries(doc.ledger))
+            if (now - at > PROACTIVE_LIMITS.ledgerAgeMs) delete doc.ledger[key];
+          return { count, summaryTargets };
+        },
+        ctx,
+      );
+      if (summaryTargets.length && this.summarizer && !this.stopped) {
+        const results = new Map<string, BriefingSummaryResult>();
+        await pool(summaryTargets, 2, async (target) => {
+          const result = await this.summarizer!.summarize({
+            title: target.title,
+            values: target.values,
+            signal: this.abort.signal,
+          }).catch(
+            (): BriefingSummaryResult => ({
+              text: "",
+              model: "off",
+              latencyMs: 0,
+            }),
+          );
+          results.set(target.id, {
+            text: this.sanitize(result.text).slice(
+              0,
+              PROACTIVE_LIMITS.summaryChars,
+            ),
+            model: result.model,
+            latencyMs: result.latencyMs,
           });
-          inbox.signals.created++;
-          count++;
-        }
-        for (const inbox of Object.values(today.owners)) {
-          inbox.cards = inbox.cards
-            .filter((c) => now - c.created < PROACTIVE_LIMITS.cardAgeMs)
-            .slice(-PROACTIVE_LIMITS.cardsPerOwner);
-        }
-        for (const [key, at] of Object.entries(doc.ledger))
-          if (now - at > PROACTIVE_LIMITS.ledgerAgeMs) delete doc.ledger[key];
-        return count;
-      }, ctx);
-      return { reads: readings.size, cards: delivered };
+        });
+        if (results.size && !this.stopped)
+          await this.harness.commit(async (tx) => {
+            const today = await tx.doc(TodayInbox);
+            for (const target of summaryTargets) {
+              const result = results.get(target.id);
+              const card = today.owners[target.owner]?.cards.find(
+                (c) => c.id === target.id,
+              );
+              // Already dismissed/aged out, or this attempt never completed:
+              // leave its placeholder ("Summary unavailable") as is.
+              if (result && card) card.summary = result;
+            }
+          }, ctx);
+      }
+      return { reads: readings.size, cards: count };
     });
   }
 
@@ -904,9 +1040,10 @@ export class Proactive {
     return this.settings(owner);
   }
   async saveBriefing(owner: string, body: unknown) {
-    const v = object(body, ["slot", "enabled", "at", "source"]);
+    const v = object(body, ["slot", "enabled", "at", "source", "summary"]);
     insist(v.slot === "morning" || v.slot === "evening", "invalid_slot");
     insist(typeof v.enabled === "boolean");
+    insist(v.summary === undefined || typeof v.summary === "boolean");
     const at = text(v.at, 5);
     insist(timePattern.test(at), "invalid_time");
     let source: BriefingSource | null = null;
@@ -935,8 +1072,14 @@ export class Proactive {
     insist(!v.enabled || source, "briefing_source_required");
     const slot = v.slot as BriefingSlot;
     const now = this.now();
+    const summary = v.summary === true;
     await this.settingsCommit(owner, (own, runtime) => {
-      own.briefings[slot] = { enabled: v.enabled as boolean, at, source };
+      own.briefings[slot] = {
+        enabled: v.enabled as boolean,
+        at,
+        source,
+        summary,
+      };
       const key = `brief:${owner}:${slot}`;
       // Saving never fires a slot that already passed: the next one is due.
       if (v.enabled)

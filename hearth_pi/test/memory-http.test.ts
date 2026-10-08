@@ -6,9 +6,16 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+} from "@earendil-works/pi-ai/providers/faux";
+import type { SubmissionId } from "@earendil-works/pi-durable";
+import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { Runtime } from "../src/runtime.js";
 import { Actions, haExtension } from "../src/ha.js";
 import { appServer } from "../src/server.js";
+import { WorkspaceClient, workspaceExtension } from "../src/workspace.js";
 import { offline } from "./fixtures.js";
 import { call, fakeHA, laundrySpec } from "./app-fixtures.js";
 
@@ -257,6 +264,174 @@ test("Memory and Suggestions HTTP routes enforce auth, Origin/CSRF, owner scope 
       404,
     );
     assert.equal(f.posts.length, 0, "no Home Assistant writes");
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("L3 code suggestion HTTP: auth/CSRF enforced, and Draft in Code session creates a real workspace session over the real server", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-code-http-"));
+  const provider = offline();
+  const f = fakeHA();
+  f.ha.actions.authorizeOwners(["local-admin"]);
+  const home = [haExtension(f.ha)];
+  const client = new WorkspaceClient(
+    "/synthetic-not-connected",
+    "a".repeat(64),
+  );
+  const workspaceExt = workspaceExtension(client);
+  const cfg = {
+    mode: "local" as const,
+    host: "127.0.0.1",
+    port: 8099,
+    origin: "http://127.0.0.1:8099",
+    password: "synthetic-local-password-0002",
+    authorizedUsers: [],
+    dataDir: dir,
+    provider: "offline" as const,
+    model: "test",
+    policy: f.policy,
+    haToken: "synthetic-supervisor-token",
+    apiKey: "synthetic-provider-key",
+    workspaceEnabled: true,
+  };
+  const runtime = await Runtime.open(
+    dir,
+    provider.models,
+    provider.model,
+    [...home, workspaceExt],
+    [],
+    { home, workspace: [workspaceExt] },
+    f.ha.actions,
+  );
+  const app = appServer(cfg, runtime, new Actions(runtime, f.ha));
+  await new Promise<void>((resolve) =>
+    app.server.listen(0, "127.0.0.1", resolve),
+  );
+  const address = app.server.address();
+  assert(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  cfg.origin = base;
+  const authorization = `Basic ${Buffer.from(`hearth:${cfg.password}`).toString("base64")}`;
+  const get = (path: string) =>
+    fetch(`${base}${path}`, { headers: { authorization } });
+  let n = 0;
+  try {
+    const boot = await get("/api/bootstrap");
+    const bootBody = await boot.json();
+    assert.equal(bootBody.workspaceEnabled, true);
+    const csrf = bootBody.csrf;
+    const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
+    const post = (
+      path: string,
+      value: unknown,
+      extra: Record<string, string> = {},
+    ) =>
+      fetch(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          authorization,
+          cookie,
+          origin: base,
+          "x-hearth-csrf": csrf,
+          "content-type": "application/json",
+          ...extra,
+        },
+        body: JSON.stringify(value),
+      });
+    const id = (
+      await (
+        await post("/api/sessions", { title: "Home", requestId: "code-http-1" })
+      ).json()
+    ).id;
+    const run = (tool: string, args: unknown) =>
+      call(
+        runtime,
+        provider.faux,
+        "local-admin",
+        id,
+        tool,
+        args,
+        `code-http-${++n}`,
+      );
+    for (let i = 0; i < 5; i++) {
+      provider.faux.setResponses([
+        fauxAssistantMessage(
+          fauxToolCall("ha_state_detail", { entityId: "sensor.not_in_scope" }),
+          { stopReason: "toolUse" },
+        ),
+        fauxAssistantMessage("Noted."),
+      ]);
+      const submission = await runtime.submit(
+        "local-admin",
+        id,
+        `code-http-fail-${i}`,
+        "Please check.",
+      );
+      await (await runtime.harness.submission(
+        submission as SubmissionId,
+        ctx,
+      ))!.wait(ctx);
+    }
+    const filed = await run("suggest_code_change", {
+      title: "Sensor reads keep failing",
+      problem: "ha_state_detail keeps refusing a sensor the owner expects.",
+      proposal: "Add a clearer refusal message naming the missing entity.",
+      evidence: {
+        tool: "ha_state_detail",
+        errorCode: "entity_not_allowed",
+        count: 5,
+      },
+    });
+    assert.equal(filed.ok, true, JSON.stringify(filed));
+
+    // Unauthenticated/forged requests are refused like every other route.
+    assert.equal(
+      (
+        await fetch(`${base}/api/suggestions/draft`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+      ).status,
+      401,
+    );
+    const today = await (await get("/api/today")).json();
+    const codeS = today.suggestions.items.find(
+      (s: { kind: string }) => s.kind === "code",
+    );
+    assert.equal(codeS.code.securitySensitive, false);
+    assert.equal(
+      (
+        await post(
+          "/api/suggestions/draft",
+          {
+            id: codeS.id,
+            hash: codeS.hash,
+            title: "Fix",
+            requestId: "code-http-draft-1",
+          },
+          { "x-hearth-csrf": "forged" },
+        )
+      ).status,
+      403,
+    );
+    const drafted = await post("/api/suggestions/draft", {
+      id: codeS.id,
+      hash: codeS.hash,
+      title: "Fix sensor reads",
+      requestId: "code-http-draft-2",
+    });
+    assert.equal(drafted.status, 200);
+    const draftedBody = await drafted.json();
+    assert.equal(draftedBody.decision.ok, true);
+    assert.equal(draftedBody.suggestions.items.length, 0);
+    const sessions = await (await get("/api/sessions")).json();
+    const codeSession = sessions.items.find(
+      (s: { id: number }) => s.id === draftedBody.decision.sessionId,
+    );
+    assert.equal(codeSession.kind, "workspace");
   } finally {
     await app.close();
     await rm(dir, { recursive: true, force: true });

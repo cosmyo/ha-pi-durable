@@ -12,6 +12,9 @@ import {
   WatchRuntime,
   evaluateWatch,
   scheduledSlot,
+  type BriefingSummarizer,
+  type BriefingSummaryRequest,
+  type BriefingSummaryResult,
   type StateReader,
 } from "../src/proactive.js";
 import type { WatcherSpec } from "../src/app-spec.js";
@@ -569,6 +572,329 @@ test("the timer polls only after its start delay, never overlaps passes and stop
     assert.equal(reads, after, "no reads after stop");
     assert.equal((await proactive.today("owner")).cards.length, 1);
     assert.equal(f.posts.length, 0);
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A faux BriefingSummarizer: records exactly what proactive.ts sent it and
+// returns a caller-chosen result. Never touches HA, tools or a real model.
+function fakeSummarizer(
+  respond: (
+    request: BriefingSummaryRequest,
+  ) => BriefingSummaryResult | Promise<BriefingSummaryResult>,
+): BriefingSummarizer & { calls: BriefingSummaryRequest[] } {
+  const calls: BriefingSummaryRequest[] = [];
+  return {
+    calls,
+    async summarize(request) {
+      calls.push(request);
+      return respond(request);
+    },
+  };
+}
+async function enableSummaryBriefing(
+  runtime: Runtime,
+  provider: Awaited<ReturnType<typeof open>>["provider"],
+  proactive: Proactive,
+  at = "07:00",
+) {
+  const slug = at.replace(":", "");
+  const chat = await runtime.create(
+    "owner",
+    "Laundry",
+    `proactive-sum-create-${slug}`,
+  );
+  await call(
+    runtime,
+    provider.faux,
+    "owner",
+    chat,
+    "app_create",
+    { spec: laundrySpec() },
+    `proactive-sum-input-${slug}`,
+  );
+  const saved = await proactive.saveBriefing("owner", {
+    slot: "morning",
+    enabled: true,
+    at,
+    source: { kind: "app", appId: "app_1" },
+    summary: true,
+  });
+  assert.equal(saved.briefings.morning.summary, true);
+}
+
+test("briefing summary is an owner opt-in, off by default; the model sees only that card's own data", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-proactive-sum-"));
+  const f = fakeHA();
+  let clock = at(2026, 10, 8, 6);
+  const { runtime, provider } = await open(dir, f.ha);
+  try {
+    const summarizer = fakeSummarizer(() => ({
+      text: "The washer is running and the hall light is off.",
+      model: "openai-codex/gpt-5.6-luna",
+      latencyMs: 640,
+    }));
+    const proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer,
+    });
+    const settings = await proactive.settings("owner");
+    assert.equal(settings.briefings.morning.summary, false);
+    assert.equal(settings.briefings.evening.summary, false);
+    const chat = await runtime.create("owner", "Laundry", "proactive-sum-app");
+    await call(
+      runtime,
+      provider.faux,
+      "owner",
+      chat,
+      "app_create",
+      { spec: laundrySpec() },
+      "proactive-sum-app-input",
+    );
+    // Left off: the card is delivered with no summary attempt at all.
+    await proactive.saveBriefing("owner", {
+      slot: "morning",
+      enabled: true,
+      at: "07:00",
+      source: { kind: "app", appId: "app_1" },
+      summary: false,
+    });
+    clock = at(2026, 10, 8, 7, 0) + 5000;
+    assert.equal((await proactive.tick()).cards, 1);
+    let card = (await proactive.today("owner")).cards[0]!;
+    assert.equal(card.summary, null);
+    assert.equal(summarizer.calls.length, 0);
+    // Opted in for the next slot: exactly one call, after the card's own
+    // values already exist, with only that card's title and values - no
+    // memory, no chat/transcript text, no credentials, nothing else.
+    await proactive.saveBriefing("owner", {
+      slot: "morning",
+      enabled: true,
+      at: "07:30",
+      source: { kind: "app", appId: "app_1" },
+      summary: true,
+    });
+    clock = at(2026, 10, 8, 7, 30) + 5000;
+    assert.equal((await proactive.tick()).cards, 1);
+    card = (await proactive.today("owner")).cards[0]!;
+    assert.equal(summarizer.calls.length, 1);
+    const sent = summarizer.calls[0]!;
+    assert.deepEqual(Object.keys(sent).sort(), ["signal", "title", "values"]);
+    assert.deepEqual(
+      JSON.parse(JSON.stringify({ title: sent.title, values: sent.values })),
+      JSON.parse(JSON.stringify({ title: card.title, values: card.values })),
+    );
+    const sentText = JSON.stringify({ title: sent.title, values: sent.values });
+    for (const canary of [
+      "memory",
+      "chat",
+      "transcript",
+      "synthetic-supervisor-token",
+      "openai_api_key",
+      "tool",
+    ])
+      assert(
+        !sentText.toLowerCase().includes(canary),
+        `summary prompt data leaked ${canary}`,
+      );
+    assert.equal(
+      card.summary?.text,
+      "The washer is running and the hall light is off.",
+    );
+    assert.equal(card.summary?.model, "openai-codex/gpt-5.6-luna");
+    assert.equal(card.summary?.latencyMs, 640);
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("briefing summary: a timed-out or failed model call is a quiet, empty-text result, never a guess", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-proactive-sum-timeout-"));
+  const f = fakeHA();
+  let clock = at(2026, 10, 8, 6);
+  const { runtime, provider } = await open(dir, f.ha);
+  try {
+    // A well-behaved summarizer never throws; a timeout is an empty-text
+    // result with the attempted model and latency recorded.
+    const timedOut = fakeSummarizer(() => ({
+      text: "",
+      model: "openai-codex/gpt-5.6-luna",
+      latencyMs: 20000,
+    }));
+    let proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer: timedOut,
+    });
+    await enableSummaryBriefing(runtime, provider, proactive, "07:00");
+    clock = at(2026, 10, 8, 7, 0) + 5000;
+    assert.equal((await proactive.tick()).cards, 1);
+    let card = (await proactive.today("owner")).cards[0]!;
+    assert.equal(card.summary?.text, "");
+    assert.equal(card.summary?.model, "openai-codex/gpt-5.6-luna");
+    assert.equal(card.summary?.latencyMs, 20000);
+    // A broken summarizer (throws instead of returning) still fails quiet.
+    const broken: BriefingSummarizer = {
+      summarize: async () => {
+        throw new Error("provider exploded");
+      },
+    };
+    proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer: broken,
+    });
+    await proactive.saveBriefing("owner", {
+      slot: "morning",
+      enabled: true,
+      at: "07:15",
+      source: { kind: "app", appId: "app_1" },
+      summary: true,
+    });
+    clock = at(2026, 10, 8, 7, 15) + 5000;
+    assert.equal((await proactive.tick()).cards, 1);
+    card = (await proactive.today("owner")).cards[0]!;
+    assert.equal(card.summary?.text, "");
+    assert.equal(card.summary?.model, "off");
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("briefing summary: output is sanitized and capped to 400 characters", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-proactive-sum-cap-"));
+  const f = fakeHA();
+  let clock = at(2026, 10, 8, 6);
+  const { runtime, provider } = await open(dir, f.ha);
+  try {
+    const longText = `secret-token-xyz ${"word ".repeat(200)}`;
+    const summarizer = fakeSummarizer(() => ({
+      text: longText,
+      model: "anthropic/claude-haiku-4-5",
+      latencyMs: 300,
+    }));
+    const proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer,
+      sanitize: (v) => v.split("secret-token-xyz").join("[REDACTED]"),
+    });
+    await enableSummaryBriefing(runtime, provider, proactive, "07:00");
+    clock = at(2026, 10, 8, 7, 0) + 5000;
+    assert.equal((await proactive.tick()).cards, 1);
+    const card = (await proactive.today("owner")).cards[0]!;
+    assert(card.summary!.text.length <= 400);
+    assert(!card.summary!.text.includes("secret-token-xyz"));
+    assert(card.summary!.text.includes("[REDACTED]"));
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("briefing summary: at most 4 attempts per owner per rolling day; further briefings show quietly unavailable", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-proactive-sum-rate-"));
+  const f = fakeHA();
+  let clock = at(2026, 10, 8, 6);
+  const { runtime, provider } = await open(dir, f.ha);
+  try {
+    const summarizer = fakeSummarizer(() => ({
+      text: "Summary text.",
+      model: "openai-codex/gpt-5.6-luna",
+      latencyMs: 50,
+    }));
+    const proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer,
+    });
+    const chat = await runtime.create("owner", "Laundry", "proactive-sum-rate");
+    await call(
+      runtime,
+      provider.faux,
+      "owner",
+      chat,
+      "app_create",
+      { spec: laundrySpec() },
+      "proactive-sum-rate-input",
+    );
+    for (let i = 0; i < 5; i++) {
+      const minute = 5 + i;
+      await proactive.saveBriefing("owner", {
+        slot: "morning",
+        enabled: true,
+        at: `07:${minute.toString().padStart(2, "0")}`,
+        source: { kind: "app", appId: "app_1" },
+        summary: true,
+      });
+      clock = at(2026, 10, 8, 7, minute) + 5000;
+      assert.equal((await proactive.tick()).cards, 1, `delivery ${i}`);
+    }
+    assert.equal(summarizer.calls.length, 4, "the 5th attempt is never made");
+    const cards = (await proactive.today("owner")).cards;
+    assert.equal(cards.length, 5);
+    const byTime = [...cards].sort((a, b) => a.created - b.created);
+    for (const card of byTime.slice(0, 4))
+      assert.equal(card.summary?.text, "Summary text.");
+    const fifth = byTime[4]!;
+    assert.equal(fifth.summary?.text, "");
+    assert.equal(fifth.summary?.model, "off");
+  } finally {
+    await runtime.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("briefing summary durability: a crash between the card's own commit and its summary leaves the card delivered without a summary, never duplicated or retried", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-proactive-sum-crash-"));
+  const f = fakeHA();
+  let clock = at(2026, 10, 8, 6);
+  let { runtime, provider } = await open(dir, f.ha);
+  try {
+    // Never resolves: stands in for a process that is killed while the
+    // model call for an already-delivered card is still in flight.
+    const hung: BriefingSummarizer = { summarize: () => new Promise(() => {}) };
+    const proactive = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer: hung,
+    });
+    await enableSummaryBriefing(runtime, provider, proactive, "07:00");
+    clock = at(2026, 10, 8, 7, 0) + 5000;
+    // Fire-and-forget: this tick's second (summary) phase hangs forever on
+    // `hung`, exactly like a process that crashes before it completes.
+    // Never awaited here, matching that it never resolves.
+    void proactive.tick();
+    // The card's own commit (the first of the two) still lands quickly.
+    let delivered = false;
+    for (let waited = 0; waited < 20 && !delivered; waited++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const inbox = (await runtime.harness.snapshot(TodayInbox, ctx))?.owners
+        .owner;
+      delivered = (inbox?.cards.length ?? 0) === 1;
+    }
+    assert(delivered, "the card commits before the summary call settles");
+    const beforeCrash = (await runtime.harness.snapshot(TodayInbox, ctx))!
+      .owners.owner!.cards[0]!;
+    assert.equal(beforeCrash.summary?.text, "");
+    assert.equal(beforeCrash.summary?.model, "", "reserved, not yet attempted");
+    // "Restart": a fresh Proactive over the same durable harness, as if the
+    // process had been killed and relaunched. The already-delivered card is
+    // never re-planned (its ledger key is spent) and its summary is never
+    // retried, so it is never duplicated and stays quietly without one.
+    const freshSummarizer = fakeSummarizer(() => ({
+      text: "Should never run.",
+      model: "openai-codex/gpt-5.6-luna",
+      latencyMs: 10,
+    }));
+    const restarted = new Proactive(runtime.harness, f.ha.reader(), {
+      now: () => clock,
+      summarizer: freshSummarizer,
+    });
+    assert.equal((await restarted.tick()).cards, 0, "no duplicate card");
+    assert.equal(freshSummarizer.calls.length, 0, "never retried");
+    const after = (await restarted.today("owner")).cards;
+    assert.equal(after.length, 1);
+    assert.equal(after[0]!.summary?.text, "");
   } finally {
     await runtime.close();
     await rm(dir, { recursive: true, force: true });

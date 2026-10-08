@@ -23,6 +23,7 @@ import { AppStore } from "./apps.js";
 import { Proactive } from "./proactive.js";
 import { FeedbackStore } from "./feedback.js";
 import { MemoryStore } from "./memory.js";
+import { ProfileStore } from "./profile.js";
 import { SuggestionStore } from "./suggestions.js";
 import { WorldStore } from "./world.js";
 
@@ -147,6 +148,7 @@ export function appServer(
     });
   const feedback = new FeedbackStore(runtime);
   const memory = new MemoryStore(runtime);
+  const profile = new ProfileStore(runtime);
   const suggestions = new SuggestionStore(runtime, actions.engine.ha);
   // Today = watcher/briefing cards plus the owner's open suggestions; new
   // suggestions count toward the same unread badge.
@@ -389,7 +391,7 @@ export function appServer(
         });
       }
       const suggestionRoute =
-        /^\/api\/suggestions\/(accept|reject|snooze|dismiss)$/.exec(path);
+        /^\/api\/suggestions\/(accept|reject|snooze|dismiss|draft)$/.exec(path);
       if (suggestionRoute && req.method === "POST") {
         const v = await body(req);
         const operation = suggestionRoute[1];
@@ -400,8 +402,15 @@ export function appServer(
               ? await suggestions.reject(owner, v)
               : operation === "snooze"
                 ? await suggestions.snooze(owner, v)
-                : await suggestions.dismiss(owner, v);
+                : operation === "draft"
+                  ? await suggestions.draft(owner, v)
+                  : await suggestions.dismiss(owner, v);
         return json(res, 200, { decision, ...(await todayView(owner)) });
+      }
+      if (path === "/api/profile") {
+        if (req.method === "GET")
+          return json(res, 200, await profile.get(owner));
+        return json(res, 200, await profile.put(owner, await body(req)));
       }
       if (req.method === "GET" && path === "/api/memory")
         return json(res, 200, await memory.list(owner));

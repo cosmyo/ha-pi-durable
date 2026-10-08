@@ -10,6 +10,10 @@ import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
 import { WorkspaceClient, workspaceExtension } from "./workspace.js";
 import { Proactive } from "./proactive.js";
 import { JudgeSessions, RiskJudgeService, resolveJudge } from "./judge.js";
+import {
+  BriefingSummaryService,
+  resolveBriefingSummaryModel,
+} from "./briefing-summary.js";
 
 try {
   const config = await loadConfig();
@@ -115,10 +119,21 @@ try {
         signedIn: s.configured(),
       }));
   // Watchers and briefings read scoped state and create Today cards only.
+  // The optional briefing summary is a separate, injected, tool-less model
+  // call (src/briefing-summary.ts) with its own fixed timeout and output
+  // cap; it never touches HA tools, Home permissions or the chat model.
+  const briefingSummaryModel = config.briefingSummaryModel ?? "auto";
   const proactive = new Proactive(runtime.harness, ha.reader(), {
     sanitize: (value) => ha.sanitize(value),
     owners: () =>
       config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
+    summarizer: new BriefingSummaryService(briefingSummaryModel, () =>
+      resolveBriefingSummaryModel(briefingSummaryModel, {
+        models: native,
+        signedIn: (provider) =>
+          subscriptions.some((s) => s.provider === provider && s.configured()),
+      }),
+    ),
   });
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscriptions,

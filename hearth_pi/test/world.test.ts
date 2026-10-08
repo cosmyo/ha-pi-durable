@@ -1679,3 +1679,270 @@ test("an owner floor plan may widen the grid and add decor spaces", () => {
     ),
   });
 });
+
+// Synthetic two-row apartment, 36 cols wide (wider than a phone screen so
+// the map pans horizontally): a decor balcony across the top, a row of
+// large rooms, a row of small rooms, an empty gap row, then the
+// "Unassigned" shed. No real floor plan, room names or device ids.
+function apartmentFixture() {
+  return {
+    grid: { cols: 36, rows: 22 },
+    rooms: [
+      {
+        id: "decor:balcony",
+        name: "Balcony",
+        x: 0,
+        y: 0,
+        w: 36,
+        h: 2,
+        floor: "wood",
+        decor: true,
+        area: null,
+      },
+      {
+        id: "area:living",
+        name: "Living Room",
+        x: 0,
+        y: 2,
+        w: 14,
+        h: 8,
+        floor: "wood",
+        area: "living",
+      },
+      {
+        id: "area:kitchen",
+        name: "Kitchen",
+        x: 14,
+        y: 2,
+        w: 12,
+        h: 8,
+        floor: "tile",
+        area: "kitchen",
+      },
+      {
+        id: "area:office",
+        name: "Office",
+        x: 26,
+        y: 2,
+        w: 10,
+        h: 8,
+        floor: "carpet",
+        area: "office",
+      },
+      {
+        id: "area:bath",
+        name: "Bath",
+        x: 0,
+        y: 10,
+        w: 8,
+        h: 5,
+        floor: "tile",
+        area: "bath",
+      },
+      {
+        id: "area:bed1",
+        name: "Bed 1",
+        x: 8,
+        y: 10,
+        w: 8,
+        h: 5,
+        floor: "carpet",
+        area: "bed1",
+      },
+      {
+        id: "area:bed2",
+        name: "Bed 2",
+        x: 16,
+        y: 10,
+        w: 8,
+        h: 5,
+        floor: "carpet",
+        area: "bed2",
+      },
+      // y 15..18 is an empty gap row with no room.
+      {
+        id: "unassigned",
+        name: "Unassigned",
+        x: 0,
+        y: 19,
+        w: 36,
+        h: 3,
+        floor: "stone",
+        area: null,
+      },
+    ],
+    devices: [] as { entityId: string; room: string }[],
+  };
+}
+
+test("avatar/pet spawn a real, lived-in room, never the decor balcony or the shed", async () => {
+  const world = await import(
+    new URL("../public/world/world.js", import.meta.url).href
+  );
+  // Most devices wins: the kitchen has more drawn devices than any other
+  // room (and more than the decor balcony or the shed, which never count).
+  const busy = apartmentFixture();
+  busy.devices = [
+    { entityId: "light.a", room: "decor:balcony" },
+    { entityId: "light.b", room: "decor:balcony" },
+    { entityId: "sensor.a", room: "unassigned" },
+    { entityId: "sensor.b", room: "unassigned" },
+    { entityId: "sensor.c", room: "unassigned" },
+    { entityId: "light.living", room: "area:living" },
+    { entityId: "light.kitchen_1", room: "area:kitchen" },
+    { entityId: "light.kitchen_2", room: "area:kitchen" },
+    { entityId: "switch.kitchen_3", room: "area:kitchen" },
+  ];
+  assert.equal(world.spawnRoom(busy)?.id, "area:kitchen");
+
+  // Tie on device count: the living/kitchen/family-like name wins over an
+  // equally-busy office.
+  const tie = apartmentFixture();
+  tie.devices = [
+    { entityId: "light.living_1", room: "area:living" },
+    { entityId: "light.living_2", room: "area:living" },
+    { entityId: "light.office_1", room: "area:office" },
+    { entityId: "light.office_2", room: "area:office" },
+  ];
+  assert.equal(world.spawnRoom(tie)?.id, "area:living");
+
+  // Every device lives in decor or the shed: spawn still lands in a real
+  // room (never the void, decor or the shed), picked deterministically.
+  const none = apartmentFixture();
+  none.devices = [
+    { entityId: "light.a", room: "decor:balcony" },
+    { entityId: "sensor.a", room: "unassigned" },
+  ];
+  const spawn = world.spawnRoom(none);
+  assert.ok(spawn);
+  assert.notEqual(spawn.id, "decor:balcony");
+  assert.notEqual(spawn.id, "unassigned");
+
+  assert.equal(world.spawnRoom({ rooms: [], devices: [] }), null);
+  assert.equal(world.spawnRoom(null), null);
+});
+
+test("value tags avoid collisions: at most N per room, anomalies first, no overlapping pair", async () => {
+  const world = await import(
+    new URL("../public/world/world.js", import.meta.url).href
+  );
+  const room = "area:kitchen";
+  const devices = [
+    // Five candidate tags packed into the same small cluster: only the
+    // limit's worth should show, and the anomaly always wins a spot.
+    {
+      entityId: "sensor.temp",
+      room,
+      kind: "sensor",
+      x: 16,
+      y: 4,
+      observedAt: 1,
+    },
+    {
+      entityId: "sensor.humidity",
+      room,
+      kind: "humidity",
+      x: 16.2,
+      y: 4.1,
+      observedAt: 1,
+    },
+    {
+      entityId: "climate.ac",
+      room,
+      kind: "climate",
+      x: 16.3,
+      y: 4.2,
+      observedAt: 1,
+    },
+    {
+      entityId: "sensor.leak",
+      room,
+      kind: "humidity",
+      anomaly: "leak",
+      x: 16.4,
+      y: 4.1,
+      observedAt: 1,
+    },
+    {
+      entityId: "sensor.fridge",
+      room,
+      kind: "sensor",
+      x: 22,
+      y: 6,
+      observedAt: 1,
+    },
+    // Far enough apart to never collide; kept regardless of the cluster.
+    {
+      entityId: "sensor.office",
+      room: "area:office",
+      kind: "sensor",
+      x: 30,
+      y: 4,
+      observedAt: 1,
+    },
+    // Not a tag kind, or never read: never tagged.
+    {
+      entityId: "light.kitchen",
+      room,
+      kind: "light",
+      x: 18,
+      y: 4,
+      observedAt: 1,
+    },
+    { entityId: "sensor.unread", room, kind: "sensor", x: 24, y: 8 },
+  ];
+  const visible = world.visibleTagIds(devices, 2);
+  assert.equal(visible.size, 3); // 2 in the kitchen cluster + 1 in the office
+  assert.ok(visible.has("sensor.leak"), "the anomaly always keeps its tag");
+  assert.ok(visible.has("sensor.office"));
+  assert.ok(!visible.has("light.kitchen"));
+  assert.ok(!visible.has("sensor.unread"));
+  // Exactly one more kitchen tag besides the anomaly, and it is not one of
+  // the two devices sitting right on top of the anomaly.
+  const kitchenKept = [...visible].filter((id) =>
+    devices.find((d) => d.entityId === id && d.room === room),
+  );
+  assert.equal(kitchenKept.length, 2);
+  assert.ok(!kitchenKept.includes("sensor.temp"));
+  assert.ok(!kitchenKept.includes("sensor.humidity"));
+
+  // A spread-out room keeps every tag, up to the limit.
+  const spread = [
+    { entityId: "sensor.a", room, kind: "sensor", x: 2, y: 2, observedAt: 1 },
+    { entityId: "sensor.b", room, kind: "sensor", x: 8, y: 2, observedAt: 1 },
+    { entityId: "sensor.c", room, kind: "sensor", x: 14, y: 2, observedAt: 1 },
+  ];
+  assert.deepEqual([...world.visibleTagIds(spread, 4)].sort(), [
+    "sensor.a",
+    "sensor.b",
+    "sensor.c",
+  ]);
+});
+
+test("room labels stay inside the room's visible part as the map pans", async () => {
+  const world = await import(
+    new URL("../public/world/world.js", import.meta.url).href
+  );
+  const room = { x: 14, y: 2, w: 12, h: 8, name: "Kitchen" };
+  // Not scrolled past the room: normal left-edge position.
+  assert.equal(world.roomLabelX(room, 0, 16), room.x + 0.15);
+  // Scrolled into the room: the label follows the viewport but never
+  // crosses the room's own right edge.
+  assert.equal(world.roomLabelX(room, 18, 30), 18.15);
+  assert.equal(world.roomLabelX(room, 25.8, 36), room.x + room.w - 0.15);
+  // The room is entirely off-screen (scrolled past it, or not reached
+  // yet): falls back to its own left edge rather than an out-of-room x.
+  assert.equal(world.roomLabelX(room, 30, 36), room.x + 0.15);
+  assert.equal(world.roomLabelX(room, 0, 10), room.x + 0.15);
+
+  // Initial horizontal scroll centers the spawn room when the plan is
+  // wider than the screen; no scroll when it already fits.
+  const fixture = apartmentFixture();
+  const kitchen = fixture.rooms.find((r) => r.id === "area:kitchen")!;
+  assert.equal(world.scrollLeftFor(360, 360, fixture.grid.cols, kitchen), 0);
+  // cols=36, kitchen spans x 14..26 (center 20) over a 900px plan: each
+  // tile is 25px, the room's center sits at 500px, minus half the 360px
+  // viewport, clamped to the scrollable range.
+  assert.equal(world.scrollLeftFor(360, 900, fixture.grid.cols, kitchen), 320);
+  assert.equal(world.scrollLeftFor(360, 900, fixture.grid.cols, null), 0);
+});

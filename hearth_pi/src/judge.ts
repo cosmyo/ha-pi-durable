@@ -361,7 +361,10 @@ export const AUTO_JUDGE_MODELS = [
   { provider: "openai-codex", modelId: "gpt-5.6-luna" },
   { provider: "anthropic", modelId: "claude-haiku-4-5" },
 ] as const;
-const SUBSCRIPTION_PROVIDERS = new Set(["openai-codex", "anthropic"]);
+// Shared with briefing-summary.ts: the same "auto" cheap-model resolution
+// (gpt-5.6-luna, then claude-haiku-4-5, else off) is used for both the risk
+// judge and the optional briefing summary.
+export const SUBSCRIPTION_PROVIDERS = new Set(["openai-codex", "anthropic"]);
 
 export type JudgeEnvironment = {
   models: JudgeModels;

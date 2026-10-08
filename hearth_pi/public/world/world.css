@@ -519,6 +519,23 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+.wh-expanded .wh-text {
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+.wh-expand {
+  align-self: flex-start;
+  margin-left: 1ch;
+  min-height: 44px;
+  padding: 0 10px;
+  background: transparent;
+  border-color: transparent;
+  color: #7a4a22;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: underline;
+}
 .wh-hint {
   color: #6f604a;
 }

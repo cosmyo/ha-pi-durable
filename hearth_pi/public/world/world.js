@@ -265,6 +265,99 @@ export function placementFor(layout, x, y) {
     ),
   };
 }
+// The avatar (and pet) always start inside a real, lived-in room — never
+// the void outside every room, an owner-drawn decor space (balcony,
+// patio…) or the "Unassigned" shed. Prefers the room with the most drawn
+// devices; ties go to a living/kitchen/family-like name, then grid order.
+const HOME_ROOM_NAME = /living|lounge|family|kitchen|great\s*room|den/i;
+export function spawnRoom(structure) {
+  const rooms = (structure?.rooms ?? []).filter(
+    (r) => !r.decor && r.id !== "unassigned",
+  );
+  if (!rooms.length) return null;
+  const devices = structure.devices ?? [];
+  const deviceCount = (room) =>
+    devices.filter((d) => d.room === room.id).length;
+  let best = rooms[0];
+  let bestCount = deviceCount(best);
+  for (const room of rooms.slice(1)) {
+    const count = deviceCount(room);
+    const better =
+      count > bestCount ||
+      (count === bestCount &&
+        HOME_ROOM_NAME.test(room.name) &&
+        !HOME_ROOM_NAME.test(best.name));
+    if (better) {
+      best = room;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+// Initial horizontal scroll (CSS px) so the avatar's room is centered when
+// the plan is wider than the screen; 0 (no scroll needed) when it already
+// fits. Pure geometry so callers decide when to apply/keep it.
+export function scrollLeftFor(viewportPx, contentPx, cols, room) {
+  if (!room || !cols || contentPx <= viewportPx) return 0;
+  const tilePx = contentPx / cols;
+  const center = (room.x + room.w / 2) * tilePx;
+  return clamp(center - viewportPx / 2, 0, contentPx - viewportPx);
+}
+// A room label's x (grid units) stays within the room's own edges and the
+// currently visible horizontal slice of a panned map, so a label is never
+// clipped by the left edge of the scrolled viewport (acts like a
+// position:sticky label bounded to its room).
+export function roomLabelX(room, viewLeft, viewRight, pad = 0.15) {
+  const left = room.x + pad;
+  const right = Math.max(left, room.x + room.w - pad);
+  if (viewRight <= room.x || viewLeft >= room.x + room.w) return left;
+  return clamp(viewLeft + pad, left, right);
+}
+// Dense rooms (many sensors, climate, anomalies at once) collide into
+// unreadable stacked tags ("lo low", "Unav Unavailable"). Keeps at most
+// `limit` value tags per room, ranked by what matters most — an anomaly
+// first, then climate/temperature, then everything else — and drops any
+// tag whose position would overlap one already kept. The full value is
+// always still on the device card/list, regardless of what is tagged here.
+const TAG_KIND = new Set([
+  "thermo",
+  "humidity",
+  "sensor",
+  "climate",
+  "printer",
+  "battery",
+]);
+export const TAG_LIMIT_PER_ROOM = 4;
+function tagPriority(device) {
+  if (device.anomaly) return 0;
+  if (device.kind === "climate" || device.kind === "thermo") return 1;
+  return 2;
+}
+export function visibleTagIds(devices, limit = TAG_LIMIT_PER_ROOM) {
+  const byRoom = new Map();
+  for (const device of devices) {
+    if (!TAG_KIND.has(device.kind) || !device.observedAt) continue;
+    if (!byRoom.has(device.room)) byRoom.set(device.room, []);
+    byRoom.get(device.room).push(device);
+  }
+  const visible = new Set();
+  for (const list of byRoom.values()) {
+    const ranked = [...list].sort(
+      (a, b) => tagPriority(a) - tagPriority(b) || a.x - b.x || a.y - b.y,
+    );
+    const kept = [];
+    for (const device of ranked) {
+      if (kept.length >= limit) break;
+      const overlaps = kept.some(
+        (k) => Math.abs(k.x - device.x) < 1.1 && Math.abs(k.y - device.y) < 0.6,
+      );
+      if (overlaps) continue;
+      kept.push(device);
+      visible.add(device.entityId);
+    }
+  }
+  return visible;
+}
 
 // ------------------------------------------------------------ data adapter
 // Display info for one device from the structure plus the latest reads.

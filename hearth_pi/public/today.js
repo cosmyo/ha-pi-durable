@@ -108,6 +108,25 @@ function cardElement(card, data, handlers) {
         ),
       );
   }
+  // Opt-in, briefing cards only: one extra model call after the values
+  // above were already delivered. Plain text only (textContent via node()),
+  // never markdown or HTML; a quiet, calm line when it is unavailable.
+  if (card.kind === "briefing" && card.summary) {
+    const box = node("div", "", "today-summary");
+    if (card.summary.text) {
+      box.append(node("p", card.summary.text, "today-summary-text"));
+      box.append(
+        node(
+          "span",
+          `Model-written summary · ${card.summary.model} · ${card.summary.latencyMs} ms`,
+          "app-asof",
+        ),
+      );
+    } else {
+      box.append(node("p", "Summary unavailable", "today-summary-text muted"));
+    }
+    article.append(box);
+  }
   const actions = node("div", "", "today-actions");
   const dismiss = button("Dismiss", "", `Dismiss ${card.title}`);
   dismiss.addEventListener("click", () => handlers.dismiss(card));
@@ -170,7 +189,11 @@ function suggestionCard(s, data, handlers, ui) {
   meta.append(
     node(
       "span",
-      s.kind === "memory" ? "Suggestion · Memory" : "Suggestion · App change",
+      s.kind === "memory"
+        ? "Suggestion · Memory"
+        : s.kind === "app_change"
+          ? "Suggestion · App change"
+          : "Suggestion · Code improvement",
       "today-source",
     ),
     node(
@@ -213,7 +236,7 @@ function suggestionCard(s, data, handlers, ui) {
       edit.addEventListener("click", () => handlers.edit(s.id));
       actions.append(accept, edit);
     }
-  } else {
+  } else if (s.kind === "app_change") {
     const app = s.app;
     article.append(
       node(
@@ -287,6 +310,66 @@ function suggestionCard(s, data, handlers, ui) {
       );
       accept.addEventListener("click", () => handlers.accept(s));
       actions.append(accept);
+    }
+  } else {
+    const code = s.code;
+    article.append(node("h3", code.title || "Code improvement", "today-title"));
+    if (code.securitySensitive)
+      article.append(node("p", "Security review required", "security-label"));
+    article.append(
+      node("p", code.problem, "today-body"),
+      node(
+        "p",
+        `${code.evidence.tool} failed with ${code.evidence.errorCode} ${code.evidence.count} time${code.evidence.count === 1 ? "" : "s"} in the last 7 days.`,
+        "muted",
+      ),
+    );
+    const details = node("details", "", "suggestion-patch");
+    details.append(node("summary", "Proposal"));
+    details.append(node("p", code.proposal, "today-body"));
+    article.append(details);
+    if (ui.workspaceEnabled === false)
+      article.append(
+        node(
+          "p",
+          "Code sessions are off for this installation. An operator can turn on workspace_enabled (see the workspace guide) to draft this in a Code session.",
+          "muted",
+        ),
+      );
+    else if (code.securitySensitive) {
+      const review = node("details", "", "code-confirm");
+      review.append(node("summary", "Review and confirm to draft"));
+      const box = node("div", "", "code-confirm-box");
+      const input = document.createElement("input");
+      input.type = "text";
+      input.maxLength = 20;
+      input.id = `suggestion-confirm-${s.id}`;
+      input.autocomplete = "off";
+      const label = node(
+        "label",
+        "This suggestion touches a security-sensitive area. Type CONFIRM to draft it in a new Code session.",
+      );
+      label.htmlFor = input.id;
+      box.append(label, input);
+      const draft = button(
+        "Draft in Code session",
+        "approve",
+        `Draft ${code.title} in a Code session`,
+      );
+      draft.addEventListener("click", () =>
+        handlers.draft(s, input.value.trim()),
+      );
+      box.append(draft);
+      review.append(box);
+      article.append(review);
+    } else {
+      const draft = button(
+        "Draft in Code session",
+        "approve",
+        `Draft ${code.title} in a Code session`,
+      );
+      draft.addEventListener("click", () => handlers.draft(s));
+      actions.append(draft);
     }
   }
   if (!conflict && ui.editing !== s.id) {
@@ -454,12 +537,20 @@ function briefingForm(slot, setting, sources, handlers) {
   for (const canvas of sources.canvases)
     options.push([`canvas:${canvas.sessionId}`, `Home view: ${canvas.title}`]);
   const source = select(options, sourceKey(setting.source));
+  const summaryRow = node("label", "", "pro-check");
+  const summaryOn = document.createElement("input");
+  summaryOn.type = "checkbox";
+  summaryOn.checked = !!setting.summary;
+  summaryOn.id = `briefing-${slot}-summary`;
+  summaryRow.htmlFor = summaryOn.id;
+  summaryRow.append(summaryOn, node("span", "Add a short summary"));
   const save = button("Save", "", `Save ${slot} briefing`);
   save.addEventListener("click", () =>
     handlers.saveBriefing(slot, {
       enabled: on.checked,
       at: time.value,
       source: parseSourceKey(source.value),
+      summary: summaryOn.checked,
     }),
   );
   const top = node("div", "", "pro-row");
@@ -467,6 +558,7 @@ function briefingForm(slot, setting, sources, handlers) {
   box.append(
     top,
     field("Read values from", source, `briefing-${slot}-source`),
+    summaryRow,
     save,
   );
   return box;

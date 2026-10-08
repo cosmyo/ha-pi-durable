@@ -1009,6 +1009,39 @@ dialog .actions {
   margin: 4px 0;
   color: var(--muted);
 }
+/* Settings \u2192 You: a short personal form, same control sizing as the
+   model picker. The tone group is a row of toggle buttons (44px minimum
+   from the global button rule), not a native radio/select. */
+.you-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.you-form label,
+.you-form #you-tone-label {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-top: 6px;
+}
+.you-form input,
+.you-form select {
+  font: inherit;
+  min-height: 44px;
+}
+.segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.segmented button {
+  flex: 1 1 calc(33.33% - 4px);
+  min-width: 70px;
+  padding: 8px 10px;
+}
+.segmented button[aria-pressed="true"] {
+  border-color: var(--teal);
+  color: var(--teal);
+}
 /* Settings sheet: grouped iOS-Settings-style list rows, each one entry
    point into an existing dialog (Home permissions, Account, Briefings &
    watchers, Insights, Home World) plus a static About group. */
@@ -1200,7 +1233,9 @@ dialog .actions {
   input,
   textarea,
   #home-mode,
-  .model-picker select {
+  .model-picker select,
+  .you-form select,
+  .you-form input {
     /* 16px stops iOS Safari from zooming on focus. */
     font-size: 16px;
   }
@@ -2083,6 +2118,19 @@ h3.app-text {
   font-weight: 500;
   font-size: 0.82rem;
 }
+.today-summary {
+  border-top: 1px solid #2c3c3e;
+  margin-top: 8px;
+  padding-top: 8px;
+}
+.today-summary-text {
+  margin: 0 0 2px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.today-summary-text.muted {
+  font-style: italic;
+}
 .today-actions,
 .today-snooze {
   display: flex;
@@ -2384,6 +2432,48 @@ dialog .pro-field label {
 .suggestion-patch li {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   overflow-wrap: anywhere;
+}
+.security-label {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #3a2420;
+  color: var(--warm);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+.code-confirm {
+  margin-top: 8px;
+  font-size: 0.86rem;
+}
+.code-confirm summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--teal);
+}
+.code-confirm-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+.code-confirm-box label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.code-confirm-box input {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  min-height: 44px;
+  background: var(--bg);
+  color: var(--text);
+}
+.code-confirm-box > button {
+  align-self: flex-start;
 }
 .feedback-hint {
   margin: 6px 0 0;

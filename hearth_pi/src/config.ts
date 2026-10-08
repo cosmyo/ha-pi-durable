@@ -53,6 +53,11 @@ export type Config = {
   workspaceEnabled?: boolean;
   policy: Policy;
   judge?: JudgeConfig;
+  // "off", "auto" or "<provider>/<modelId>": the optional briefing summary's
+  // model (src/briefing-summary.ts). Optional so existing test/local
+  // fixtures that build a Config without it keep working; main.ts defaults
+  // a missing value to "auto", matching the risk judge's own default.
+  briefingSummaryModel?: string;
   haToken: string;
   apiKey: string;
 };
@@ -86,6 +91,7 @@ export async function loadConfig(): Promise<Config> {
           "risk_judge_api_key",
           "risk_judge_timeout_ms",
           "risk_judge_session_ttl_ms",
+          "briefing_summary_model",
         ])
       : {};
   const port =
@@ -186,6 +192,16 @@ export async function loadConfig(): Promise<Config> {
     !judgeModel.startsWith("endpoint/") || judgeUrl,
     "risk_judge_url_required",
   );
+  const briefingSummaryModel = text(
+    options.briefing_summary_model ||
+      process.env.HEARTH_BRIEFING_SUMMARY_MODEL ||
+      "auto",
+    200,
+  );
+  insist(
+    JUDGE_MODEL_PATTERN.test(briefingSummaryModel),
+    "invalid_briefing_summary_model",
+  );
   const provider = options.provider ?? process.env.HEARTH_PROVIDER ?? "offline";
   insist(
     provider === "offline" ||
@@ -270,6 +286,7 @@ export async function loadConfig(): Promise<Config> {
       timeoutMs: judgeTimeout,
       sessionTtlMs: judgeTtl,
     },
+    briefingSummaryModel,
     haToken: process.env.SUPERVISOR_TOKEN ?? "",
     apiKey,
   };

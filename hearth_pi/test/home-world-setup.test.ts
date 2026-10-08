@@ -1039,6 +1039,97 @@ test("image upload over HTTP: auth, CSRF, validation, and the owner-checked imag
   }
 });
 
+// Per-user customization P1 pre-flight check: image attachments must be
+// owner/session-isolated at both the HTTP route (runtime.session(owner, id)
+// re-checks ownership before any image is served) and storage (an image's
+// bytes live only inside its own conversation's durable transcript, read
+// through conversation.context() scoped to that one conversation id —
+// never a shared bucket a differently owned route could reach).
+test("image attachments are isolated per owner and session: another owner's authenticated HTTP request never reaches them, by id or by guessing another session's image", async () => {
+  const s = await setupServer();
+  try {
+    // "other" owner's image, created directly (this server's local HTTP auth
+    // always resolves to one owner, "local-admin"; cross-owner access is
+    // exercised the same way memory-http.test.ts and apps tests do: a second
+    // owner's data is real, created through the runtime, and the HTTP
+    // boundary is what is being proven, not a second login).
+    const otherId = await s.runtime.create(
+      "other-owner",
+      "Other owner's plan",
+      "isolation-create-0001",
+    );
+    s.provider.faux.setResponses([
+      fauxAssistantMessage("Thanks for the plan."),
+    ]);
+    const otherSubmission = await s.runtime.submit(
+      "other-owner",
+      otherId,
+      "isolation-input-0001",
+      "My floor plan",
+      [attach(png(1024, 768), "image/png")],
+    );
+    await settle(s.runtime, otherSubmission);
+    const otherSnapshot = await s.runtime.snapshot("other-owner", otherId);
+    const otherRef = /"image":"(\d+)\/(\d+)"/.exec(
+      JSON.stringify(otherSnapshot),
+    );
+    assert(otherRef, "the other owner's message carries an image reference");
+
+    // local-admin's own session, for a same-shaped same-owner control case.
+    const { id: ownId } = await (
+      await s.post("/api/sessions", {
+        title: "My own plan",
+        requestId: "isolation-own-0001",
+      })
+    ).json();
+
+    // The HTTP-authenticated owner (local-admin) can never fetch the other
+    // owner's image: not at the other owner's own session id, and not by
+    // pairing the other owner's session id with local-admin's own session's
+    // route shape — every combination 404s like the image never existed.
+    assert.equal(
+      (
+        await s.get(
+          `/api/sessions/${otherId}/images/${otherRef[1]}/${otherRef[2]}`,
+        )
+      ).status,
+      404,
+    );
+    assert.equal(
+      (
+        await s.get(
+          `/api/sessions/${ownId}/images/${otherRef[1]}/${otherRef[2]}`,
+        )
+      ).status,
+      404,
+    );
+
+    // Direct runtime.image() (what the route calls) is owner-checked the
+    // same way: session(owner, id) re-reads ownership before any bytes are
+    // ever read from that conversation's own transcript.
+    await assert.rejects(
+      s.runtime.image(
+        "local-admin",
+        otherId,
+        Number(otherRef[1]),
+        Number(otherRef[2]),
+      ),
+      /session_not_found/,
+    );
+    // The true owner can still read it: proves the 404s above are an
+    // isolation boundary, not a broken route.
+    const own = await s.runtime.image(
+      "other-owner",
+      otherId,
+      Number(otherRef[1]),
+      Number(otherRef[2]),
+    );
+    assert(own.bytes.equals(png(1024, 768)));
+  } finally {
+    await s.close();
+  }
+});
+
 test("Hearth sets up the Home World: image → skill → read → propose → preview → keep", async () => {
   const clock = { now: Date.now() };
   const s = await setupServer(clock);

@@ -17,6 +17,7 @@ import {
   hash32,
   reducedMotion,
   roomName,
+  spawnRoom,
   thinkLabel,
   watchVisibility,
 } from "./world.js";
@@ -169,8 +170,11 @@ export function createStrip(ctx) {
         ? "Done."
         : ctx.notice || summaryText();
     if (opened && rooms.length) {
-      const first = rooms[0];
-      actor.place({ x: first.left + Math.min(48, first.width / 2), y: 0 });
+      // Same room as the full house view: a lived-in room, never decor or
+      // the shed, never the strip's own leading (first) slot by accident.
+      const spawn = spawnRoom(ctx.structure);
+      const home = (spawn && rooms.find((r) => r.id === spawn.id)) || rooms[0];
+      actor.place({ x: home.left + Math.min(48, home.width / 2), y: 0 });
       if (actor.follow(ctx.think, devices)) loop.animate();
     }
     renderTags();

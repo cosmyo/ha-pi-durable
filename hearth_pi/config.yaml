@@ -1,5 +1,5 @@
 name: Hearth Pi
-version: "0.3.0"
+version: "0.3.1"
 slug: hearth_pi
 url: https://github.com/cosmyo/ha-pi-durable
 description: Independent experimental durable AI assistant with read-only tools by default
@@ -51,6 +51,7 @@ options:
   risk_judge_api_key: ""
   risk_judge_timeout_ms: 15000
   risk_judge_session_ttl_ms: 300000
+  briefing_summary_model: auto
 schema:
   authorized_user_ids:
     - str
@@ -71,3 +72,4 @@ schema:
   risk_judge_api_key: password
   risk_judge_timeout_ms: int(1000,30000)
   risk_judge_session_ttl_ms: int(0,3600000)
+  briefing_summary_model: str

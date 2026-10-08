@@ -203,6 +203,146 @@ test("Today suggestions render untrusted text as text; Accept/Edit/Reject/Snooze
   );
 });
 
+test("Today code (L3) suggestions: security-review label + typed confirmation, Draft in Code session, and the workspace-disabled explanation", async () => {
+  const { target, renderToday, Event } = await load();
+  const calls: unknown[][] = [];
+  const suggestion = new Proxy(
+    {},
+    {
+      get:
+        (_t, name) =>
+        (...args: unknown[]) =>
+          calls.push([name, ...args]),
+    },
+  );
+  const handlers = {
+    suggestion,
+    dismiss() {},
+    snooze() {},
+    ask() {},
+    openApp() {},
+    createWatcher() {},
+  };
+  const base = suggestionsData();
+  const plain = {
+    id: "s_10",
+    kind: "code",
+    status: "pending",
+    hash: "d".repeat(64),
+    conversationId: 1,
+    conversationTitle: "Laundry",
+    reason: "",
+    created: now - 500,
+    snoozedUntil: 0,
+    code: {
+      title: hostile,
+      problem: hostile,
+      proposal: "Add a clearer refusal message.",
+      evidence: {
+        tool: "ha_state_detail",
+        errorCode: "entity_not_allowed",
+        count: 5,
+      },
+      securitySensitive: false,
+    },
+  };
+  const sensitive = {
+    id: "s_11",
+    kind: "code",
+    status: "pending",
+    hash: "e".repeat(64),
+    conversationId: 1,
+    conversationTitle: "Laundry",
+    reason: "",
+    created: now - 400,
+    snoozedUntil: 0,
+    code: {
+      title: "Service proposals are rejected",
+      problem:
+        "Proposing a climate service fails the service scope approval check.",
+      proposal: "Explain the allowed-service scope in the refusal message.",
+      evidence: {
+        tool: "ha_propose_service",
+        errorCode: "service_not_allowed",
+        count: 5,
+      },
+      securitySensitive: true,
+    },
+  };
+  const data = {
+    ...base,
+    suggestions: { ...base.suggestions, items: [plain, sensitive] },
+  };
+  renderToday(target, data, handlers, {
+    editing: null,
+    workspaceEnabled: true,
+  });
+  noExecutableMarkup(target);
+  const cards = [...target.querySelectorAll(".suggestion")];
+  assert.equal(cards.length, 2);
+  assert.match(cards[0]!.textContent!, /Suggestion · Code improvement/);
+  // Untrusted title/problem text stays text; no Security label on the plain one.
+  assert.doesNotMatch(cards[0]!.textContent!, /Security review required/);
+  assert.match(
+    cards[0]!.textContent!,
+    /ha_state_detail failed with entity_not_allowed 5 times in the last 7 days/,
+  );
+  const draftButtons = (card: Element) =>
+    [...card.querySelectorAll("button")].filter(
+      (b) => b.textContent === "Draft in Code session",
+    );
+  // Plain: Draft in Code session is a direct, one-tap button.
+  assert.equal(draftButtons(cards[0]!).length, 1);
+  draftButtons(cards[0]!)[0]!.dispatchEvent(new Event("click"));
+  assert.equal(calls.at(-1)![0], "draft");
+  assert.equal((calls.at(-1)![1] as { id: string }).id, "s_10");
+  assert.equal(
+    calls.at(-1)!.length,
+    2,
+    "no confirm text for a plain suggestion",
+  );
+  // Security-sensitive: labelled, and Draft only lives behind opened details
+  // with a typed-confirmation field — never a bare one-tap button.
+  assert.match(cards[1]!.textContent!, /Security review required/);
+  const review = cards[1]!.querySelector("details.code-confirm")!;
+  assert(review, "security-sensitive suggestions gate Draft behind details");
+  const confirmInput = review.querySelector(
+    "#suggestion-confirm-s_11",
+  ) as unknown as { value: string };
+  confirmInput.value = "CONFIRM";
+  const sensitiveDraft = [...review.querySelectorAll("button")].find(
+    (b) => b.textContent === "Draft in Code session",
+  )!;
+  sensitiveDraft.dispatchEvent(new Event("click"));
+  assert.equal(calls.at(-1)![0], "draft");
+  assert.equal((calls.at(-1)![1] as { id: string }).id, "s_11");
+  assert.equal(calls.at(-1)![2], "CONFIRM");
+  // Reject/Snooze stay available for a code suggestion like any other.
+  const actionLabels = (card: Element) =>
+    [...card.querySelectorAll(".today-actions button")].map(
+      (b) => b.textContent,
+    );
+  assert(actionLabels(cards[0]!).includes("Reject"));
+  assert(actionLabels(cards[0]!).includes("Snooze"));
+  // Workspace (Code sessions) disabled: no Draft button at all, just the
+  // explanation — Reject/Snooze still work.
+  renderToday(target, data, handlers, {
+    editing: null,
+    workspaceEnabled: false,
+  });
+  noExecutableMarkup(target);
+  assert.match(
+    target.textContent!,
+    /Code sessions are off for this installation/,
+  );
+  assert.equal(
+    [...target.querySelectorAll("button")].filter(
+      (b) => b.textContent === "Draft in Code session",
+    ).length,
+    0,
+  );
+});
+
 test("Settings → Memory renders items as text with source, trimming warning, edit and forget", async () => {
   const { target, renderMemory, renderFeedback, Event } = await load();
   const calls: unknown[][] = [];

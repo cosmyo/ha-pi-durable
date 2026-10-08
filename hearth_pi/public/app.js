@@ -83,7 +83,8 @@ let csrf = "",
   transcriptEmpty = true,
   appResultCount = -1,
   todayData = null,
-  todayUi = { editing: null },
+  todayUi = { editing: null, workspaceEnabled: true },
+  workspaceEnabled = true,
   sessionUsesApp = false,
   suggestionResultCount = -1,
   memoryData = null,
@@ -95,7 +96,10 @@ let csrf = "",
   permissionModeLabel = "Read-only",
   accountSummaryText = "Account",
   imageInput = false,
-  attachments = [];
+  attachments = [],
+  youData = null,
+  youTone = "",
+  installModelLabel = "the installation default";
 // Unsent images by request ID, when sessionStorage cannot hold them.
 const pendingImages = new Map();
 const feedback = (value) => {
@@ -232,6 +236,8 @@ async function bootstrap() {
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
+  installModelLabel = `${status.model} \u00b7 ${THINKING_LABEL[defaultThinkingLevel] ?? defaultThinkingLevel}`;
+  workspaceEnabled = !!status.workspaceEnabled;
   $("new-workspace").hidden = !status.workspaceEnabled;
   if (!activeAuthProvider) activeAuthProvider = defaultAuthProvider();
   await refreshAccountSummary();
@@ -1911,11 +1917,19 @@ $("app-approval-close").addEventListener("click", () =>
 // Local endpoints can add or replace models without an App restart. When
 // more than one provider is present, models group under their provider's
 // name so e.g. "gpt-5" (ChatGPT) and "gpt-5" (local) never read as one model.
-async function loadModels() {
-  modelChoices = (await api("models")).items;
+// Shared by the session model-choice select and Settings \u2192 You's default
+// model select (leadingLabel adds an unselected first option there, e.g.
+// "Installation default (...)", meaning "no personal override").
+function modelOptions(leadingLabel) {
   const providers = [...new Set(modelChoices.map((m) => m.provider))];
   const multi = providers.length > 1;
   const choices = document.createDocumentFragment();
+  if (leadingLabel) {
+    const leading = document.createElement("option");
+    leading.value = "";
+    leading.textContent = leadingLabel;
+    choices.append(leading);
+  }
   const groups = new Map();
   for (const model of modelChoices) {
     const option = document.createElement("option");
@@ -1934,7 +1948,15 @@ async function loadModels() {
     }
     group.append(option);
   }
-  $("model-choice").replaceChildren(choices);
+  return choices;
+}
+async function loadModels() {
+  modelChoices = (await api("models")).items;
+  $("model-choice").replaceChildren(modelOptions());
+  // Settings \u2192 You's default-model select is only (re)built when the
+  // sheet opens (paintYou \u2192 paintYouModelOptions): it writes .value,
+  // which only a handful of tests stub on this third select, so it must
+  // never run as a side effect of the page simply loading.
   controls();
 }
 // --- Drawer (off-canvas on compact, permanent sidebar on wide screens) ---
@@ -2101,6 +2123,123 @@ $("memory-close").addEventListener("click", () => $("memory-dialog").close());
 $("memory-dialog").addEventListener("close", () =>
   $("memory-row").setAttribute("aria-expanded", "false"),
 );
+// --- Settings \u2192 You: personal name/tone/language and default model for
+// new Home chats. Personal to the signed-in owner only; never shown to other
+// owners or to the risk judge (see src/profile.ts), and it can never grant
+// permissions. ---
+function youFeedback(value) {
+  $("you-feedback").textContent = value;
+}
+function setYouTone(tone) {
+  youTone = tone;
+  for (const button of $("you-dialog").querySelectorAll("[data-tone]"))
+    button.setAttribute("aria-pressed", String(button.dataset.tone === tone));
+}
+// Same "provider\u0000modelId" encoding as the session model-choice select;
+// a plain modelId when only one provider's models are listed.
+function encodeYouModel(model) {
+  if (!model) return "";
+  const providers = new Set(modelChoices.map((m) => m.provider));
+  return providers.size > 1
+    ? `${model.provider}\u0000${model.modelId}`
+    : model.modelId;
+}
+function decodeYouModel(raw) {
+  if (!raw) return null;
+  const [a, b] = raw.split("\u0000");
+  if (b) return { provider: a, modelId: b };
+  const found = modelChoices.find((m) => m.id === raw);
+  return found ? { provider: found.provider, modelId: raw } : null;
+}
+function paintYouModelOptions() {
+  const select = $("you-model-choice");
+  if (!select) return;
+  const current = select.value;
+  select.replaceChildren(
+    modelOptions(`Installation default (${installModelLabel})`),
+  );
+  select.value = current;
+}
+function paintYou() {
+  if (!youData) return;
+  $("you-summary").textContent = youData.displayName || "";
+  $("you-name").value = youData.displayName ?? "";
+  setYouTone(youData.tone ?? "");
+  $("you-language").value = youData.language ?? "";
+  paintYouModelOptions();
+  $("you-model-choice").value = encodeYouModel(youData.defaultModel);
+  $("you-thinking-choice").disabled = !youData.defaultModel;
+  $("you-thinking-choice").value = youData.defaultThinking ?? "";
+}
+async function loadYou() {
+  try {
+    youData = await api("profile");
+    paintYou();
+  } catch (error) {
+    youFeedback(`Could not load: ${error.message}.`);
+  }
+}
+function youError(error) {
+  return error.message === "invalid_display_name"
+    ? "Name must be at most 40 characters."
+    : error.message === "invalid_tone"
+      ? "Choose a tone."
+      : error.message === "invalid_language"
+        ? "Choose a language."
+        : error.message === "unsupported_model"
+          ? "That model is no longer available. Pick another."
+          : error.message === "unsupported_thinking"
+            ? "That thinking level isn't supported by this model."
+            : error.message === "default_model_required"
+              ? "Pick a default model first."
+              : error.message === "profile_stale"
+                ? "Changed elsewhere; reloaded \u2014 try Save again."
+                : error.message;
+}
+$("you-dialog")
+  .querySelectorAll("[data-tone]")
+  .forEach((button) =>
+    button.addEventListener("click", () => setYouTone(button.dataset.tone)),
+  );
+$("you-model-choice").addEventListener("change", () => {
+  const hasModel = !!$("you-model-choice").value;
+  $("you-thinking-choice").disabled = !hasModel;
+  if (!hasModel) $("you-thinking-choice").value = "";
+});
+$("you-save").addEventListener("click", async () => {
+  if (!youData) return;
+  const model = decodeYouModel($("you-model-choice").value);
+  try {
+    youData = await api("profile", {
+      displayName: $("you-name").value,
+      tone: youTone,
+      language: $("you-language").value,
+      defaultModel: model,
+      defaultThinking: model ? $("you-thinking-choice").value || null : null,
+      revision: youData.revision,
+    });
+    paintYou();
+    youFeedback("Saved.");
+  } catch (error) {
+    if (error.message === "profile_stale") {
+      youData = await api("profile");
+      paintYou();
+    }
+    youFeedback(`Not saved: ${youError(error)}`);
+  }
+});
+function openYou() {
+  closeSettingsSheet();
+  youFeedback("");
+  $("you-dialog").showModal();
+  $("you-row").setAttribute("aria-expanded", "true");
+  void loadYou();
+}
+$("you-row").addEventListener("click", openYou);
+$("you-close").addEventListener("click", () => $("you-dialog").close());
+$("you-dialog").addEventListener("close", () =>
+  $("you-row").setAttribute("aria-expanded", "false"),
+);
 // --- Sheets: Home permissions and Model open as dialogs from several entry points ---
 function openPermissions() {
   closeSettingsSheet();
@@ -2154,6 +2293,7 @@ function paintTodayBadge() {
 function paintToday() {
   if (!todayData) return;
   paintTodayBadge();
+  todayUi.workspaceEnabled = workspaceEnabled;
   if ($("today-dialog").open)
     renderToday($("today-list"), todayData, todayHandlers, todayUi);
 }
@@ -2249,6 +2389,41 @@ const suggestionHandlers = {
       s.app.title,
     );
   },
+  // "Draft in Code session": opens a brand-new Code session seeded with the
+  // suggestion's template brief. Hearth never applies anything here \u2014 the
+  // owner reviews, downloads and releases the worker's patch themselves.
+  draft: (s, confirm) =>
+    void (async () => {
+      const title = (s.code.title || "Code improvement").slice(0, 80);
+      try {
+        const { decision, ...today } = await api("suggestions/draft", {
+          id: s.id,
+          hash: s.hash,
+          title,
+          requestId: crypto.randomUUID(),
+          ...(confirm ? { confirm } : {}),
+        });
+        todayData = today;
+        paintToday();
+        $("today-dialog").close();
+        await listSessions();
+        closeApp();
+        await select({ id: decision.sessionId, title, kind: "workspace" });
+        await listSessions();
+        if (compact()) closeDrawer();
+        feedback(
+          "Drafting in a new Code session: the worker will propose a patch and a test. Hearth never applies it \u2014 download or copy the patch yourself when it's ready.",
+        );
+      } catch (error) {
+        todayFeedback(
+          error.message === "confirmation_required"
+            ? "Type CONFIRM exactly to draft this security-sensitive suggestion."
+            : error.message === "workspace_not_enabled"
+              ? "Code sessions are off for this installation."
+              : `Not drafted: ${error.message}.`,
+        );
+      }
+    })(),
 };
 const todayHandlers = {
   suggestion: suggestionHandlers,

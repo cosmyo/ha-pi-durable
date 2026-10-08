@@ -44,7 +44,14 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
     });
   // linkedom's <select> has no value setter; model/thinking and Home mode
   // selects all need this to let updatePermissions()/loadModels() run.
-  for (const id of ["model-choice", "thinking-choice", "home-mode"]) {
+  for (const id of [
+    "model-choice",
+    "thinking-choice",
+    "home-mode",
+    "you-language",
+    "you-model-choice",
+    "you-thinking-choice",
+  ]) {
     const select = document.getElementById(id)!;
     let value = "";
     Object.defineProperty(select, "value", {
@@ -159,6 +166,29 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
             trimmed: 0,
             limits: { text: 200, items: 60, contextBytes: 4096 },
           });
+        if (path.endsWith("/api/profile")) {
+          if ((options?.method ?? "GET") === "GET")
+            return Response.json({
+              displayName: undefined,
+              tone: undefined,
+              language: undefined,
+              defaultModel: undefined,
+              defaultThinking: undefined,
+              updated: 0,
+              revision: 0,
+              limits: { displayName: 40, language: 16 },
+              tones: ["concise", "warm", "neutral", "playful"],
+              thinkingLevels: [
+                "off",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+              ],
+            });
+        }
         if (path.endsWith("/api/insights"))
           return Response.json({
             feedback: {
@@ -224,6 +254,7 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
     const sheet = document.getElementById("settings-dialog")!;
     noExecutableMarkup(sheet);
     for (const id of [
+      "you-row",
       "permissions-row",
       "account",
       "proactive-row",
@@ -243,6 +274,28 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
         .getElementById("settings-row")!
         .dispatchEvent(new window.Event("click"));
     };
+
+    // You row: at the top of Settings, closes Settings, opens the existing
+    // dialog and loads GET /api/profile.
+    reopenSettings();
+    requests.length = 0;
+    document
+      .getElementById("you-row")!
+      .dispatchEvent(new window.Event("click"));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      document.getElementById("you-dialog")!.hasAttribute("open"),
+      true,
+    );
+    assert.equal(
+      document.getElementById("settings-dialog")!.hasAttribute("open"),
+      false,
+    );
+    assert(
+      requests.some((r) => r.startsWith("GET ") && r.endsWith("/api/profile")),
+    );
+    noExecutableMarkup(document.getElementById("you-dialog")!);
+    (document.getElementById("you-dialog") as any).close();
 
     // Home permissions row: closes Settings, opens the existing dialog.
     document
