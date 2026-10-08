@@ -9,6 +9,12 @@ Hearth Pi is an independent, experimental Home Assistant App built on Pi Durable
 - Use synthetic fixtures and `.example` domains in examples. Keep runtime data and local settings out of Git.
 - Do not copy community implementation code without verifying its license and retaining required attribution. Prefer original implementations of common architectural ideas.
 
+## Generic building blocks here, home specifics in Hearth
+
+- This repository (and any development or planning session working on it) builds **generic** building blocks: frameworks, tools, skills, schemas, UI and the safety model that let _any_ household make Hearth theirs. It must stay free of any one home: no real floor plans, room or area names, entity ids, device nicknames, user ids, addresses, schedules or household facts — not in code, tests, docs, examples, changelogs or commit messages. Use synthetic examples (`Study`, `light.example_lamp`, `Breezy`).
+- **House- and user-specific requests are carried out through Hearth itself, even when asked in a development session.** Laying out a particular home, mapping its rooms, naming its devices, remembering its preferences, building its apps or automations: the development session decides which generic capability is missing, builds and ships that, and then performs or tests the specific customization by using Hearth as the owner would (chat, approvals, Settings). The result is per-owner runtime data in Hearth's durable store, never repository content and never written around Hearth by a side channel.
+- Repeatable flows that a development session works out by hand for one home (e.g. turning a floor plan into a Home World layout) are captured as Hearth skills/tools with clarifying questions and owner-approved proposals, so every household gets the same flow.
+
 ## Engineering principles
 
 - Use the real, version-pinned `@earendil-works/pi-durable` API; do not substitute regular Pi or simulate durability with saved chat history.
