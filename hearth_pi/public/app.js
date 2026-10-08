@@ -4,6 +4,14 @@ import {
   renderProposals,
   renderCanvas,
 } from "./render.js";
+import {
+  renderApp,
+  renderAppHistory,
+  renderAppList,
+  renderAppResult,
+  renderPinnedApps,
+  timeOf,
+} from "./apps.js";
 const $ = (id) => document.getElementById(id);
 // Home Assistant shows Ingress panels in an iframe below its own toolbar;
 // the CSS ignores phone safe-area insets there (see html.embedded).
@@ -56,7 +64,13 @@ let csrf = "",
   authProviders = [],
   accountStatuses = new Map(),
   activeAuthProvider = "",
-  openSessionMenu = "";
+  openSessionMenu = "",
+  apps = [],
+  openAppId = null,
+  appData = null,
+  appUi = { tabs: new Map() },
+  transcriptEmpty = true,
+  appResultCount = -1;
 const feedback = (value) => {
   $("feedback").textContent = value;
 };
@@ -385,7 +399,19 @@ function snapshot(value) {
   ]);
   if (nextMessageSignature !== messageSignature) {
     messageSignature = nextMessageSignature;
-    renderMessages($("messages"), value);
+    renderMessages($("messages"), value, appResultCard);
+    transcriptEmpty = entries.length === 0;
+    renderPinned();
+    // A new app_create/app_update result refreshes the Apps list and pins.
+    const results = entries
+      .flatMap((e) => e.model ?? [])
+      .filter(
+        (m) => m.role === "toolResult" && APP_TOOL.test(m.toolName),
+      ).length;
+    if (results !== appResultCount) {
+      if (appResultCount >= 0 && results > appResultCount) void loadApps();
+      appResultCount = results;
+    }
   }
   const canvas = selectedKind === "home" ? (value.homeCanvas ?? null) : null;
   const nextCanvasSignature = JSON.stringify(canvas);
@@ -466,6 +492,7 @@ async function listSessions() {
     button.setAttribute("aria-current", String(session.id === selected));
     button.addEventListener("click", () => {
       closeSessionMenus();
+      closeApp();
       select(session);
       if (compact()) closeDrawer();
     });
@@ -633,6 +660,7 @@ async function newSession(kind) {
       requestId: crypto.randomUUID(),
     });
     await listSessions();
+    closeApp();
     await select({ id: result.id, title, kind });
     await listSessions();
     if (compact()) closeDrawer();
@@ -690,6 +718,8 @@ function showWelcome() {
   $("messages").replaceChildren();
   $("approvals").replaceChildren();
   renderCanvas($("home-canvas"), null, draftQuestion);
+  transcriptEmpty = true;
+  renderPinned();
   controls();
 }
 async function deleteSession(id, title) {
@@ -1130,6 +1160,288 @@ $("apply-model").addEventListener("click", async () => {
   }
 });
 renderCanvas($("home-canvas"), null, draftQuestion);
+// --- Apps: household mini-apps rendered by trusted code from the API ---
+const APP_TOOL = /^app_(create|update)$/;
+const APP_ERRORS = {
+  home_read_only:
+    "Home permissions are Read-only, so this control is disabled. Change it in Home permissions.",
+  home_outcome_unresolved:
+    "Home writes are paused until an earlier unknown outcome is reconciled in its chat. Nothing was sent.",
+  toggle_state_unknown:
+    "Hearth only toggles from a known on/off state. Nothing was sent.",
+  version_conflict: "This app changed. Values were read again; try once more.",
+  app_not_found: "This app no longer exists.",
+  rate_limit: "Too many reads in a minute. Wait a moment, then refresh.",
+  app_needs_repair:
+    "This app needs repair before its controls can be used. Ask Hearth to fix it.",
+  version_outside_current_scope:
+    "That version uses entities or services outside Hearth's current scope.",
+  action_capacity: "Too many actions in flight. Try again shortly.",
+};
+const appMessage = (error, prefix) =>
+  APP_ERRORS[error.message] ?? `${prefix}: ${error.message}`;
+const appHandlers = {
+  open: (id) => void openApp(id),
+  pin: (id, pinned) => void pinApp(id, pinned),
+};
+function appResultCard(message) {
+  return message.role === "toolResult" && APP_TOOL.test(message.toolName)
+    ? renderAppResult(message, appHandlers)
+    : null;
+}
+function appFeedback(value) {
+  $("app-feedback").textContent = value;
+}
+function renderPinned() {
+  renderPinnedApps($("pinned-apps"), transcriptEmpty ? apps : [], appHandlers);
+}
+async function loadApps() {
+  try {
+    apps = (await api("apps")).items ?? [];
+  } catch {
+    return;
+  }
+  renderAppList($("apps-list"), apps, appHandlers);
+  $("apps-count").textContent = apps.length ? String(apps.length) : "";
+  renderPinned();
+}
+function showAppView(open) {
+  $("app-view").hidden = !open;
+  $("topbar").hidden = open;
+  document.querySelector(".conversation").hidden = open;
+}
+function closeApp() {
+  if (!openAppId) return;
+  openAppId = null;
+  appData = null;
+  showAppView(false);
+}
+function openAppsSheet() {
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+  $("apps-dialog").showModal();
+  $("apps-row").setAttribute("aria-expanded", "true");
+  void loadApps();
+}
+async function openApp(id) {
+  if ($("apps-dialog").open) $("apps-dialog").close();
+  if (compact() && document.body.classList.contains("drawer-open"))
+    closeDrawer();
+  if (openAppId !== id) appUi = { tabs: new Map() };
+  openAppId = id;
+  appData = null;
+  $("app-title").textContent = apps.find((a) => a.id === id)?.title ?? "App";
+  $("app-body").replaceChildren();
+  $("app-history").replaceChildren();
+  appFeedback("Reading values from Home Assistant…");
+  showAppView(true);
+  await refreshApp();
+}
+function paintApp() {
+  renderApp($("app-body"), appData, appViewHandlers, appUi);
+  renderAppHistory($("app-history"), appData, appViewHandlers);
+  $("app-title").textContent = appData.app.title;
+  $("app-pin").textContent = appData.app.pinned ? "Unpin" : "Pin";
+}
+async function refreshApp(message = "") {
+  const id = openAppId;
+  if (!id) return;
+  try {
+    const data = await api(`apps/${id}`);
+    if (openAppId !== id) return;
+    appData = data;
+    paintApp();
+    appFeedback(message);
+  } catch (error) {
+    if (openAppId === id)
+      appFeedback(appMessage(error, "Could not read the app"));
+  }
+}
+// Ask/toggle need a Home chat: the current one, or a new one named for the app.
+async function homeSessionFor(title) {
+  if (selected && selectedKind === "home") return selected;
+  const name = `App: ${title}`.slice(0, SESSION_TITLE_MAX);
+  const result = await api("sessions", {
+    title: name,
+    kind: "home",
+    requestId: crypto.randomUUID(),
+  });
+  await listSessions();
+  await select({ id: result.id, title: name, kind: "home" });
+  await listSessions();
+  return result.id;
+}
+async function draftFromApp(prompt, title) {
+  try {
+    await homeSessionFor(title);
+    closeApp();
+    if ($("message").disabled)
+      feedback(
+        "This chat is busy, so the app question was not drafted. Try again when it is ready.",
+      );
+    else draftQuestion(prompt);
+  } catch (error) {
+    appFeedback(appMessage(error, "Could not open a chat"));
+  }
+}
+async function changeAppState(stateKey, body) {
+  const data = appData;
+  if (!data) return;
+  try {
+    const result = await api(`apps/${data.app.id}/state`, {
+      stateKey,
+      ...body,
+    });
+    if (appData !== data) return;
+    appData = { ...data, state: result.state };
+    paintApp();
+    appFeedback("Saved.");
+  } catch (error) {
+    appFeedback(appMessage(error, "Not saved"));
+    if (appData === data) paintApp();
+  }
+}
+function showAppApproval(sessionId, proposal) {
+  renderProposals(
+    $("app-approval-card"),
+    { [proposal.id]: proposal },
+    async (p, decision) => {
+      if (decision === "resolve") return;
+      try {
+        await api(`sessions/${sessionId}/actions`, {
+          id: p.id,
+          hash: p.hash,
+          decision,
+        });
+        $("app-approval").close();
+        await refreshApp(
+          decision === "approve"
+            ? "Approved. Values were read again; HA acceptance is not physical verification."
+            : "Rejected. Nothing was sent.",
+        );
+      } catch (error) {
+        $("app-approval").close();
+        appFeedback(appMessage(error, "Decision not recorded"));
+      }
+    },
+    permissions?.effectiveMode !== "read-only" && !permissions?.blocked,
+  );
+  $("app-approval").showModal();
+}
+async function toggleFromApp(elementId) {
+  const data = appData;
+  if (!data) return;
+  try {
+    const sessionId = await homeSessionFor(data.app.title);
+    appFeedback("Sending to Home permissions…");
+    const result = await api(`apps/${data.app.id}/actions`, {
+      elementId,
+      sessionId,
+      version: data.app.version,
+    });
+    const p = result.proposal;
+    if (p.status === "pending") {
+      appFeedback("Review the exact action to continue.");
+      showAppApproval(sessionId, p);
+    } else if (p.status === "accepted")
+      await refreshApp(
+        `Home Assistant accepted ${p.action.service} for ${p.action.entityId}${result.readBack ? `; it now reads ${result.readBack.state} (as of ${timeOf(result.readBack.observedAt)})` : ""}. Acceptance is not physical verification.`,
+      );
+    else if (p.status === "unknown")
+      await refreshApp(
+        `Outcome unknown for ${p.action.service} ${p.action.entityId}. It will not be retried. Check the device, then record what you saw on the action card in the chat.`,
+      );
+    else await refreshApp(`Action ${p.status}. ${p.resolution || ""}`);
+  } catch (error) {
+    appFeedback(appMessage(error, "Not sent"));
+    if (error.message === "version_conflict") await refreshApp();
+  }
+}
+async function pinApp(id, pinned) {
+  try {
+    await api(`apps/${id}/pin`, { pinned });
+    await loadApps();
+    if (openAppId === id && appData) {
+      appData.app.pinned = pinned;
+      paintApp();
+      appFeedback(pinned ? "Pinned to empty chats." : "Unpinned.");
+    } else feedback(pinned ? "App pinned." : "App unpinned.");
+  } catch (error) {
+    (openAppId ? appFeedback : feedback)(appMessage(error, "Not pinned"));
+  }
+}
+const appViewHandlers = {
+  ask: (prompt) => void draftFromApp(prompt, appData?.app.title ?? "App"),
+  state: (stateKey, body) => void changeAppState(stateKey, body),
+  toggle: (elementId) => void toggleFromApp(elementId),
+  revert: async (version) => {
+    const data = appData;
+    if (
+      !data ||
+      !window.confirm(`Restore version ${version} as a new version?`)
+    )
+      return;
+    try {
+      await api(`apps/${data.app.id}/revert`, {
+        version,
+        baseVersion: data.app.version,
+      });
+      await loadApps();
+      await refreshApp(`Restored v${version} as a new version.`);
+    } catch (error) {
+      appFeedback(appMessage(error, "Not restored"));
+    }
+  },
+};
+$("apps-row").addEventListener("click", openAppsSheet);
+$("apps-close").addEventListener("click", () => $("apps-dialog").close());
+$("apps-dialog").addEventListener("close", () =>
+  $("apps-row").setAttribute("aria-expanded", "false"),
+);
+$("apps-new").addEventListener("click", () => {
+  $("apps-dialog").close();
+  void draftFromApp("Make me an app for ", "New app");
+});
+$("app-back").addEventListener("click", () => {
+  closeApp();
+  openAppsSheet();
+});
+$("app-refresh").addEventListener("click", () => {
+  appFeedback("Reading values from Home Assistant…");
+  void refreshApp("Values read again.");
+});
+$("app-pin").addEventListener("click", () => {
+  if (appData) void pinApp(appData.app.id, !appData.app.pinned);
+});
+$("app-change").addEventListener("click", () => {
+  if (!appData) return;
+  const { id, title, version } = appData.app;
+  void draftFromApp(
+    `Change my app "${title}" (${id}, version ${version}): `,
+    title,
+  );
+});
+$("app-delete").addEventListener("click", async () => {
+  const data = appData;
+  if (
+    !data ||
+    !window.confirm(
+      `Delete the app "${data.app.title}"? Its checklist ticks, counters and notes are removed from your list. Stored history is not securely erased.`,
+    )
+  )
+    return;
+  try {
+    await api(`apps/${data.app.id}/delete`, { confirm: true });
+    closeApp();
+    await loadApps();
+    feedback("App deleted.");
+  } catch (error) {
+    appFeedback(appMessage(error, "Not deleted"));
+  }
+});
+$("app-approval-close").addEventListener("click", () =>
+  $("app-approval").close(),
+);
 // Local endpoints can add or replace models without an App restart. When
 // more than one provider is present, models group under their provider's
 // name so e.g. "gpt-5" (ChatGPT) and "gpt-5" (local) never read as one model.
@@ -1247,6 +1559,7 @@ try {
   await bootstrap();
   await loadModels();
   const sessions = await listSessions();
+  void loadApps();
   setConnection("Connected");
   if (sessions.length) {
     await select(sessions[sessions.length - 1]);

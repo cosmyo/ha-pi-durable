@@ -39,6 +39,15 @@
         </div>
         <div id="sessions" aria-label="Select a session"></div>
         <div class="drawer-footer">
+          <button
+            id="apps-row"
+            type="button"
+            aria-controls="apps-dialog"
+            aria-expanded="false"
+          >
+            <span>Apps</span>
+            <span id="apps-count" class="muted"></span>
+          </button>
           <button id="open-world" type="button">
             <span>Home World</span>
             <span class="muted">Prototype</span>
@@ -100,6 +109,7 @@
             Read-only by default
           </p>
           <div class="scroll-area" id="scroll-area">
+            <section id="pinned-apps" aria-label="Pinned apps" hidden></section>
             <section id="home-surface" aria-label="Saved Home canvas">
               <div
                 id="home-canvas"
@@ -176,8 +186,67 @@
             </button>
           </div>
         </section>
+        <section id="app-view" aria-labelledby="app-title" hidden>
+          <header class="app-view-head">
+            <button id="app-back" type="button" aria-label="Back to Apps">
+              <span class="chevron" aria-hidden="true">‹</span
+              ><span aria-hidden="true">Apps</span>
+            </button>
+            <h2 id="app-title">App</h2>
+            <button
+              id="app-refresh"
+              type="button"
+              aria-label="Read values again"
+            >
+              ↻
+            </button>
+          </header>
+          <p id="app-feedback" role="status" aria-live="polite"></p>
+          <div class="app-scroll">
+            <div id="app-body"></div>
+            <details id="app-more">
+              <summary>Versions and options</summary>
+              <div id="app-history"></div>
+              <div class="actions">
+                <button id="app-pin" type="button">Pin</button>
+                <button id="app-change" type="button">
+                  Ask Hearth to change
+                </button>
+                <button id="app-delete" type="button">Delete app</button>
+              </div>
+            </details>
+            <p class="canvas-disclosure">
+              Layout chosen by the model · every value read by Hearth from Home
+              Assistant · controls follow Home permissions and only you can
+              press them.
+            </p>
+          </div>
+        </section>
       </div>
     </div>
+    <dialog id="apps-dialog" aria-label="Apps">
+      <h2>Apps</h2>
+      <p class="muted">
+        Small household apps Hearth built for you. Hearth reads every value when
+        you open one.
+      </p>
+      <div id="apps-list"></div>
+      <div class="actions">
+        <button id="apps-new" type="button">Ask Hearth for an app</button>
+        <button id="apps-close" type="button">Close</button>
+      </div>
+    </dialog>
+    <dialog id="app-approval" aria-label="Review app action">
+      <h2>Review exact action</h2>
+      <p class="muted">
+        Home permissions are Ask: nothing runs until you approve this exact
+        action. It is also listed in the chat it was filed in.
+      </p>
+      <div id="app-approval-card"></div>
+      <div class="actions">
+        <button id="app-approval-close" type="button">Close</button>
+      </div>
+    </dialog>
     <dialog id="permissions-dialog" aria-label="Home permissions">
       <h2>Home permissions</h2>
       <section id="home-permissions" aria-label="Home permissions">

@@ -19,6 +19,7 @@ import {
   type Subscription,
 } from "./subscription.js";
 import type { LocalEndpoints } from "./local.js";
+import { AppStore } from "./apps.js";
 
 async function body(req: IncomingMessage): Promise<unknown> {
   insist(
@@ -107,6 +108,7 @@ export function appServer(
         : true;
   const ready = () =>
     configuredReady() || authProviders().some((s) => s.configured());
+  const apps = new AppStore(runtime, actions.engine.ha);
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   const perOwner = new Map<string, number>();
@@ -294,6 +296,44 @@ export function appServer(
           id: await runtime.create(owner, v.title, v.requestId, kind),
         });
       }
+      if (req.method === "GET" && path === "/api/apps")
+        return json(res, 200, await apps.list(owner));
+      const appRoute =
+        /^\/api\/apps\/(app_[1-9][0-9]{0,8})(?:\/(state|pin|revert|delete|actions))?$/.exec(
+          path,
+        );
+      if (appRoute) {
+        const [, appId, operation] = appRoute;
+        if (req.method === "GET" && !operation)
+          return json(res, 200, await apps.get(owner, appId));
+        if (req.method === "POST" && operation === "state")
+          return json(
+            res,
+            200,
+            await apps.setState(owner, appId, await body(req)),
+          );
+        if (req.method === "POST" && operation === "pin")
+          return json(res, 200, await apps.pin(owner, appId, await body(req)));
+        if (req.method === "POST" && operation === "revert")
+          return json(
+            res,
+            200,
+            await apps.revert(owner, appId, await body(req)),
+          );
+        if (req.method === "POST" && operation === "delete")
+          return json(
+            res,
+            200,
+            await apps.remove(owner, appId, await body(req)),
+          );
+        if (req.method === "POST" && operation === "actions")
+          return json(
+            res,
+            200,
+            await apps.press(owner, appId, await body(req)),
+          );
+        throw new Fault(404, "not_found");
+      }
       const route =
         /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete))?$/.exec(
           path,
@@ -387,9 +427,16 @@ export function appServer(
                   await runtime.snapshot(owner, id, config.policy.entities),
                 );
                 if (ended) break;
+                if (Buffer.byteLength(payload) > 4194304) {
+                  res.end();
+                  stop();
+                  break;
+                }
+                // A slow reader gets one bounded wait for drain; changes made
+                // meanwhile coalesce into the next snapshot.
                 if (
-                  Buffer.byteLength(payload) > 4194304 ||
-                  !res.write(`event: snapshot\ndata: ${payload}\n\n`)
+                  !res.write(`event: snapshot\ndata: ${payload}\n\n`) &&
+                  !(await drained())
                 ) {
                   res.end();
                   stop();
@@ -403,7 +450,25 @@ export function appServer(
               sending = false;
             }
           };
+          let draining = false;
+          const drained = () =>
+            new Promise<boolean>((resolve) => {
+              draining = true;
+              const done = (value: boolean) => {
+                draining = false;
+                clearTimeout(timer);
+                res.off("drain", onDrain);
+                res.off("close", onClose);
+                resolve(value && !ended);
+              };
+              const onDrain = () => done(true);
+              const onClose = () => done(false);
+              const timer = setTimeout(() => done(false), 15000);
+              res.on("drain", onDrain);
+              res.on("close", onClose);
+            });
           const heartbeat = setInterval(() => {
+            if (draining) return;
             if (!res.write(": connected\n\n")) {
               res.end();
               stop();
@@ -506,6 +571,7 @@ export function appServer(
           "/": ["index.html", "text/html; charset=utf-8"],
           "/app.js": ["app.js", "text/javascript"],
           "/render.js": ["render.js", "text/javascript"],
+          "/apps.js": ["apps.js", "text/javascript"],
           "/app.css": ["app.css", "text/css"],
           "/icon.svg": ["icon.svg", "image/svg+xml"],
           // PROTOTYPE Home World (throwaway UI exploration): exact files only.

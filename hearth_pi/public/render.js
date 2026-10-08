@@ -108,7 +108,18 @@ function assistantBody(message) {
   for (const block of message.content ?? []) {
     if (block.type === "text" && block.text)
       parts.push(renderMarkdown(block.text));
-    else if (block.type === "toolCall")
+    else if (
+      block.type === "toolCall" &&
+      /^app_(create|update)$/.test(block.name)
+    ) {
+      // App specs are long: name the call, keep the exact arguments one tap away.
+      const details = node("details", "", "tool-call-details");
+      details.append(
+        node("summary", `${block.name} · arguments`),
+        node("pre", JSON.stringify(block.arguments, null, 2), "tool-call"),
+      );
+      parts.push(details);
+    } else if (block.type === "toolCall")
       parts.push(
         node(
           "pre",
@@ -119,11 +130,18 @@ function assistantBody(message) {
   }
   return parts;
 }
-export function renderMessages(container, snapshot) {
+// special(message) may return a trusted card (e.g. an app result) that
+// replaces the raw rendering of that message.
+export function renderMessages(container, snapshot, special = () => null) {
   const fragment = document.createDocumentFragment();
   for (const entry of snapshot.view.entries) {
     for (const message of entry.model ?? []) {
       if (message.role === "system") continue;
+      const card = special(message);
+      if (card) {
+        fragment.append(card);
+        continue;
+      }
       const value = messageText(message);
       if (!value && !message.errorMessage) continue;
       const role =
@@ -262,6 +280,13 @@ export function renderProposals(
       node("p", proposal.action.entityId),
       node("pre", JSON.stringify(proposal.action.data, null, 2)),
     );
+    if (proposal.origin?.kind === "app")
+      card.append(
+        node(
+          "p",
+          `Requested by you from app ${proposal.origin.appId} (control ${proposal.origin.elementId}, v${proposal.origin.version})`,
+        ),
+      );
     if (proposal.authorization)
       card.append(
         node(

@@ -282,14 +282,9 @@ export class HomeActions {
       ),
     };
   }
-  private assertFull(
-    owner: string,
-    p: HomePermission,
-    input: { ids: number[]; bindings: (PermissionBinding | undefined)[] },
-  ) {
-    const binding = this.binding(p);
+  private assertFullGrant(owner: string, p: HomePermission) {
     insist(
-      binding.mode === "full" &&
+      this.binding(p).mode === "full" &&
         p.grant?.owner === owner &&
         p.grant.policy === p.policy &&
         p.grant.schema === ACTION_SCHEMA &&
@@ -297,6 +292,14 @@ export class HomeActions {
       "full_grant_required",
       403,
     );
+  }
+  private assertFull(
+    owner: string,
+    p: HomePermission,
+    input: { ids: number[]; bindings: (PermissionBinding | undefined)[] },
+  ) {
+    const binding = this.binding(p);
+    this.assertFullGrant(owner, p);
     insist(
       input.ids.length > 0 &&
         input.bindings.every((b) => b && digest(b) === digest(binding)),
@@ -383,6 +386,84 @@ export class HomeActions {
         ))!.items[id]!;
       }
       return proposal;
+    } finally {
+      this.controllers.delete(controller);
+    }
+  }
+  // A person pressed an app ToggleAction. Same ledger, barriers, approval and
+  // dispatch as model proposals: Read-only denies before any HA request; Ask
+  // records a pending proposal for the exact approval card; Full dispatches
+  // once within the current grant. Never retried; unknown stays unknown.
+  async press(
+    owner: string,
+    sessionId: number,
+    value: unknown,
+    origin: NonNullable<Proposal["origin"]>,
+  ): Promise<Proposal> {
+    const runtime = this.host();
+    const conversationId = sessionId as ConversationId;
+    await this.gate.run(() =>
+      runtime.harness.commit(async (tx) => {
+        await this.home(tx, conversationId, owner);
+        const p = await this.permission(tx, owner);
+        insist(this.binding(p).mode !== "read-only", "home_read_only", 403);
+      }, ctx),
+    );
+    const action = this.ha.action(value);
+    insist(this.controllers.size < 4, "action_capacity", 429);
+    const controller = new AbortController();
+    this.controllers.set(controller, owner);
+    const signal = controller.signal;
+    try {
+      await this.ha.validateLive(action, signal);
+      const proposal = await this.gate.run(() =>
+        runtime.harness.commit(async (tx) => {
+          insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
+          await this.home(tx, conversationId, owner);
+          const p = await this.permission(tx, owner);
+          const binding = this.binding(p);
+          insist(binding.mode !== "read-only", "home_read_only", 403);
+          if (binding.mode === "full") this.assertFullGrant(owner, p);
+          insist(
+            (await this.barriers(tx)).length === 0,
+            "home_outcome_unresolved",
+            409,
+          );
+          const doc = await tx.doc(Proposals, conversationId);
+          insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
+          // Model proposals use their task id; app presses use a disjoint
+          // numeric range so neither can alias the other's receipt.
+          let n = 1_000_000_000_000 + Object.keys(doc.items).length;
+          while (doc.items[String(n)]) n++;
+          const id = String(n);
+          const now = Date.now();
+          const item: Proposal = {
+            id,
+            action,
+            hash: digest({ session: conversationId, id, action }),
+            policy: binding.policy,
+            created: now,
+            expires: now + 300000,
+            status: "pending",
+            decidedBy: "",
+            decidedAt: 0,
+            resolution: "",
+            authorization: {
+              ...binding,
+              source: "human",
+              owner,
+              inputIds: [],
+            },
+            origin: { ...origin },
+          };
+          doc.items[id] = item;
+          return copy(item);
+        }, ctx),
+      );
+      if (proposal.authorization?.mode !== "full") return proposal;
+      await this.dispatch(owner, conversationId, proposal, false, signal);
+      return (await runtime.harness.snapshot(Proposals, conversationId, ctx))!
+        .items[proposal.id]!;
     } finally {
       this.controllers.delete(controller);
     }

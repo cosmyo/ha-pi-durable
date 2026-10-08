@@ -82,6 +82,7 @@ for (const file of [
   await access(`hearth_pi/${file}`);
 for (const file of [
   "app.js",
+  "apps.js",
   "render.js",
   // PROTOTYPE Home World modules (throwaway UI exploration).
   "world/prototype-world.js",
