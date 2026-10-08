@@ -30,6 +30,8 @@ import {
 } from "./world.js";
 
 const T = 16;
+// Smallest on-screen tile (CSS px) before a wide plan pans instead of shrinking.
+const MIN_TILE_PX = 20;
 
 // ------------------------------------------------------------ pixel art
 function rect(g, x, y, w, h, color) {
@@ -211,9 +213,10 @@ function furnish(g, room) {
 }
 function drawStatic(g, structure, night) {
   const rows = structure.grid.rows;
+  const cols = structure.grid.cols || 16;
   g.imageSmoothingEnabled = false;
   for (let ty = 0; ty < rows; ty++)
-    for (let tx = 0; tx < 16; tx++) {
+    for (let tx = 0; tx < cols; tx++) {
       rect(g, tx * T, ty * T, T, T, (tx + ty) % 2 ? "#26352a" : "#2a3a2e");
       if (hash32(`o${tx},${ty}`) % 5 === 0)
         rect(g, tx * T + 5, ty * T + 9, 1, 2, "#355039");
@@ -231,7 +234,7 @@ function drawStatic(g, structure, night) {
   for (const wall of wallsOf(structure)) {
     const span = (wall.to - wall.from) * T;
     if (wall.vertical) {
-      const x = clamp(wall.at * T - 2, 0, 16 * T - 4);
+      const x = clamp(wall.at * T - 2, 0, cols * T - 4);
       rect(g, x, wall.from * T - 2, 4, span + 4, "#3a2d28");
       rect(g, x + 1, wall.from * T - 1, 2, span + 2, "#ead9bd");
     } else {
@@ -242,7 +245,7 @@ function drawStatic(g, structure, night) {
     }
   }
   // Night follows sun.sun (or the clock): lights that are on stand out.
-  if (night) rect(g, 0, 0, 16 * T, H, "rgba(12,18,52,0.5)");
+  if (night) rect(g, 0, 0, cols * T, H, "rgba(12,18,52,0.5)");
 }
 function glow(g, x, y, radius) {
   g.globalCompositeOperation = "lighter";
@@ -554,10 +557,10 @@ export function createHouse(ctx, { onClose }) {
     const structure = ctx.structure;
     if (!g || !bg || !structure || !structure.rooms.length) return false;
     const moving = actor.step(dt);
-    const W = 16 * T,
+    const W = (structure.grid.cols || 16) * T,
       H = structure.grid.rows * T;
     const night = !!ctx.values?.night;
-    const key = JSON.stringify([structure.rooms, structure.grid.rows, night]);
+    const key = JSON.stringify([structure.rooms, structure.grid, night]);
     if (canvas.width !== W || canvas.height !== H) {
       canvas.width = background.width = W;
       canvas.height = background.height = H;
@@ -622,11 +625,12 @@ export function createHouse(ctx, { onClose }) {
   }
   function placeBubble() {
     const rows = layout().grid.rows || 1;
+    const cols = layout().grid.cols || 16;
     const label = ctx.think.busy ? currentLabel() : "";
     bubble.hidden = !label || view !== "map";
     if (!label) return;
     bubble.textContent = label;
-    bubble.style.left = `${(clamp(actor.hearth.x, 2.5, 13.5) / 16) * 100}%`;
+    bubble.style.left = `${(clamp(actor.hearth.x, 2.5, cols - 2.5) / cols) * 100}%`;
     bubble.style.top = `${(Math.max(actor.hearth.y - 1.2, 1.3) / rows) * 100}%`;
   }
   function currentLabel() {
@@ -643,6 +647,7 @@ export function createHouse(ctx, { onClose }) {
     const items = [];
     if (!structure) return layer.replaceChildren();
     const rows = structure.grid.rows;
+    const cols = structure.grid.cols || 16;
     for (const level of structure.levels ?? []) {
       const label = el("span", { className: "wh-level", text: level.name });
       label.style.top = pct(level.y + 0.1, rows);
@@ -650,9 +655,9 @@ export function createHouse(ctx, { onClose }) {
     }
     for (const room of structure.rooms) {
       const label = el("span", { className: "wh-room-label", text: room.name });
-      label.style.left = pct(room.x + 0.15, 16);
+      label.style.left = pct(room.x + 0.15, cols);
       label.style.top = pct(room.y + 0.12, rows);
-      label.style.maxWidth = pct(room.w - 0.3, 16);
+      label.style.maxWidth = pct(room.w - 0.3, cols);
       items.push(label);
     }
     for (const device of devices) {
@@ -662,7 +667,7 @@ export function createHouse(ctx, { onClose }) {
         `${device.name}: ${device.value}${device.anomaly ? `, ${ANOMALY_TEXT[device.anomaly]}` : ""}`,
       );
       target.dataset.entity = device.entityId;
-      target.style.left = pct(device.x, 16);
+      target.style.left = pct(device.x, cols);
       target.style.top = pct(device.y, rows);
       if (device.entityId === ctx.selected)
         target.setAttribute("aria-pressed", "true");
@@ -682,7 +687,9 @@ export function createHouse(ctx, { onClose }) {
       items.push(target);
     }
     layer.replaceChildren(...items);
-    screen.style.aspectRatio = `16 / ${Math.max(1, rows)}`;
+    screen.style.aspectRatio = `${cols} / ${Math.max(1, rows)}`;
+    // Wide floor plans keep readable tiles and pan sideways on phones.
+    screen.style.minWidth = cols > 16 ? `${cols * MIN_TILE_PX}px` : "";
   }
   function renderBottom() {
     if (editing) {
@@ -846,7 +853,7 @@ export function createHouse(ctx, { onClose }) {
   const toGrid = (event) => {
     const box = canvas.getBoundingClientRect();
     return {
-      x: ((event.clientX - box.left) / box.width) * 16,
+      x: ((event.clientX - box.left) / box.width) * (layout().grid.cols || 16),
       y: ((event.clientY - box.top) / box.height) * layout().grid.rows,
     };
   };
@@ -886,7 +893,8 @@ export function createHouse(ctx, { onClose }) {
     drag.moved = true;
     if (drag.kind === "device") {
       drag.node.classList.add("wh-dragging");
-      drag.node.style.left = pct(clamp(point.x, 0.3, 15.7), 16);
+      const cols = layout().grid.cols || 16;
+      drag.node.style.left = pct(clamp(point.x, 0.3, cols - 0.3), cols);
       drag.node.style.top = pct(
         clamp(point.y, 0.3, layout().grid.rows - 0.3),
         layout().grid.rows,
@@ -897,10 +905,11 @@ export function createHouse(ctx, { onClose }) {
     const dx = Math.round(point.x - drag.start.x),
       dy = Math.round(point.y - drag.start.y);
     const o = drag.origin;
+    const cols = layout().grid.cols || 16;
     const patch =
       drag.kind === "room"
-        ? { x: clamp(o.x + dx, 0, 16 - o.w), y: clamp(o.y + dy, 0, 64 - o.h) }
-        : { w: clamp(o.w + dx, 2, 16 - o.x), h: clamp(o.h + dy, 2, 16) };
+        ? { x: clamp(o.x + dx, 0, cols - o.w), y: clamp(o.y + dy, 0, 64 - o.h) }
+        : { w: clamp(o.w + dx, 2, cols - o.x), h: clamp(o.h + dy, 2, 16) };
     const room = layout().rooms.find((r) => r.id === drag.id);
     if (room && Object.entries(patch).some(([k, v]) => room[k] !== v))
       ctx.edit.room(drag.id, patch);

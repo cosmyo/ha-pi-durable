@@ -111,9 +111,13 @@ export class WorldStore {
       },
     );
   }
+  // The drawn entities depend on the (cached) registry projection.
+  private async drawn() {
+    return worldEntities(this.scope, await this.projection());
+  }
   private async auto() {
     const projection = await this.projection();
-    const entities = worldEntities(this.scope);
+    const entities = worldEntities(this.scope, projection);
     return {
       registry: !entities.length
         ? ("empty" as const)
@@ -157,7 +161,7 @@ export class WorldStore {
       "rate_limit",
       429,
     );
-    const entities = worldEntities(this.scope);
+    const entities = await this.drawn();
     let night = false;
     let nightSource: "sun" | "clock" = "clock";
     if (this.scope.includes("sun.sun"))
@@ -301,11 +305,7 @@ export class WorldStore {
     const entityId = text(v.entityId, 100);
     insist(entityPattern.test(entityId));
     insist(Number.isSafeInteger(v.sessionId) && Number(v.sessionId) > 0);
-    insist(
-      worldEntities(this.scope).includes(entityId),
-      "device_not_found",
-      404,
-    );
+    insist((await this.drawn()).includes(entityId), "device_not_found", 404);
     const domain = entityId.split(".")[0];
     insist(
       (domain === "light" || domain === "switch") &&

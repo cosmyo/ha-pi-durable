@@ -1345,3 +1345,187 @@ test("house dialogue shows plain speech, not raw markdown", async () => {
   });
   assert.deepEqual(lines, [{ who: "Hearth", text: "It is on." }]);
 });
+
+test("drawn devices are picked fairly per room, most telling first", () => {
+  const sensors = Array.from(
+    { length: 90 },
+    (_, i) => `sensor.busy_${String(i).padStart(2, "0")}`,
+  );
+  const phones = Array.from(
+    { length: 20 },
+    (_, i) => `binary_sensor.phone_${i}`,
+  );
+  const scope = [
+    ...sensors,
+    ...phones,
+    "light.busy_lamp",
+    "light.quiet_lamp",
+    "climate.quiet_ac",
+    "sensor.quiet_firmware",
+    "switch.hidden_plug",
+  ];
+  const entities: Record<
+    string,
+    { area: string | null; device: null; secondary?: boolean }
+  > = {};
+  for (const id of sensors) entities[id] = { area: "busy", device: null };
+  for (const id of phones) entities[id] = { area: null, device: null };
+  entities["light.busy_lamp"] = { area: "busy", device: null };
+  entities["light.quiet_lamp"] = { area: "quiet", device: null };
+  entities["climate.quiet_ac"] = { area: "quiet", device: null };
+  entities["sensor.quiet_firmware"] = {
+    area: "quiet",
+    device: null,
+    secondary: true,
+  };
+  entities["switch.hidden_plug"] = {
+    area: "quiet",
+    device: null,
+    secondary: true,
+  };
+  const projection = {
+    areas: [
+      { id: "busy", name: "Busy", level: "" },
+      { id: "quiet", name: "Quiet", level: "" },
+    ],
+    entities,
+  };
+  const drawn = worldEntities(scope, projection);
+  assert.equal(drawn.length, WORLD_LIMITS.devices);
+  assert.deepEqual(drawn, [...drawn].sort());
+  for (const id of ["light.busy_lamp", "light.quiet_lamp", "climate.quiet_ac"])
+    assert.ok(drawn.includes(id), id);
+  assert.ok(!drawn.includes("sensor.quiet_firmware"));
+  assert.ok(!drawn.includes("switch.hidden_plug"));
+  assert.equal(
+    drawn.filter((id) => id.startsWith("binary_sensor.phone_")).length,
+    8,
+  );
+  // Without the registry: the previous bounded alphabetical set.
+  assert.deepEqual(
+    worldEntities(scope),
+    [...new Set(scope)].sort().slice(0, 64),
+  );
+});
+
+test("registry projection marks diagnostic, config, hidden and disabled entities", () => {
+  const projection = projectRegistry(
+    {
+      areas: [{ area_id: "office", name: "Office" }],
+      devices: [],
+      entities: [
+        { entity_id: "light.desk", area_id: "office" },
+        {
+          entity_id: "sensor.fw",
+          area_id: "office",
+          entity_category: "diagnostic",
+        },
+        {
+          entity_id: "switch.led",
+          area_id: "office",
+          entity_category: "config",
+        },
+        { entity_id: "light.old", area_id: "office", hidden_by: "user" },
+        {
+          entity_id: "light.off",
+          area_id: "office",
+          disabled_by: "integration",
+        },
+      ],
+    },
+    ["light.desk", "sensor.fw", "switch.led", "light.old", "light.off"],
+    (s) => s,
+  );
+  assert.equal(projection.entities["light.desk"]!.secondary, undefined);
+  for (const id of ["sensor.fw", "switch.led", "light.old", "light.off"])
+    assert.equal(projection.entities[id]!.secondary, true, id);
+});
+
+test("an owner floor plan may widen the grid and add decor spaces", () => {
+  const scope = ["light.desk", "light.sofa"];
+  const projection = {
+    areas: [
+      { id: "office", name: "Office", level: "" },
+      { id: "living", name: "Living", level: "" },
+    ],
+    entities: {
+      "light.desk": { area: "office", device: null },
+      "light.sofa": { area: "living", device: null },
+    },
+  };
+  const auto = autoLayout(projection, scope);
+  const clean = (s: string) => s;
+  const plan = {
+    cols: 32,
+    rooms: {
+      "area:office": {
+        name: "Office",
+        x: 0,
+        y: 2,
+        w: 7,
+        h: 8,
+        floor: "carpet",
+      },
+      "area:living": {
+        name: "Living",
+        x: 7,
+        y: 2,
+        w: 25,
+        h: 12,
+        floor: "wood",
+      },
+      "decor:balcony": {
+        name: "Balcony",
+        x: 6,
+        y: 0,
+        w: 20,
+        h: 2,
+        floor: "wood",
+      },
+    },
+    devices: { "light.desk": { room: "decor:balcony", fx: 0.5, fy: 0.5 } },
+    character: { palette: 0, hat: "none" },
+    pet: true,
+  };
+  const custom = validateCustom(plan, scope, clean);
+  assert.equal(custom.cols, 32);
+  const merged = mergeLayout(auto, custom, scope);
+  assert.deepEqual(merged.grid, { cols: 32, rows: 14 });
+  const balcony = merged.rooms.find((r) => r.id === "decor:balcony")!;
+  assert.equal(balcony.decor, true);
+  assert.equal(balcony.area, null);
+  assert.deepEqual([balcony.x, balcony.y, balcony.w, balcony.h], [6, 0, 20, 2]);
+  assert.equal(
+    merged.devices.find((d) => d.entityId === "light.desk")!.room,
+    "decor:balcony",
+  );
+  assert.equal(merged.custom!.cols, 32);
+  assert.ok(merged.custom!.rooms["decor:balcony"]);
+  // The default grid stays 16 wide and is not written back.
+  const plain = validateCustom(
+    { ...plan, cols: undefined, rooms: {} },
+    scope,
+    clean,
+  );
+  assert.equal("cols" in plain, false);
+  assert.equal(mergeLayout(auto, plain, scope).grid.cols, WORLD_GRID.cols);
+  // Bounds: grid width, room inside the grid, decor ids and count.
+  const refuse = (layout: unknown) =>
+    assert.throws(
+      () => validateCustom(layout, scope, clean),
+      /invalid_world_layout/,
+    );
+  refuse({ ...plan, cols: 41 });
+  refuse({ ...plan, cols: 15 });
+  refuse({ ...plan, cols: 24 });
+  refuse({ ...plan, rooms: { "decor:Bad-Id": plan.rooms["decor:balcony"] } });
+  refuse({
+    ...plan,
+    rooms: Object.fromEntries(
+      Array.from({ length: 9 }, (_, i) => [
+        `decor:d${i}`,
+        { name: "D", x: 0, y: i * 2, w: 2, h: 2, floor: "grass" },
+      ]),
+    ),
+  });
+});

@@ -4,10 +4,13 @@
 // owner customizations and merges them over the auto layout. No I/O here.
 import { entityPattern, insist, object, text } from "./safety.js";
 
-export const WORLD_GRID = Object.freeze({ cols: 16, maxRows: 64 });
+// 16 columns by default; an owner floor plan may widen the grid (the map
+// then pans horizontally on narrow screens).
+export const WORLD_GRID = Object.freeze({ cols: 16, maxCols: 40, maxRows: 64 });
 export const WORLD_LIMITS = Object.freeze({
   devices: 64,
   rooms: 24,
+  decor: 8,
   registryItems: 20000,
 });
 // Physical device domains shown as sprites. Others (automation, person, sun,
@@ -46,13 +49,19 @@ export type Hat = (typeof HATS)[number];
 export const PALETTE_COUNT = 4;
 export const UNASSIGNED_ROOM = "unassigned";
 export const roomIdPattern = /^(area:[a-z0-9_]{1,64}|unassigned)$/;
+// Owner-drawn spaces without a Home Assistant area (balcony, garden, …).
+export const decorIdPattern = /^decor:[a-z0-9_]{1,24}$/;
 const areaIdPattern = /^[a-z0-9_]{1,64}$/;
 
 export type RegistryProjection = {
   // Only areas holding at least one in-scope entity.
   areas: { id: string; name: string; level: string }[];
   // Exactly the in-scope entities, with their effective area and device name.
-  entities: Record<string, { area: string | null; device: string | null }>;
+  // secondary: diagnostic/config category, hidden or disabled in HA.
+  entities: Record<
+    string,
+    { area: string | null; device: string | null; secondary?: boolean }
+  >;
 };
 export type WorldRoom = {
   id: string;
@@ -65,6 +74,8 @@ export type WorldRoom = {
   level: string;
   // The Home Assistant area name (or null for the shed), never customized.
   area: string | null;
+  // An owner-drawn space (decor:*) with no Home Assistant area.
+  decor?: boolean;
 };
 export type WorldPlace = { room: string; fx: number; fy: number };
 export type WorldDevice = WorldPlace & {
@@ -88,6 +99,8 @@ export type WorldCustom = {
   devices: Record<string, WorldPlace>;
   character: { palette: number; hat: string };
   pet: boolean;
+  // Grid width for an owner floor plan; absent means WORLD_GRID.cols.
+  cols?: number;
 };
 
 const clamp = (v: number, lo: number, hi: number) =>
@@ -130,7 +143,7 @@ export function projectRegistry(
   const inScope = new Set(scope.filter((id) => entityPattern.test(id)));
   const entities = new Map<
     string,
-    { area: string | null; deviceId: string | null }
+    { area: string | null; deviceId: string | null; secondary: boolean }
   >();
   for (const e of records(raw.entities)) {
     const id = e.entity_id;
@@ -145,6 +158,11 @@ export function projectRegistry(
         typeof e.device_id === "string" && e.device_id.length <= 64
           ? e.device_id
           : null,
+      secondary:
+        e.entity_category === "diagnostic" ||
+        e.entity_category === "config" ||
+        !!e.hidden_by ||
+        !!e.disabled_by,
     });
   }
   const wantedDevices = new Set(
@@ -169,6 +187,7 @@ export function projectRegistry(
     out[id] = {
       area: e?.area ?? device?.area ?? null,
       device: device?.name || null,
+      ...(e?.secondary ? { secondary: true } : {}),
     };
   }
   const wantedAreas = new Set(
@@ -197,17 +216,63 @@ export function projectRegistry(
   return { areas, entities: out };
 }
 
+// Most telling first: what a person notices in a room.
+const PICK_ORDER = [
+  "light",
+  "climate",
+  "cover",
+  "lock",
+  "media_player",
+  "fan",
+  "vacuum",
+  "humidifier",
+  "water_heater",
+  "valve",
+  "switch",
+  "binary_sensor",
+  "sensor",
+];
+const SHED_QUOTA = 8;
 // The entities drawn in the world: in scope, physical domains, bounded.
-export function worldEntities(scope: readonly string[]): string[] {
-  return [...new Set(scope)]
-    .filter(
-      (id) =>
-        entityPattern.test(id) &&
-        WORLD_DOMAINS.includes(id.split(".")[0]!) &&
-        id !== "sun.sun",
-    )
-    .sort()
-    .slice(0, WORLD_LIMITS.devices);
+// With the registry projection the bounded set is chosen fairly: rooms take
+// turns picking their most telling device (lights, climate, covers… before
+// switches and sensors), diagnostic/config/hidden/disabled entities are left
+// out and unassigned entities get a small share. Output is sorted.
+export function worldEntities(
+  scope: readonly string[],
+  projection: RegistryProjection | null = null,
+): string[] {
+  const physical = [...new Set(scope)].filter(
+    (id) =>
+      entityPattern.test(id) &&
+      WORLD_DOMAINS.includes(id.split(".")[0]!) &&
+      id !== "sun.sun",
+  );
+  if (!projection) return physical.sort().slice(0, WORLD_LIMITS.devices);
+  const rank = (id: string) => PICK_ORDER.indexOf(id.split(".")[0]!);
+  const byRank = (a: string, b: string) =>
+    rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0);
+  const groups = new Map<string, string[]>();
+  const shed: string[] = [];
+  for (const id of physical) {
+    const info = projection.entities[id];
+    if (info?.secondary) continue;
+    if (!info?.area) shed.push(id);
+    else groups.set(info.area, [...(groups.get(info.area) ?? []), id]);
+  }
+  const queues = [...groups.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([, ids]) => ids.sort(byRank));
+  shed.sort(byRank);
+  const picked: string[] = [];
+  const roomBudget = WORLD_LIMITS.devices - Math.min(SHED_QUOTA, shed.length);
+  for (let i = 0; picked.length < roomBudget; i++) {
+    const round = queues.filter((q) => i < q.length).map((q) => q[i]!);
+    if (!round.length) break;
+    picked.push(...round.slice(0, roomBudget - picked.length));
+  }
+  picked.push(...shed.slice(0, WORLD_LIMITS.devices - picked.length));
+  return picked.sort();
 }
 
 // Floor style by area name: gardens are grass, wet rooms tile, quiet rooms
@@ -405,7 +470,12 @@ export function validateCustom(
 ): WorldCustom {
   const fail = "invalid_world_layout";
   insist(isPlainObject(raw), fail);
-  const v = object(raw, ["rooms", "devices", "character", "pet"]);
+  const v = object(raw, ["rooms", "devices", "character", "pet", "cols"]);
+  insist(
+    v.cols === undefined || int(v.cols, WORLD_GRID.cols, WORLD_GRID.maxCols),
+    fail,
+  );
+  const cols = (v.cols as number | undefined) ?? WORLD_GRID.cols;
   insist(
     isPlainObject(v.rooms) &&
       isPlainObject(v.devices) &&
@@ -414,15 +484,20 @@ export function validateCustom(
     fail,
   );
   const roomKeys = Object.keys(v.rooms);
-  insist(roomKeys.length <= WORLD_LIMITS.rooms, fail);
+  insist(
+    roomKeys.filter((id) => decorIdPattern.test(id)).length <=
+      WORLD_LIMITS.decor &&
+      roomKeys.length <= WORLD_LIMITS.rooms + WORLD_LIMITS.decor,
+    fail,
+  );
   const rooms: WorldCustom["rooms"] = {};
   for (const id of roomKeys) {
-    insist(roomIdPattern.test(id), fail);
+    insist(roomIdPattern.test(id) || decorIdPattern.test(id), fail);
     const r = object(v.rooms[id], ["name", "x", "y", "w", "h", "floor"]);
     insist(
-      int(r.w, 2, WORLD_GRID.cols) &&
+      int(r.w, 2, cols) &&
         int(r.h, 2, 16) &&
-        int(r.x, 0, WORLD_GRID.cols - (r.w as number)) &&
+        int(r.x, 0, cols - (r.w as number)) &&
         int(r.y, 0, WORLD_GRID.maxRows - (r.h as number)) &&
         (FLOOR_STYLES as readonly unknown[]).includes(r.floor),
       fail,
@@ -446,7 +521,7 @@ export function validateCustom(
     const d = object(v.devices[id], ["room", "fx", "fy"]);
     insist(
       typeof d.room === "string" &&
-        roomIdPattern.test(d.room) &&
+        (roomIdPattern.test(d.room) || decorIdPattern.test(d.room)) &&
         fraction(d.fx) &&
         fraction(d.fy),
       fail,
@@ -468,6 +543,7 @@ export function validateCustom(
     devices,
     character: { palette: c.palette as number, hat: c.hat as string },
     pet: v.pet,
+    ...(cols !== WORLD_GRID.cols ? { cols } : {}),
   };
 }
 
@@ -602,23 +678,52 @@ export function mergeLayout(
   custom: WorldCustom | null,
   scope: readonly string[],
 ) {
-  const rooms = auto.rooms.map((room) => {
-    const o = custom?.rooms[room.id];
-    if (!o) return { ...room };
-    const w = clamp(o.w, 2, WORLD_GRID.cols);
+  const cols = clamp(
+    custom?.cols ?? WORLD_GRID.cols,
+    WORLD_GRID.cols,
+    WORLD_GRID.maxCols,
+  );
+  const place = (room: WorldRoom, o: WorldCustom["rooms"][string]) => {
+    const w = clamp(o.w, 2, cols);
     const h = clamp(o.h, 2, 16);
     return {
       ...room,
       name: o.name,
       w,
       h,
-      x: clamp(o.x, 0, WORLD_GRID.cols - w),
+      x: clamp(o.x, 0, cols - w),
       y: clamp(o.y, 0, WORLD_GRID.maxRows - h),
       floor: (FLOOR_STYLES as readonly string[]).includes(o.floor)
         ? (o.floor as FloorStyle)
         : room.floor,
     };
+  };
+  const rooms: WorldRoom[] = auto.rooms.map((room) => {
+    const o = custom?.rooms[room.id];
+    return o ? place(room, o) : { ...room };
   });
+  // Owner-drawn spaces (balcony, garden…) follow the areas, in id order.
+  for (const [id, o] of Object.entries(custom?.rooms ?? {}).sort(([a], [b]) =>
+    a < b ? -1 : 1,
+  ))
+    if (decorIdPattern.test(id))
+      rooms.push(
+        place(
+          {
+            id,
+            name: o.name,
+            x: 0,
+            y: 0,
+            w: 2,
+            h: 2,
+            floor: "wood",
+            level: "",
+            area: null,
+            decor: true,
+          },
+          o,
+        ),
+      );
   const roomIds = new Set(rooms.map((r) => r.id));
   const readable = new Set(scope);
   const devices = auto.devices.map((d) => {
@@ -642,14 +747,21 @@ export function mergeLayout(
         ),
         character: { ...custom.character },
         pet: custom.pet,
+        ...(cols !== WORLD_GRID.cols ? { cols } : {}),
       }
     : null;
+  // The house is as tall as its rooms (and level labels), so a moved-in
+  // floor plan does not keep the auto layout's empty rows.
   const rows = Math.min(
     WORLD_GRID.maxRows,
-    Math.max(auto.rows, ...rooms.map((r) => r.y + r.h)),
+    Math.max(
+      1,
+      ...auto.levels.map((l) => l.y + 1),
+      ...rooms.map((r) => r.y + r.h),
+    ),
   );
   return {
-    grid: { cols: WORLD_GRID.cols, rows },
+    grid: { cols, rows },
     levels: auto.levels,
     rooms,
     devices,

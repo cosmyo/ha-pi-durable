@@ -1066,9 +1066,10 @@ export async function mountWorld(host) {
         const room = structure?.rooms.find((r) => r.id === id);
         if (!room) return;
         Object.assign(room, patch);
-        room.w = clamp(Math.round(room.w), 2, 16);
+        const cols = structure.grid.cols || 16;
+        room.w = clamp(Math.round(room.w), 2, cols);
         room.h = clamp(Math.round(room.h), 2, 16);
-        room.x = clamp(Math.round(room.x), 0, 16 - room.w);
+        room.x = clamp(Math.round(room.x), 0, cols - room.w);
         room.y = clamp(Math.round(room.y), 0, 64 - room.h);
         editable().rooms[id] = {
           name: room.name,
