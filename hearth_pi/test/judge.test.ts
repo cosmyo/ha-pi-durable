@@ -444,7 +444,7 @@ test("judge policy: one requested change of several is aligned on its own", () =
   );
 });
 
-test("systemone decision-model judge: typed questions, aligned needs 0.7, escalates only upward, fails closed, key never leaks", async () => {
+test("systemone decision-model judge: typed questions, aligned needs 0.9, escalates only upward (argmax or 20% mass above), fails closed, key never leaks", async () => {
   const KEY = "synthetic-decision-key-0001";
   const bodies: Record<string, unknown>[] = [];
   let answers: unknown = {
@@ -495,9 +495,9 @@ test("systemone decision-model judge: typed questions, aligned needs 0.7, escala
   assert.equal(questions.risk!.type, "choice");
   assert.doesNotMatch(JSON.stringify(body), new RegExp(KEY));
 
-  // A lukewarm 0.6 is not "aligned"; a predicted level at or below the rule's level never lowers it.
+  // 0.85 is not "aligned" (needs 0.9); a predicted level at or below the rule's level never lowers it.
   answers = {
-    aligned: { type: "noul", noul: 0.6 },
+    aligned: { type: "noul", noul: 0.85 },
     risk: { type: "choice", choice: "low", confidence: 0.9 },
   };
   const lukewarm = await new RiskJudgeService("systemone/clef-flash", () => ({
@@ -506,6 +506,23 @@ test("systemone decision-model judge: typed questions, aligned needs 0.7, escala
   })).evaluate(request());
   assert.equal(lukewarm.verdict, "misaligned");
   assert.equal(lukewarm.escalateTo, undefined);
+
+  // Most likely "medium" (= the rule's level), but 25% of the mass above it → escalate to the likeliest higher level.
+  answers = {
+    aligned: { type: "noul", noul: 0.97 },
+    risk: {
+      type: "choice",
+      choice: "medium",
+      confidence: 0.6,
+      probabilities: { low: 0.15, medium: 0.6, high: 0.2, critical: 0.05 },
+    },
+  };
+  const mass = await new RiskJudgeService("systemone/clef-flash", () => ({
+    adapter,
+    model: adapter.id,
+  })).evaluate(request());
+  assert.equal(mass.verdict, "escalated");
+  assert.equal(mass.escalateTo, "high");
 
   // Malformed answers fail closed (no agreement).
   for (const bad of [

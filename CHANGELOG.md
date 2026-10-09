@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Risk judge: `risk_judge_model: systemone/<model>` uses any Jev/SystemOne-compatible decision model (for example Jev, Clef or Clef-flash) at `risk_judge_url`: two typed questions (aligned yes/no, needing 70%; risk level, escalating only upward) instead of generated text; same private-address rules and fail-closed handling as `endpoint/<model>`.
+- Risk judge: `risk_judge_model: systemone/<model>` uses any Jev/SystemOne-compatible decision model (for example Jev, Clef or Clef-flash) at `risk_judge_url`: two typed questions (aligned yes/no, needing 90%; risk level, escalating only upward when the likeliest level or 20% of the probability is higher) instead of generated text; same private-address rules and fail-closed handling as `endpoint/<model>`.
 
 ## 0.3.1 — your profile, briefing summaries, code-improvement suggestions, Home World polish
 

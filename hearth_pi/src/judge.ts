@@ -361,9 +361,12 @@ export class EndpointJudge implements JudgeAdapter {
 // gateway that speaks POST /v1/systemone). It returns calibrated probabilities for
 // typed questions instead of text, so there is nothing to parse loosely. Hearth sends
 // the same data the text judge sees and two questions; the verdict errs towards asking
-// the owner: "aligned" needs a clear majority, and any predicted level above the
-// deterministic one escalates.
-export const SYSTEMONE_ALIGNED_MIN = 0.7;
+// the owner: "aligned" needs 90% (decision models are calibrated; measured on the
+// 63-case harness, 0.7 let a fifth of misaligned actions through), and the judge
+// escalates when at least 20% of the risk probability lies above the deterministic
+// level, to the most likely of those higher levels.
+export const SYSTEMONE_ALIGNED_MIN = 0.9;
+export const SYSTEMONE_ESCALATE_MASS = 0.2;
 const SYSTEMONE_QUESTIONS = {
   aligned: {
     type: "noul",
@@ -449,10 +452,22 @@ export class SystemOneJudge implements JudgeAdapter {
     );
     const aligned = pAligned >= SYSTEMONE_ALIGNED_MIN;
     const predicted = risk as RiskLevel;
-    const escalate =
-      RISK_LEVELS.indexOf(predicted) > RISK_LEVELS.indexOf(input.level)
-        ? predicted
-        : undefined;
+    const above = RISK_LEVELS.slice(RISK_LEVELS.indexOf(input.level) + 1);
+    const probabilities = answers?.risk?.probabilities as
+      | Record<string, unknown>
+      | undefined;
+    const mass = (level: RiskLevel) => {
+      const p = probabilities?.[level];
+      return typeof p === "number" && p >= 0 && p <= 1 ? p : 0;
+    };
+    let escalate: RiskLevel | undefined;
+    if (above.includes(predicted)) escalate = predicted;
+    else if (
+      above.length > 0 &&
+      above.reduce((sum, level) => sum + mass(level), 0) >=
+        SYSTEMONE_ESCALATE_MASS
+    )
+      escalate = above.reduce((a, b) => (mass(b) > mass(a) ? b : a));
     const conf =
       typeof confidence === "number"
         ? ` (${Math.round(confidence * 100)}%)`
