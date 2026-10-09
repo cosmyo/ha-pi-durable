@@ -138,8 +138,8 @@ export function scoreOutcome(judgeCase, outcome) {
  * reverses the listed order of the `risk` choice's criteria and negates the
  * `aligned` question (asks whether the action is NOT one of the requested
  * changes, with its true/false criteria swapped), so a model that is
- * actually reasoning about the criteria \u2014 not pattern-matching their
- * position or the literal word "aligned" \u2014 should give the same
+ * actually reasoning about the criteria — not pattern-matching their
+ * position or the literal word "aligned" — should give the same
  * decision. Reuses judge.ts's own SYSTEMONE_QUESTIONS text verbatim; only
  * the key order and the noul polarity change.
  */
@@ -212,7 +212,7 @@ function systemOneVerdictFromAnswers(answers, level) {
  * (the fetch shape mirrors SystemOneJudge.classifyIntent in judge.ts; a raw
  * response is needed here to compare both requests' answers, which the
  * JudgeAdapter interface does not expose). Returns null on any network,
- * HTTP or parse failure for either leg \u2014 the caller skips the case rather
+ * HTTP or parse failure for either leg — the caller skips the case rather
  * than guessing (same fail-closed stance as the adapter).
  */
 export async function runOrderSwapCase(
