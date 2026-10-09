@@ -11,6 +11,9 @@ test-results/
 .DS_Store
 /data/
 .local/
+# Per-developer deployment notes (never committed)
+AGENTS.override.md
+AGENTS.md.override
 /runtime/
 *.sqlite
 *.sqlite-*
