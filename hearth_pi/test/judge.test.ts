@@ -8,6 +8,7 @@ import {
 import {
   EndpointJudge,
   JUDGE_SYSTEM_PROMPT,
+  SystemOneJudge,
   JudgeSessions,
   RiskJudgeService,
   parseVerdict,
@@ -440,5 +441,109 @@ test("judge policy: one requested change of several is aligned on its own", () =
   assert.match(
     JUDGE_SYSTEM_PROMPT,
     /each one is proposed and judged separately/,
+  );
+});
+
+test("systemone decision-model judge: typed questions, aligned needs 0.7, escalates only upward, fails closed, key never leaks", async () => {
+  const KEY = "synthetic-decision-key-0001";
+  const bodies: Record<string, unknown>[] = [];
+  let answers: unknown = {
+    aligned: { type: "noul", noul: 0.93 },
+    risk: {
+      type: "choice",
+      choice: "high",
+      confidence: 0.81,
+      probabilities: {},
+    },
+  };
+  const fetcher = (async (url: string, init: RequestInit) => {
+    assert.equal(url, "http://192.168.1.60:8402/v1/systemone");
+    assert.equal(init.redirect, "error");
+    assert.equal(
+      (init.headers as Record<string, string>).Authorization,
+      `Bearer ${KEY}`,
+    );
+    bodies.push(JSON.parse(String(init.body)));
+    return Response.json({ model: "clef-flash", answers, usage: {} });
+  }) as unknown as typeof fetch;
+  const resolve = async () => ["192.168.1.60"];
+  const adapter = new SystemOneJudge(
+    "http://192.168.1.60:8402/v1",
+    KEY,
+    "clef-flash",
+    fetcher,
+    resolve,
+  );
+  const service = new RiskJudgeService(
+    "systemone/clef-flash",
+    () => ({ adapter, model: adapter.id }),
+    1000,
+    (v) => v.split(KEY).join("[REDACTED]"),
+  );
+  const first = await service.evaluate(request());
+  assert.equal(first.verdict, "escalated");
+  assert.equal(first.model, "systemone/clef-flash");
+  assert.doesNotMatch(JSON.stringify(first), new RegExp(KEY));
+  const body = bodies[0]!;
+  assert.equal(body.model, "clef-flash");
+  const state = body.state as Record<string, unknown>;
+  assert.equal(state.owner_request, "Set the hall to 20 degrees");
+  assert.deepEqual(state.proposed_action, action);
+  assert.equal(state.deterministic_level, "medium");
+  const questions = body.questions as Record<string, { type: string }>;
+  assert.equal(questions.aligned!.type, "noul");
+  assert.equal(questions.risk!.type, "choice");
+  assert.doesNotMatch(JSON.stringify(body), new RegExp(KEY));
+
+  // A lukewarm 0.6 is not "aligned"; a predicted level at or below the rule's level never lowers it.
+  answers = {
+    aligned: { type: "noul", noul: 0.6 },
+    risk: { type: "choice", choice: "low", confidence: 0.9 },
+  };
+  const lukewarm = await new RiskJudgeService("systemone/clef-flash", () => ({
+    adapter,
+    model: adapter.id,
+  })).evaluate(request());
+  assert.equal(lukewarm.verdict, "misaligned");
+  assert.equal(lukewarm.escalateTo, undefined);
+
+  // Malformed answers fail closed (no agreement).
+  for (const bad of [
+    {},
+    { aligned: { noul: 2 }, risk: { choice: "high" } },
+    { aligned: { noul: 0.9 }, risk: { choice: "extreme" } },
+  ]) {
+    answers = bad;
+    const r = await new RiskJudgeService("systemone/clef-flash", () => ({
+      adapter,
+      model: adapter.id,
+    })).evaluate(request());
+    assert.equal(r.verdict, "unavailable");
+  }
+  // Same private-URL policy as the text endpoint judge.
+  const publicJudge = new SystemOneJudge(
+    "http://93.184.216.34:8402",
+    KEY,
+    "m",
+    fetcher,
+    resolve,
+  );
+  const refused = await new RiskJudgeService("systemone/m", () => ({
+    adapter: publicJudge,
+    model: publicJudge.id,
+  })).evaluate(request());
+  assert.equal(refused.verdict, "unavailable");
+  // Resolution: needs the shared judge URL.
+  const env = {
+    models: { getModel: () => undefined } as never,
+    signedIn: () => false,
+  };
+  assert.equal(resolveJudge("systemone/clef-flash", env).model, "off");
+  assert.equal(
+    resolveJudge("systemone/clef-flash", {
+      ...env,
+      endpoint: { url: "http://192.168.1.60:8402", apiKey: "" },
+    }).model,
+    "systemone/clef-flash",
   );
 });
