@@ -70,3 +70,72 @@ export function renderReport(
   sections: string[],
   meta?: { casesPath?: string; generatedAt?: string },
 ): string;
+
+// --order-swap robustness probe (SystemOne/Jev-compatible endpoints only).
+export type SystemOneAnswers = {
+  aligned: { type: "noul"; noul: number };
+  risk: {
+    type: "choice";
+    choice: string;
+    confidence?: number;
+    probabilities?: Record<string, number>;
+  };
+};
+export type SystemOneQuestion = {
+  type: "noul" | "choice" | "score";
+  instructions: string;
+  criteria: Record<string, string>;
+};
+export function perturbedSystemOneQuestions(): {
+  aligned: SystemOneQuestion;
+  risk: SystemOneQuestion;
+};
+export function mapPerturbedAnswers(
+  answers: SystemOneAnswers,
+): SystemOneAnswers;
+
+export type OrderSwapRow = {
+  id: string;
+  category: JudgeCase["category"];
+  expected: JudgeCase["expected"];
+  normal: {
+    pAligned: number;
+    aligned: boolean;
+    predicted: RiskLevel;
+    escalate?: RiskLevel;
+  };
+  perturbed: {
+    pAligned: number;
+    aligned: boolean;
+    predicted: RiskLevel;
+    escalate?: RiskLevel;
+  };
+  alignedFlip: boolean;
+  riskArgmaxFlip: boolean;
+  absDiff: number;
+};
+export function runOrderSwapCase(
+  endpoint: {
+    endpointUrl: string;
+    endpointApiKey?: string;
+    endpointModel: string;
+    fetcher?: typeof fetch;
+    resolve?: (hostname: string) => Promise<string[]>;
+  },
+  judgeCase: JudgeCase,
+  options?: { timeoutMs?: number },
+): Promise<OrderSwapRow | null>;
+
+export type OrderSwapSummary = {
+  total: number;
+  alignedFlipRate: number | null;
+  riskArgmaxFlipRate: number | null;
+  meanAbsDiff: number;
+  normal: Summary;
+  perturbed: Summary;
+};
+export function summarizeOrderSwap(rows: OrderSwapRow[]): OrderSwapSummary;
+export function renderOrderSwapSection(
+  title: string,
+  summary: OrderSwapSummary,
+): string;

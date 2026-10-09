@@ -73,6 +73,9 @@ function parseArgs(argv) {
       case "--systemone":
         args.systemone = true;
         break;
+      case "--order-swap":
+        args.orderSwap = true;
+        break;
       case "--timeout-ms":
         args.timeoutMs = Number(next());
         break;
@@ -104,6 +107,8 @@ function printUsage() {
       "  --endpoint-model <id>     Model id to send (default: judge)",
       "  --endpoint-api-key <key>  Optional bearer key for the endpoint",
       "  --systemone               Treat the endpoint as a Jev/SystemOne decision model (POST /v1/systemone)",
+      "  --order-swap              With --systemone: also probe robustness by reversing the risk choice's",
+      "                            criteria order and negating the aligned question, then report flip rates",
       "  --timeout-ms <n>          Per-case timeout (default 15000)",
       "  --cloud                   Also try Hearth Pi's own signed-in cloud judge (skips gracefully if none)",
       "  --cloud-data-dir <path>   Local credential directory for --cloud (default hearth_pi/.local)",
@@ -112,6 +117,9 @@ function printUsage() {
     ].join("\n"),
   );
 }
+
+const pctLog = (value) =>
+  value === null ? "n/a" : (value * 100).toFixed(1) + "%";
 
 async function runSection({ label, adapter, cases, timeoutMs }) {
   const { runCase, scoreOutcome, summarize, renderSection } = await import(
@@ -139,6 +147,10 @@ async function main() {
     printUsage();
     process.exit(args.help ? 0 : 1);
   }
+  if (args.orderSwap && !args.systemone) {
+    console.error("--order-swap requires --systemone.");
+    process.exit(1);
+  }
   const { loadCases } = await import("./eval-judge-lib.mjs");
   const casesPath = resolvePath(repoRoot, args.cases);
   const cases = await loadCases(casesPath);
@@ -154,14 +166,42 @@ async function main() {
       args.endpointApiKey ?? "",
       args.endpointModel,
     );
+    const label = `${args.systemone ? "Decision-model" : "Endpoint"} judge (${adapter.id} @ ${args.endpointUrl})`;
     sections.push(
-      await runSection({
-        label: `${args.systemone ? "Decision-model" : "Endpoint"} judge (${adapter.id} @ ${args.endpointUrl})`,
-        adapter,
-        cases,
-        timeoutMs: args.timeoutMs,
-      }),
+      await runSection({ label, adapter, cases, timeoutMs: args.timeoutMs }),
     );
+
+    if (args.orderSwap) {
+      const { runOrderSwapCase, summarizeOrderSwap, renderOrderSwapSection } =
+        await import("./eval-judge-lib.mjs");
+      const rows = [];
+      for (const judgeCase of cases) {
+        const row = await runOrderSwapCase(
+          {
+            endpointUrl: args.endpointUrl,
+            endpointApiKey: args.endpointApiKey ?? "",
+            endpointModel: args.endpointModel,
+          },
+          judgeCase,
+          { timeoutMs: args.timeoutMs },
+        );
+        if (row) rows.push(row);
+      }
+      if (rows.length === 0) {
+        console.log(
+          "Order-swap probe: no case produced answers on both the normal and swapped request; skipped.",
+        );
+      } else {
+        const swapSummary = summarizeOrderSwap(rows);
+        console.log(
+          `Order-swap robustness: aligned-flip ${pctLog(swapSummary.alignedFlipRate)}, ` +
+            `risk-argmax-flip ${pctLog(swapSummary.riskArgmaxFlipRate)}, ` +
+            `mean |\u0394 p_aligned| ${swapSummary.meanAbsDiff.toFixed(3)} ` +
+            `(${rows.length}/${cases.length} cases compared)`,
+        );
+        sections.push(renderOrderSwapSection(label, swapSummary));
+      }
+    }
   }
 
   if (args.cloud) {

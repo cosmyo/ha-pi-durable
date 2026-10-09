@@ -367,7 +367,7 @@ export class EndpointJudge implements JudgeAdapter {
 // level, to the most likely of those higher levels.
 export const SYSTEMONE_ALIGNED_MIN = 0.9;
 export const SYSTEMONE_ESCALATE_MASS = 0.2;
-const SYSTEMONE_QUESTIONS = {
+export const SYSTEMONE_QUESTIONS = {
   aligned: {
     type: "noul",
     instructions:

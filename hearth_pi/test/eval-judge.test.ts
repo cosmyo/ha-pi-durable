@@ -9,13 +9,19 @@ import { EndpointJudge } from "../src/judge.js";
 import type { Action } from "../src/documents.js";
 import {
   loadCases,
+  mapPerturbedAnswers,
+  perturbedSystemOneQuestions,
+  renderOrderSwapSection,
   renderReport,
   renderSection,
   runCase,
+  runOrderSwapCase,
   scoreOutcome,
   summarize,
+  summarizeOrderSwap,
   type RunOutcome,
 } from "../../scripts/eval-judge-lib.mjs";
+import { SYSTEMONE_QUESTIONS } from "../src/judge.js";
 
 const action: Action = {
   kind: "service",
@@ -290,4 +296,172 @@ test("runCase: a hanging endpoint times out and is scored as unavailable, not a 
   const scored = scoreOutcome(makeCase(), outcome);
   assert.equal(scored.unavailable, true);
   assert.equal(scored.parseFailed, false);
+});
+
+test("perturbedSystemOneQuestions: reverses risk criteria order and negates the aligned question", () => {
+  const normalRiskKeys = Object.keys(SYSTEMONE_QUESTIONS.risk.criteria);
+  const perturbed = perturbedSystemOneQuestions();
+  assert.deepEqual(
+    Object.keys(perturbed.risk.criteria),
+    [...normalRiskKeys].reverse(),
+  );
+  // Same option set and text, just reordered.
+  assert.deepEqual(perturbed.risk.criteria, {
+    ...SYSTEMONE_QUESTIONS.risk.criteria,
+  });
+  // The aligned question is negated: criteria swapped, instructions ask the opposite.
+  assert.equal(
+    perturbed.aligned.criteria.true,
+    SYSTEMONE_QUESTIONS.aligned.criteria.false,
+  );
+  assert.equal(
+    perturbed.aligned.criteria.false,
+    SYSTEMONE_QUESTIONS.aligned.criteria.true,
+  );
+  assert.match(perturbed.aligned.instructions, /NOT plainly one of/);
+  assert.equal(perturbed.aligned.type, "noul");
+});
+
+test("mapPerturbedAnswers: p_aligned = 1 - noul on the negated question; risk is untouched", () => {
+  const mapped = mapPerturbedAnswers({
+    aligned: { type: "noul", noul: 0.12 },
+    risk: { type: "choice", choice: "high", confidence: 0.8 },
+  });
+  assert.equal(mapped.aligned.noul, 0.88);
+  assert.equal(mapped.risk.choice, "high");
+  // Missing/malformed input passes through unchanged rather than throwing.
+  assert.deepEqual(
+    mapPerturbedAnswers(
+      {} as unknown as Parameters<typeof mapPerturbedAnswers>[0],
+    ),
+    {},
+  );
+});
+
+test("runOrderSwapCase: sends both requests, maps the perturbed answer back, and reports a flip", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const fetcher = (async (url: string, init: RequestInit) => {
+    assert.equal(url, "http://192.168.1.60:8402/v1/systemone");
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    bodies.push(body);
+    const questions = body.questions as Record<string, { type: string }>;
+    // Distinguish the two legs by whether the aligned question was negated.
+    const negated = /NOT plainly/.test(
+      (questions.aligned as unknown as { instructions: string }).instructions,
+    );
+    return Response.json({
+      model: "clef-flash",
+      answers: negated
+        ? {
+            aligned: { type: "noul", noul: 0.05 }, // "not aligned" is unlikely -> aligned
+            risk: { type: "choice", choice: "high", confidence: 0.9 },
+          }
+        : {
+            aligned: { type: "noul", noul: 0.95 },
+            risk: { type: "choice", choice: "high", confidence: 0.9 },
+          },
+    });
+  }) as unknown as typeof fetch;
+  const judgeCase = makeCase({
+    id: "A1",
+    category: "aligned" as const,
+    expected: { aligned: true },
+    deterministicLevel: "low" as const,
+  });
+  const row = await runOrderSwapCase(
+    {
+      endpointUrl: "http://192.168.1.60:8402",
+      endpointApiKey: "synthetic-eval-key",
+      endpointModel: "clef-flash",
+      fetcher,
+      resolve: async () => ["192.168.1.60"],
+    },
+    judgeCase,
+    { timeoutMs: 1000 },
+  );
+  assert.equal(bodies.length, 2);
+  assert(row);
+  assert.equal(row!.normal.aligned, true);
+  assert.equal(row!.perturbed.aligned, true); // 1 - 0.05 = 0.95 >= 0.9
+  assert.equal(row!.alignedFlip, false);
+  assert.equal(row!.riskArgmaxFlip, false);
+  assert(Math.abs(row!.absDiff - 0) < 1e-9);
+
+  const summary = summarizeOrderSwap([row!]);
+  assert.equal(summary.total, 1);
+  assert.equal(summary.alignedFlipRate, 0);
+  assert.equal(summary.riskArgmaxFlipRate, 0);
+  assert.equal(summary.normal.accuracy, 1);
+  assert.equal(summary.perturbed.accuracy, 1);
+  const section = renderOrderSwapSection("Fake judge", summary);
+  assert.match(section, /order-swap robustness/i);
+  assert.match(section, /Aligned-verdict flip rate.*0\.0%/);
+});
+
+test("runOrderSwapCase: a flipped verdict is reported, and a failed leg skips the case rather than guessing", async () => {
+  const flippingFetcher = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    const questions = body.questions as Record<string, { type: string }>;
+    const negated = /NOT plainly/.test(
+      (questions.aligned as unknown as { instructions: string }).instructions,
+    );
+    return Response.json({
+      answers: negated
+        ? {
+            // "not aligned" is likely -> maps to a low p_aligned, flipping the verdict.
+            aligned: { type: "noul", noul: 0.8 },
+            risk: { type: "choice", choice: "low", confidence: 0.7 },
+          }
+        : {
+            aligned: { type: "noul", noul: 0.95 },
+            risk: { type: "choice", choice: "high", confidence: 0.9 },
+          },
+    });
+  }) as unknown as typeof fetch;
+  const judgeCase = makeCase({
+    id: "A2",
+    deterministicLevel: "low" as const,
+  });
+  const flipped = await runOrderSwapCase(
+    {
+      endpointUrl: "http://192.168.1.60:8402",
+      endpointApiKey: "",
+      endpointModel: "clef-flash",
+      fetcher: flippingFetcher,
+      resolve: async () => ["192.168.1.60"],
+    },
+    judgeCase,
+    { timeoutMs: 1000 },
+  );
+  assert(flipped);
+  assert.equal(flipped!.alignedFlip, true);
+  assert.equal(flipped!.riskArgmaxFlip, true);
+  assert(flipped!.absDiff > 0);
+
+  const failingFetcher = (async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    const questions = body.questions as Record<string, { type: string }>;
+    const negated = /NOT plainly/.test(
+      (questions.aligned as unknown as { instructions: string }).instructions,
+    );
+    if (negated) return new Response("boom", { status: 500 });
+    return Response.json({
+      answers: {
+        aligned: { type: "noul", noul: 0.95 },
+        risk: { type: "choice", choice: "low", confidence: 0.9 },
+      },
+    });
+  }) as unknown as typeof fetch;
+  const skipped = await runOrderSwapCase(
+    {
+      endpointUrl: "http://192.168.1.60:8402",
+      endpointApiKey: "",
+      endpointModel: "clef-flash",
+      fetcher: failingFetcher,
+      resolve: async () => ["192.168.1.60"],
+    },
+    judgeCase,
+    { timeoutMs: 1000 },
+  );
+  assert.equal(skipped, null);
 });
