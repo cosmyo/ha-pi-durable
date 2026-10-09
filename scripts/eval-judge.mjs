@@ -70,6 +70,9 @@ function parseArgs(argv) {
       case "--endpoint-api-key":
         args.endpointApiKey = next();
         break;
+      case "--systemone":
+        args.systemone = true;
+        break;
       case "--timeout-ms":
         args.timeoutMs = Number(next());
         break;
@@ -100,6 +103,7 @@ function printUsage() {
       "  --endpoint-url <url>      Private OpenAI-compatible judge server, e.g. a hearth_judge add-on",
       "  --endpoint-model <id>     Model id to send (default: judge)",
       "  --endpoint-api-key <key>  Optional bearer key for the endpoint",
+      "  --systemone               Treat the endpoint as a Jev/SystemOne decision model (POST /v1/systemone)",
       "  --timeout-ms <n>          Per-case timeout (default 15000)",
       "  --cloud                   Also try Hearth Pi's own signed-in cloud judge (skips gracefully if none)",
       "  --cloud-data-dir <path>   Local credential directory for --cloud (default hearth_pi/.local)",
@@ -141,15 +145,18 @@ async function main() {
   const sections = [];
 
   if (args.endpointUrl) {
-    const { EndpointJudge } = await import("../hearth_pi/src/judge.js");
-    const adapter = new EndpointJudge(
+    const { EndpointJudge, SystemOneJudge } = await import(
+      "../hearth_pi/src/judge.js"
+    );
+    const Judge = args.systemone ? SystemOneJudge : EndpointJudge;
+    const adapter = new Judge(
       args.endpointUrl,
       args.endpointApiKey ?? "",
       args.endpointModel,
     );
     sections.push(
       await runSection({
-        label: `Endpoint judge (${adapter.id} @ ${args.endpointUrl})`,
+        label: `${args.systemone ? "Decision-model" : "Endpoint"} judge (${adapter.id} @ ${args.endpointUrl})`,
         adapter,
         cases,
         timeoutMs: args.timeoutMs,
