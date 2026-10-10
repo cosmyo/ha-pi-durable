@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4 — Code workspace owners for multi-owner households
 
 - Code workspace owners: new optional App option `workspace_owner_ids` (up to 5 HA user IDs, a subset of `authorized_user_ids`) lets a household with several authorized owners enable Code sessions for the named owners only. Other owners get `403 workspace_not_allowed`, no Code sessions in their list and no Code button (bootstrap `workspaceEnabled` is per owner); the controller also refuses to send a non-owner's Code session to the worker. Empty keeps the previous rule (exactly one authorized owner). Startup now logs the specific configuration Fault code (never option values) when App options are invalid.
 
