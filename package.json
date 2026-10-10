@@ -1,6 +1,6 @@
 {
   "name": "ha-pi-durable",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "scripts": {
     "typecheck": "npm --prefix hearth_pi run typecheck",

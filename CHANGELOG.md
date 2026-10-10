@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 — shared household context
+
+- Shared lists: Home Assistant to-do lists (for example a shopping list) appear under **Today → Lists** and in Home chats for every authorized owner. Adding, completing and reopening an item are low risk; renaming and removing are medium and always ask. Lists must be allowed explicitly in scoped mode (`allowed_entities` plus the `todo.*_item` services); a changed or missing item is refused before anything is sent, and an unknown outcome is never retried.
+- Household memory: next to each owner's private memory, facts the household shares (approved through the usual suggestion flow, editable by any authorized owner, shown as "You" or "Another household member"). Home chats get them as a separate, delimited, non-authorizing HOUSEHOLD block; the risk judge never sees memory.
+
 ## 0.3.2 — decision-model risk judge
 
 - Risk judge: `risk_judge_model: systemone/<model>` uses any Jev/SystemOne-compatible decision model (for example Jev, Clef or Clef-flash) at `risk_judge_url`: two typed questions (aligned yes/no, needing 90%; risk level, escalating only upward when the likeliest level or 20% of the probability is higher) instead of generated text; same private-address rules and fail-closed handling as `endpoint/<model>`.

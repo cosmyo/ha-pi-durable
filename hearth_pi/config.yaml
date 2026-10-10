@@ -1,5 +1,5 @@
 name: Hearth Pi
-version: "0.3.2"
+version: "0.3.3"
 slug: hearth_pi
 url: https://github.com/cosmyo/ha-pi-durable
 description: Independent experimental durable AI assistant with read-only tools by default
