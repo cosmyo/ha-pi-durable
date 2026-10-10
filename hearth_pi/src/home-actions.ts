@@ -81,6 +81,15 @@ export function autoRunAllowed(
     (!admin || risk.level !== "low")
   )
     return false;
+  // A generic admin service call into a to-do list (rename, remove, any
+  // non-low change) asks too, so lists behave the same on every path.
+  if (
+    "kind" in action &&
+    action.kind === "service" &&
+    action.domain === "todo" &&
+    risk.level !== "low"
+  )
+    return false;
   if (risk.level === "low") return true;
   return risk.level === "medium" && judge.verdict === "agreed";
 }

@@ -861,3 +861,35 @@ test("HTTP: /api/lists and /api/lists/actions require authentication and Origin/
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("admin generic service calls into a to-do list follow the list rule: non-low changes always ask", async () => {
+  const { autoRunAllowed } = await import("../src/home-actions.js");
+  const agreed = {
+    model: "systemone/example",
+    verdict: "agreed",
+    reason: "",
+    latencyMs: 1,
+  } as JudgeRecord;
+  const medium = {
+    level: "medium",
+    rule: "service_default",
+    reasons: [],
+  } as never;
+  const low = { level: "low", rule: "list_add", reasons: [] } as never;
+  const remove = {
+    kind: "service",
+    domain: "todo",
+    service: "remove_item",
+    data: { entity_id: "todo.example_groceries", item: ["uid-1"] },
+  } as never;
+  const lamp = {
+    kind: "service",
+    domain: "fan",
+    service: "turn_on",
+    data: { entity_id: "fan.example_breezy" },
+  } as never;
+  assert.equal(autoRunAllowed(medium, agreed, remove, true), false);
+  assert.equal(autoRunAllowed(low, agreed, remove, true), true);
+  // other admin services keep the existing medium + agreed rule
+  assert.equal(autoRunAllowed(medium, agreed, lamp, true), true);
+});
