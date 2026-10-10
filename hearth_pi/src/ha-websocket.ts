@@ -1,13 +1,15 @@
 // Minimal, bounded, read-only Home Assistant WebSocket client used only for
-// automation traces and the area/device/entity registries (Home World), which
-// HA exposes over WebSocket and not REST. It can send exactly the allowlisted
+// automation traces, the area/device/entity registries (Home World) and
+// to-do list items (Shared lists), which HA exposes over WebSocket and not
+// REST. It can send exactly the allowlisted
 // message types below; anything else is refused before a frame is written.
 // One short-lived connection per read.
 import { Fault, insist } from "./safety.js";
 
 export const HA_WEBSOCKET_URL = "ws://supervisor/core/websocket";
-// "auth" is only sent by the handshake; commands may use the read-only trace
-// and registry list types. No registry create/update/delete type is allowed.
+// "auth" is only sent by the handshake; commands may use the read-only trace,
+// registry list and to-do item list types. No registry create/update/delete
+// type and no to-do move/subscribe type is allowed.
 export const HA_WEBSOCKET_TYPES = Object.freeze([
   "auth",
   "trace/list",
@@ -15,13 +17,15 @@ export const HA_WEBSOCKET_TYPES = Object.freeze([
   "config/area_registry/list",
   "config/device_registry/list",
   "config/entity_registry/list",
+  "todo/item/list",
 ] as const);
 export type HAWebSocketCommand =
   | "trace/list"
   | "trace/get"
   | "config/area_registry/list"
   | "config/device_registry/list"
-  | "config/entity_registry/list";
+  | "config/entity_registry/list"
+  | "todo/item/list";
 
 // The subset of the WHATWG WebSocket used here; tests inject a fake.
 export type SocketLike = {

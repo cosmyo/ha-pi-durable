@@ -252,9 +252,11 @@ test("proposal schema has no kind that can change permissions, scope, credential
     assert.throws(() => suggestionKind(kind), /suggestion_kind_not_allowed/);
   const f = fakeHA();
   const [memoryTool, appTool, codeTool] = suggestionTools(f.ha);
+  // scope only picks private or household memory: data, never permissions.
   assert.deepEqual(Object.keys(memoryTool!.parameters.properties), [
     "text",
     "reason",
+    "scope",
   ]);
   assert.deepEqual(Object.keys(appTool!.parameters.properties), [
     "appId",

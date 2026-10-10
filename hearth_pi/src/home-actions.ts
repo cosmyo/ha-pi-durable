@@ -64,8 +64,23 @@ export function requestText(content: unknown): string {
     )
     .join("\n");
 }
-export function autoRunAllowed(risk: RiskAssessment, judge: JudgeRecord) {
+// Shared list changes: a medium one (rename, remove) always asks, whatever
+// the judge says. AGENTS.md lets scoped Full access auto-approve only the
+// supported light/switch actions, so in scoped mode every list change asks;
+// in admin mode a low one (add, complete, reopen) may run once.
+export function autoRunAllowed(
+  risk: RiskAssessment,
+  judge: JudgeRecord,
+  action: Action,
+  admin: boolean,
+) {
   if (judge.verdict === "misaligned") return false;
+  if (
+    "kind" in action &&
+    action.kind === "todo" &&
+    (!admin || risk.level !== "low")
+  )
+    return false;
   if (risk.level === "low") return true;
   return risk.level === "medium" && judge.verdict === "agreed";
 }
@@ -405,7 +420,7 @@ export class HomeActions {
         };
       }, context),
     );
-    const action = this.ha.action(value);
+    let action = this.ha.action(value);
     insist(this.controllers.size < 4, "action_capacity", 429);
     const controller = new AbortController();
     this.controllers.set(controller, owner);
@@ -419,6 +434,8 @@ export class HomeActions {
       )?.items[id];
       if (existing) return existing;
       // Live discovery can be slow; never hold the permission/revocation gate here.
+      // List actions get the controller-read item text (hashed, re-checked).
+      action = await this.ha.prepareAction(action, signal);
       await this.ha.validateLive(action, signal);
       const base = classifyAction(
         action,
@@ -455,7 +472,8 @@ export class HomeActions {
           insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
           const now = Date.now();
           const automatic =
-            binding.mode === "full" && autoRunAllowed(risk, judge);
+            binding.mode === "full" &&
+            autoRunAllowed(risk, judge, action, this.ha.admin);
           const item: Proposal = {
             id,
             action,
@@ -516,12 +534,13 @@ export class HomeActions {
         insist(this.binding(p).mode !== "read-only", "home_read_only", 403);
       }, ctx),
     );
-    const action = this.ha.action(value);
+    let action = this.ha.action(value);
     insist(this.controllers.size < 4, "action_capacity", 429);
     const controller = new AbortController();
     this.controllers.set(controller, owner);
     const signal = controller.signal;
     try {
+      action = await this.ha.prepareAction(action, signal);
       await this.ha.validateLive(action, signal);
       const risk = classifyAction(
         action,
@@ -580,7 +599,7 @@ export class HomeActions {
       // owner reviews the exact action like any other proposal.
       if (
         proposal.authorization?.mode !== "full" ||
-        !autoRunAllowed(risk, NO_JUDGE)
+        !autoRunAllowed(risk, NO_JUDGE, action, this.ha.admin)
       )
         return proposal;
       await this.dispatch(owner, conversationId, proposal, false, signal);
@@ -699,7 +718,12 @@ export class HomeActions {
       insist(
         proposal.risk &&
           proposal.judge &&
-          autoRunAllowed(proposal.risk, proposal.judge),
+          autoRunAllowed(
+            proposal.risk,
+            proposal.judge,
+            proposal.action,
+            this.ha.admin,
+          ),
         "risk_requires_approval",
         403,
       );

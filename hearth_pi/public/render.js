@@ -864,6 +864,13 @@ export function renderProposals(
     const card = node("article", "", "action-card");
     renderActionSummary(card, proposal);
     renderRisk(card, proposal);
+    if (proposal.origin?.kind === "list")
+      card.append(
+        node(
+          "p",
+          `Requested by you from Today → Lists (${proposal.origin.entityId})`,
+        ),
+      );
     if (proposal.origin?.kind === "app")
       card.append(
         node(
@@ -980,6 +987,23 @@ const JUDGE_LABEL = {
 };
 // One readable summary per action kind. All text is untrusted: node() only
 // ever sets textContent.
+// A shared list change in words. `label` is the item text Hearth read from
+// Home Assistant when the change was proposed (untrusted: textContent only).
+export function todoActionTitle(action) {
+  const q = (value) => `"${value ?? ""}"`;
+  switch (action.op) {
+    case "add":
+      return `Add ${q(action.summary)}`;
+    case "complete":
+      return `Mark ${q(action.label)} done`;
+    case "reopen":
+      return `Reopen ${q(action.label)}`;
+    case "rename":
+      return `Rename ${q(action.label)} → ${q(action.summary)}`;
+    default:
+      return `Remove ${q(action.label)}`;
+  }
+}
 function renderActionSummary(card, proposal) {
   const action = proposal.action;
   const status = ` · ${proposal.status}`;
@@ -988,6 +1012,13 @@ function renderActionSummary(card, proposal) {
       node("h3", `${action.service}${status}`),
       node("p", action.entityId),
       node("pre", JSON.stringify(action.data, null, 2)),
+    );
+    return;
+  }
+  if (action.kind === "todo") {
+    card.append(
+      node("h3", `${todoActionTitle(action)}${status}`),
+      node("p", action.entityId),
     );
     return;
   }

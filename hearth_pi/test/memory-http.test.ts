@@ -263,6 +263,62 @@ test("Memory and Suggestions HTTP routes enforce auth, Origin/CSRF, owner scope 
       (await post("/api/memory/forget", { id: bedtime.id })).status,
       404,
     );
+    // Household memory routes: add with scope, revision-checked edit and
+    // forget, and Share with household (Origin/CSRF like the rest).
+    const household = await post("/api/memory/add", {
+      text: "Bins go out on Tuesday",
+      scope: "household",
+    });
+    assert.equal(household.status, 200);
+    const householdBody = await household.json();
+    assert.equal(householdBody.household.items[0].mine, true);
+    assert.doesNotMatch(JSON.stringify(householdBody), /createdBy|updatedBy/);
+    assert.equal(
+      (await post("/api/memory/add", { text: "x", scope: "everyone" })).status,
+      400,
+    );
+    const stale = await post("/api/memory/edit", {
+      id: "h_1",
+      text: "Bins go out on Monday",
+      revision: householdBody.household.revision + 5,
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).error, "memory_stale");
+    assert.equal(
+      (
+        await post("/api/memory/edit", {
+          id: "h_1",
+          text: "Bins go out on Monday",
+          revision: householdBody.household.revision,
+        })
+      ).status,
+      200,
+    );
+    const privateId = householdBody.items[0].id;
+    assert.equal(
+      (
+        await post(
+          "/api/memory/share",
+          { id: privateId },
+          { "x-hearth-csrf": "forged" },
+        )
+      ).status,
+      403,
+    );
+    const shared = await (
+      await post("/api/memory/share", { id: privateId })
+    ).json();
+    assert.equal(shared.items.length, householdBody.items.length - 1);
+    assert.equal(shared.household.items.length, 2);
+    assert.equal(
+      (
+        await post("/api/memory/forget", {
+          id: "h_1",
+          revision: shared.household.revision,
+        })
+      ).status,
+      200,
+    );
     assert.equal(f.posts.length, 0, "no Home Assistant writes");
   } finally {
     await app.close();

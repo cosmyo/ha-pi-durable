@@ -11,6 +11,10 @@ export const supportedServices = [
   "light.turn_off",
   "switch.turn_on",
   "switch.turn_off",
+  // Shared lists (Home Assistant to-do lists); see src/lists.ts.
+  "todo.add_item",
+  "todo.update_item",
+  "todo.remove_item",
 ];
 export type AccessMode = "scoped" | "admin";
 export type Policy = {
@@ -119,7 +123,7 @@ export async function loadConfig(): Promise<Config> {
   const services = strings(
     options.allowed_services ??
       (process.env.HEARTH_ALLOWED_SERVICES ?? "").split(",").filter(Boolean),
-    4,
+    supportedServices.length,
   );
   const entities = strings(
     options.allowed_entities ??

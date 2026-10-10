@@ -191,7 +191,10 @@ test("Today suggestions render untrusted text as text; Accept/Edit/Reject/Snooze
     (b) => b.textContent === "Save to memory",
   )!;
   save.dispatchEvent(new Event("click"));
-  assert.deepEqual(calls.at(-1)!.slice(2), ["Study fan is called Breezy"]);
+  assert.deepEqual(calls.at(-1)!.slice(2), [
+    "Study fan is called Breezy",
+    "private",
+  ]);
   // Stale pending app change warns before accepting.
   const stale = suggestionsData();
   stale.suggestions.items[1]!.currentVersion = 2;
@@ -383,11 +386,15 @@ test("Settings → Memory renders items as text with source, trimming warning, e
   };
   renderMemory(target, data, ui, handlers);
   noExecutableMarkup(target);
-  assert.match(target.textContent!, /2 items · 3\.9 KB of 4\.0 KB shared/);
+  assert.match(
+    target.textContent!,
+    /2 items · 3\.9 KB of 4\.0 KB used by Hearth/,
+  );
   assert.match(target.textContent!, /1 oldest item is over the 4\.0 KB limit/);
   assert.match(target.textContent!, /Accepted suggestion · <img/);
   assert.match(target.textContent!, /You wrote this/);
-  assert.match(target.textContent!, /Not shared \(over limit\)/);
+  assert.match(target.textContent!, /Not used \(over limit\)/);
+  assert.doesNotMatch(target.textContent!, /shared with Hearth/);
   const rows = [...target.querySelectorAll(".memory-list > li")];
   assert.equal(rows[1]!.className, "trimmed");
   const forget = [...rows[0]!.querySelectorAll("button")].find(
@@ -402,7 +409,11 @@ test("Settings → Memory renders items as text with source, trimming warning, e
   [...target.querySelectorAll("button")]
     .find((b) => b.textContent === "Remember")!
     .dispatchEvent(new Event("click"));
-  assert.deepEqual(calls.at(-1), ["add", "Study fan is called Breezy"]);
+  assert.deepEqual(calls.at(-1), [
+    "add",
+    "Study fan is called Breezy",
+    "private",
+  ]);
   ui.editing = "m_1";
   renderMemory(target, data, ui, handlers);
   const edit = target.querySelector("#memory-edit-m_1") as unknown as {
@@ -441,4 +452,190 @@ test("Settings → Memory renders items as text with source, trimming warning, e
     target.textContent!,
     /Saved · Wrong device · Hearth may suggest a fix/,
   );
+});
+
+test("Settings → Memory: Only you and Household sections, authorship only as You / another member, scope choice and Share", async () => {
+  const { target, renderMemory, Event } = await load();
+  const calls: unknown[][] = [];
+  const handlers = {
+    add: (...a: unknown[]) => calls.push(["add", ...a]),
+    edit: (...a: unknown[]) => calls.push(["edit", ...a]),
+    forget: (...a: unknown[]) => calls.push(["forget", ...a]),
+    startEdit: (...a: unknown[]) => calls.push(["startEdit", ...a]),
+    share: (...a: unknown[]) => calls.push(["share", ...a]),
+  };
+  const data = {
+    items: [
+      {
+        id: "m_1",
+        text: "Bedtime is around 23:00",
+        source: { kind: "owner" },
+        sourceTitle: "",
+        created: now,
+        updated: now,
+        inContext: true,
+      },
+    ],
+    usedBytes: 30,
+    trimmed: 0,
+    limits: { text: 200, items: 60, contextBytes: 4096 },
+    household: {
+      items: [
+        {
+          id: "h_2",
+          text: hostile,
+          created: now,
+          updated: now,
+          inContext: true,
+          mine: false,
+          editedByOther: false,
+          sourceKind: "owner",
+          sourceTitle: "",
+        },
+        {
+          id: "h_1",
+          text: "Bins go out on Tuesday evening",
+          created: now - 1000,
+          updated: now - 500,
+          inContext: false,
+          mine: true,
+          editedByOther: true,
+          sourceKind: "owner",
+          sourceTitle: "",
+        },
+      ],
+      revision: 3,
+      usedBytes: 200,
+      trimmed: 1,
+      limits: { text: 200, items: 60, contextBytes: 4096 },
+    },
+  };
+  const ui: { editing: string | null; draft: string; scope?: string } = {
+    editing: null,
+    draft: "",
+  };
+  renderMemory(target, data, ui, handlers);
+  noExecutableMarkup(target);
+  const sections = [...target.querySelectorAll(".memory-section")];
+  assert.equal(sections.length, 2);
+  assert.match(sections[0]!.textContent!, /^Only you/);
+  assert.match(
+    sections[1]!.textContent!,
+    /^Household — every member's Hearth uses these/,
+  );
+  assert.match(sections[1]!.textContent!, /<img src=x onerror/);
+  assert.match(sections[1]!.textContent!, /Added by another household member/);
+  assert.match(
+    sections[1]!.textContent!,
+    /You added this · edited by another member · .* · Not used \(over limit\)/,
+  );
+  assert.match(sections[1]!.textContent!, /1 oldest item is over/);
+  // Private rows offer Share; household rows do not.
+  const privateButtons = [...sections[0]!.querySelectorAll("button")].map(
+    (b) => b.textContent,
+  );
+  assert.deepEqual(privateButtons, ["Edit", "Forget", "Share with household"]);
+  const householdButtons = [...sections[1]!.querySelectorAll("button")].map(
+    (b) => b.textContent,
+  );
+  assert.deepEqual(householdButtons, ["Edit", "Forget", "Edit", "Forget"]);
+  [...sections[0]!.querySelectorAll("button")]
+    .find((b) => b.textContent === "Share with household")!
+    .dispatchEvent(new Event("click"));
+  assert.deepEqual(calls.at(-1)![0], "share");
+  assert.equal((calls.at(-1)![1] as { id: string }).id, "m_1");
+  [...sections[1]!.querySelectorAll("button")]
+    .find((b) => b.textContent === "Forget")!
+    .dispatchEvent(new Event("click"));
+  assert.equal((calls.at(-1)![1] as { id: string }).id, "h_2");
+  // Two scope choices, Only you by default; choosing Household is sent.
+  const radios = [
+    ...target.querySelectorAll('input[name="memory-new-scope"]'),
+  ] as unknown as {
+    value: string;
+    checked: boolean;
+    dispatchEvent: (e: unknown) => void;
+  }[];
+  assert.deepEqual(
+    radios.map((r) => [r.value, r.checked]),
+    [
+      ["private", true],
+      ["household", false],
+    ],
+  );
+  assert(
+    [...target.querySelectorAll(".memory-scope-choice")].every((l) =>
+      l.className.includes("memory-scope-choice"),
+    ),
+  );
+  radios[1]!.checked = true;
+  radios[1]!.dispatchEvent(new Event("change"));
+  (target.querySelector("#memory-new") as unknown as { value: string }).value =
+    "Recycling is collected on Friday";
+  [...target.querySelectorAll("button")]
+    .find((b) => b.textContent === "Remember")!
+    .dispatchEvent(new Event("click"));
+  assert.deepEqual(calls.at(-1), [
+    "add",
+    "Recycling is collected on Friday",
+    "household",
+  ]);
+  // No owner ids, chat titles or names are part of the rendered household view.
+  assert.doesNotMatch(target.textContent!, /createdBy|updatedBy/);
+});
+
+test("Today memory suggestion shows its scope and Edit can switch it", async () => {
+  const { target, renderToday, Event } = await load();
+  const calls: unknown[][] = [];
+  const suggestion = new Proxy(
+    {},
+    {
+      get:
+        (_t, name) =>
+        (...args: unknown[]) =>
+          calls.push([name, ...args]),
+    },
+  );
+  const handlers = {
+    suggestion,
+    dismiss() {},
+    snooze() {},
+    ask() {},
+    openApp() {},
+    createWatcher() {},
+  };
+  const data = suggestionsData();
+  const item = data.suggestions.items[0]! as unknown as {
+    memory: { text: string; scope?: string };
+  };
+  item.memory = { text: "Bins go out on Tuesday evening", scope: "household" };
+  renderToday(target, data, handlers, { editing: null });
+  assert.match(target.textContent!, /For: the household/);
+  const legacy = suggestionsData();
+  renderToday(target, legacy, handlers, { editing: null });
+  assert.match(target.textContent!, /For: only you/);
+  renderToday(target, data, handlers, { editing: "s_1" });
+  const radios = [
+    ...target.querySelectorAll('input[name="suggestion-scope-s_1"]'),
+  ] as unknown as {
+    value: string;
+    checked: boolean;
+    dispatchEvent: (e: unknown) => void;
+  }[];
+  assert.deepEqual(
+    radios.map((r) => [r.value, r.checked]),
+    [
+      ["private", false],
+      ["household", true],
+    ],
+  );
+  radios[0]!.checked = true;
+  radios[0]!.dispatchEvent(new Event("change"));
+  [...target.querySelectorAll("button")]
+    .find((b) => b.textContent === "Save to memory")!
+    .dispatchEvent(new Event("click"));
+  assert.deepEqual(calls.at(-1)!.slice(2), [
+    "Bins go out on Tuesday evening",
+    "private",
+  ]);
 });

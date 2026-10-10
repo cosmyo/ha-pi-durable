@@ -4,6 +4,7 @@ import {
   renderProposals,
   renderCanvas,
   renderWorldProposal,
+  todoActionTitle,
 } from "./render.js";
 import {
   renderApp,
@@ -83,12 +84,21 @@ let csrf = "",
   transcriptEmpty = true,
   appResultCount = -1,
   todayData = null,
-  todayUi = { editing: null, workspaceEnabled: true },
+  todayUi = {
+    editing: null,
+    workspaceEnabled: true,
+    lists: null,
+    listOpen: new Set(),
+    listMenu: null,
+    listRename: null,
+    listDrafts: {},
+    listFull: false,
+  },
   workspaceEnabled = true,
   sessionUsesApp = false,
   suggestionResultCount = -1,
   memoryData = null,
-  memoryUi = { editing: null, draft: "" },
+  memoryUi = { editing: null, draft: "", scope: "private" },
   feedbackSession = null,
   feedbackItems = {},
   feedbackRows = new Map(),
@@ -2040,14 +2050,15 @@ $("settings-insights-row").addEventListener("click", () => {
   closeSettingsSheet();
   openInsights();
 });
-// --- Settings → Memory: owner-approved household facts ---
+// --- Settings → Memory: the owner's private items and the household's ---
 function memoryFeedback(value) {
   $("memory-feedback").textContent = value;
 }
 function paintMemory() {
   if (!memoryData) return;
+  const shared = memoryData.household?.items.length ?? 0;
   $("memory-summary").textContent =
-    `${memoryData.items.length} item${memoryData.items.length === 1 ? "" : "s"}`;
+    `${memoryData.items.length} item${memoryData.items.length === 1 ? "" : "s"}${shared ? ` · ${shared} household` : ""}`;
   renderMemory($("memory-body"), memoryData, memoryUi, memoryHandlers);
 }
 async function loadMemory() {
@@ -2065,7 +2076,9 @@ function memoryError(error) {
       ? "Memory is full. Forget an item first."
       : error.message === "memory_duplicate"
         ? "That is already remembered."
-        : error.message;
+        : error.message === "memory_stale"
+          ? "Someone in the household changed household memory. The list was refreshed; try again."
+          : error.message;
 }
 async function memoryAction(path, payload, message) {
   try {
@@ -2077,15 +2090,28 @@ async function memoryAction(path, payload, message) {
     return true;
   } catch (error) {
     memoryFeedback(`Not saved: ${memoryError(error)}`);
+    if (error.message === "memory_stale") {
+      memoryUi.editing = null;
+      await loadMemory();
+    }
     return false;
   }
 }
+// Household items are revision-checked: a change by another member since
+// this list was loaded is refused (memory_stale) instead of overwritten.
+function memoryTarget(item) {
+  return item.id.startsWith("h_")
+    ? { id: item.id, revision: memoryData?.household?.revision ?? 0 }
+    : { id: item.id };
+}
 const memoryHandlers = {
-  add: async (value) => {
+  add: async (value, scope = "private") => {
     if (
-      await memoryAction("memory/add", { text: value }, (result) =>
+      await memoryAction("memory/add", { text: value, scope }, (result) =>
         result.added
-          ? "Remembered. Hearth uses it from the next message."
+          ? scope === "household"
+            ? "Remembered for the household. Every member's Hearth uses it from the next message."
+            : "Remembered. Hearth uses it from the next message."
           : "That is already remembered.",
       )
     ) {
@@ -2099,15 +2125,34 @@ const memoryHandlers = {
     if (id) document.getElementById(`memory-edit-${id}`)?.focus?.();
   },
   edit: (item, value) =>
-    void memoryAction("memory/edit", { id: item.id, text: value }, "Saved."),
+    void memoryAction(
+      "memory/edit",
+      { ...memoryTarget(item), text: value },
+      "Saved.",
+    ),
   forget: (item) => {
     if (
       !window.confirm(
-        "Forget this? Hearth stops receiving it from its next request. Earlier chats and the App's private store keep committed history; it is not securely erased.",
+        item.id.startsWith("h_")
+          ? "Forget this for the whole household? Every member's Hearth stops receiving it from its next request. Earlier chats and the App's private store keep committed history; it is not securely erased."
+          : "Forget this? Hearth stops receiving it from its next request. Earlier chats and the App's private store keep committed history; it is not securely erased.",
       )
     )
       return;
-    void memoryAction("memory/forget", { id: item.id }, "Forgotten.");
+    void memoryAction("memory/forget", memoryTarget(item), "Forgotten.");
+  },
+  share: (item) => {
+    if (
+      !window.confirm(
+        "Share this with the household? It moves from Only you to Household, and every household member's Hearth will use it. Any member can then edit or forget it.",
+      )
+    )
+      return;
+    void memoryAction(
+      "memory/share",
+      { id: item.id },
+      "Shared with the household.",
+    );
   },
 };
 function openMemory() {
@@ -2354,13 +2399,20 @@ async function suggestionAction(path, payload, message) {
   }
 }
 const suggestionHandlers = {
-  accept: (s, text) =>
+  accept: (s, text, scope) =>
     void suggestionAction(
       "suggestions/accept",
-      { id: s.id, hash: s.hash, ...(text === undefined ? {} : { text }) },
+      {
+        id: s.id,
+        hash: s.hash,
+        ...(text === undefined ? {} : { text }),
+        ...(scope === undefined ? {} : { scope }),
+      },
       (decision) =>
         decision?.kind === "memory"
-          ? "Saved to memory. Hearth uses it from the next message."
+          ? decision.scope === "household"
+            ? "Saved to household memory. Every member's Hearth uses it from the next message."
+            : "Saved to memory. Hearth uses it from the next message."
           : `App updated to v${decision?.version}. Revert under Versions if needed.`,
     ),
   edit: (id) => {
@@ -2425,8 +2477,140 @@ const suggestionHandlers = {
       }
     })(),
 };
+// --- Today → Lists: shared Home Assistant to-do lists. Every change is a
+// press in a dedicated "Shared lists" Home chat, so its receipts live there;
+// Ask shows the same exact approval card as app and Home World controls. ---
+const SHARED_LISTS_TITLE = "Shared lists";
+async function loadLists() {
+  try {
+    todayUi.lists = await api("lists");
+  } catch (error) {
+    if (error.message !== "rate_limit") todayUi.lists = null;
+  }
+  paintToday();
+}
+async function newListSession() {
+  const result = await api("sessions", {
+    title: SHARED_LISTS_TITLE,
+    kind: "home",
+    requestId: crypto.randomUUID(),
+  });
+  await listSessions();
+  return result.id;
+}
+// The most recent Home chat named "Shared lists", else a new one.
+async function listSession() {
+  const { items } = await api("sessions");
+  const existing = items
+    .filter((s) => s.title === SHARED_LISTS_TITLE && s.kind !== "workspace")
+    .sort((a, b) => b.created - a.created || b.id - a.id)[0];
+  return existing ? existing.id : newListSession();
+}
+const LIST_ERRORS = {
+  home_read_only:
+    "Home permissions are Read-only. Choose Ask or Full access to change lists.",
+  home_outcome_unresolved:
+    "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first.",
+  list_item_changed:
+    "That item changed in Home Assistant since you saw it. The list was read again; nothing was sent.",
+  list_item_not_found:
+    "That item is no longer on the list. The list was read again; nothing was sent.",
+  already_on_list: "That is already on the list.",
+  list_feature_unsupported: "This list does not support that.",
+  service_not_allowed: "Outside Hearth's configured service scope.",
+  entity_not_allowed: "This list is outside Hearth's configured scope.",
+  invalid_list_text: "Use one line of text, up to 200 characters.",
+  rate_limit: "Too many list reads in a minute. Wait a moment.",
+  action_capacity: "Too many actions in flight. Try again shortly.",
+};
+async function pressList(list, op, item, summary) {
+  todayUi.listMenu = null;
+  todayUi.listRename = null;
+  try {
+    const sessionId = await listSession();
+    todayFeedback("Sending to Home permissions…");
+    const result = await api("lists/actions", {
+      sessionId,
+      entityId: list.entityId,
+      op,
+      ...(item ? { uid: item.uid } : {}),
+      ...(summary === undefined ? {} : { summary }),
+    });
+    const p = result.proposal;
+    const title = todoActionTitle(p.action);
+    if (op === "add" && p.status !== "rejected")
+      delete todayUi.listDrafts[list.entityId];
+    if (p.status === "pending") {
+      todayFeedback(
+        `Review the exact change to continue. It is also listed in the ${SHARED_LISTS_TITLE} chat.`,
+      );
+      showActionApproval(sessionId, p, async (message) => {
+        todayFeedback(message);
+        await loadLists();
+      });
+    } else if (p.status === "accepted")
+      todayFeedback(
+        `Home Assistant accepted: ${title}. Everyone sharing this list sees it.`,
+      );
+    else if (p.status === "unknown")
+      todayFeedback(
+        `Outcome unknown for ${title}. It will not be retried. Check the list, then record what you saw on the action card in the ${SHARED_LISTS_TITLE} chat.`,
+      );
+    else todayFeedback(`Action ${p.status}. ${p.resolution || ""}`);
+  } catch (error) {
+    if (error.message === "proposal_limit") {
+      // The refused press changed nothing; never resubmit it automatically.
+      todayUi.listFull = true;
+      todayFeedback(
+        "This chat is full of receipts. Start a new Shared lists chat?",
+      );
+    } else
+      todayFeedback(
+        LIST_ERRORS[error.message] ?? `Not sent: ${error.message}.`,
+      );
+  }
+  await loadLists();
+}
+const listHandlers = {
+  toggle: (entityId) => {
+    if (todayUi.listOpen.has(entityId)) todayUi.listOpen.delete(entityId);
+    else todayUi.listOpen.add(entityId);
+    paintToday();
+  },
+  menu: (key) => {
+    todayUi.listMenu = key;
+    paintToday();
+  },
+  startRename: (key) => {
+    todayUi.listRename = key;
+    todayUi.listMenu = null;
+    paintToday();
+  },
+  add: (list, text) => {
+    if (!text.trim()) return;
+    void pressList(list, "add", null, text);
+  },
+  complete: (list, item) => void pressList(list, "complete", item),
+  reopen: (list, item) => void pressList(list, "reopen", item),
+  rename: (list, item, text) => void pressList(list, "rename", item, text),
+  remove: (list, item) => void pressList(list, "remove", item),
+  newChat: () =>
+    void (async () => {
+      try {
+        await newListSession();
+        todayUi.listFull = false;
+        paintToday();
+        todayFeedback(
+          "New Shared lists chat started. Nothing was sent; make your change again.",
+        );
+      } catch (error) {
+        todayFeedback(`Could not start a chat: ${error.message}.`);
+      }
+    })(),
+};
 const todayHandlers = {
   suggestion: suggestionHandlers,
+  lists: listHandlers,
   dismiss: (card) =>
     void todayAction("today/dismiss", { id: card.id }, "Dismissed."),
   snooze: (card, until) =>
@@ -2466,6 +2650,7 @@ async function openToday() {
     return;
   }
   renderToday($("today-list"), todayData, todayHandlers, todayUi);
+  void loadLists();
   // Opening the inbox marks what is shown as seen; the "New" labels stay
   // until the next refresh so you can still tell which cards were new.
   if (todayData.unread)

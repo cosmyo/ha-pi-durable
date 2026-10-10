@@ -23,6 +23,7 @@ import { AppStore } from "./apps.js";
 import { Proactive } from "./proactive.js";
 import { FeedbackStore } from "./feedback.js";
 import { MemoryStore } from "./memory.js";
+import { ListStore } from "./lists.js";
 import { ProfileStore } from "./profile.js";
 import { SuggestionStore } from "./suggestions.js";
 import { WorldStore } from "./world.js";
@@ -148,6 +149,7 @@ export function appServer(
     });
   const feedback = new FeedbackStore(runtime);
   const memory = new MemoryStore(runtime);
+  const lists = new ListStore(runtime, actions.engine.ha);
   const profile = new ProfileStore(runtime);
   const suggestions = new SuggestionStore(runtime, actions.engine.ha);
   // Today = watcher/briefing cards plus the owner's open suggestions; new
@@ -236,7 +238,9 @@ export function appServer(
           safety:
             config.policy.access === "admin"
               ? "Home permissions · Admin access · every change is a risk-classified proposal"
-              : "Home permissions · scoped light/switch controls only",
+              : config.policy.services.some((s) => s.startsWith("todo."))
+                ? "Home permissions · scoped light/switch controls and to-do lists only"
+                : "Home permissions · scoped light/switch controls only",
           access: config.policy.access === "admin" ? "admin" : "scoped",
           riskJudge: actions.engine.judge.describe(),
           entityScopeCount: new Set(config.policy.entities).size,
@@ -414,7 +418,7 @@ export function appServer(
       }
       if (req.method === "GET" && path === "/api/memory")
         return json(res, 200, await memory.list(owner));
-      const memoryRoute = /^\/api\/memory\/(add|edit|forget)$/.exec(path);
+      const memoryRoute = /^\/api\/memory\/(add|edit|forget|share)$/.exec(path);
       if (memoryRoute && req.method === "POST") {
         const v = await body(req);
         const operation = memoryRoute[1];
@@ -425,9 +429,17 @@ export function appServer(
             ? await memory.add(owner, v)
             : operation === "edit"
               ? await memory.edit(owner, v)
-              : await memory.forget(owner, v),
+              : operation === "share"
+                ? await memory.share(owner, v)
+                : await memory.forget(owner, v),
         );
       }
+      // Shared lists (HA to-do lists) in Today: live reads, and presses that
+      // become exact Home permissions proposals in one of the owner's chats.
+      if (req.method === "GET" && path === "/api/lists")
+        return json(res, 200, await lists.lists(owner));
+      if (req.method === "POST" && path === "/api/lists/actions")
+        return json(res, 200, await lists.press(owner, await body(req)));
       if (req.method === "GET" && path === "/api/proactive")
         return json(res, 200, await proactive.settings(owner));
       const proactiveRoute =

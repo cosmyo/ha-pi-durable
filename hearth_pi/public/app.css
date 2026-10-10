@@ -2391,6 +2391,117 @@ dialog .pro-field label {
   border-style: dashed;
   border-color: #5c7a72;
 }
+/* Today → Lists: calm, collapsed by default, 44px touch targets. */
+.lists {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.lists-heading {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.lists-paused,
+.lists-full {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #2d2a22;
+  color: var(--warm);
+  font-size: 0.86rem;
+}
+.lists-full p {
+  margin: 0 0 6px;
+}
+.list-card {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #1b2a29;
+  overflow-wrap: anywhere;
+}
+.list-card button,
+.list-card input {
+  min-height: 44px;
+}
+.list-header {
+  display: flex;
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.list-count {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+.list-body {
+  padding: 0 12px 10px;
+}
+.list-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.list-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.list-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.list-check {
+  width: 44px;
+  min-width: 44px;
+  border-radius: 50%;
+  border: 2px solid var(--teal);
+  background: transparent;
+}
+.list-more {
+  min-width: 44px;
+}
+.list-menu,
+.list-rename,
+.list-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+.list-rename input,
+.list-add input {
+  flex: 1 1 160px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 10px;
+  background: var(--bg);
+}
+.list-add {
+  margin-top: 8px;
+}
+.list-done summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+}
+.list-item.done .list-text {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+.list-reason {
+  margin: 6px 0 0;
+  font-size: 0.82rem;
+}
 .today-card.suggestion.unread {
   border-color: var(--teal);
 }
@@ -2551,6 +2662,50 @@ dialog .pro-field label {
 }
 #memory-dialog button {
   min-height: 44px;
+}
+.memory-section {
+  margin: 14px 0 0;
+}
+.memory-heading {
+  margin: 0;
+  font-size: 1rem;
+}
+.memory-section.household .memory-heading {
+  color: var(--teal);
+}
+.memory-scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.memory-scope legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+.memory-scope-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.memory-scope-choice input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+}
+.memory-for {
+  margin: 2px 0;
+  font-size: 0.82rem;
 }
 @media (max-width: 720px), (max-height: 560px) {
   .memory-list .today-actions button {

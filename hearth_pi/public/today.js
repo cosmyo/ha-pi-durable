@@ -217,16 +217,30 @@ function suggestionCard(s, data, handlers, ui) {
       area.value = s.memory.text;
       const label = node("label", "Memory text (plain text, 200 characters)");
       label.htmlFor = area.id;
-      box.append(label, area);
+      let scope = s.memory.scope === "household" ? "household" : "private";
+      box.append(
+        label,
+        area,
+        scopeChoice(`suggestion-scope-${s.id}`, scope, (value) => {
+          scope = value;
+        }),
+      );
       article.append(box);
       const save = button("Save to memory", "approve", "Save edited memory");
-      save.addEventListener("click", () => handlers.accept(s, area.value));
+      save.addEventListener("click", () =>
+        handlers.accept(s, area.value, scope),
+      );
       const cancel = button("Cancel", "", "Cancel editing");
       cancel.addEventListener("click", () => handlers.edit(null));
       actions.append(save, cancel);
     } else
       article.append(
         node("p", `“${s.memory.text}”`, "today-body memory-quote"),
+        node(
+          "p",
+          `For: ${s.memory.scope === "household" ? "the household" : "only you"}`,
+          "muted memory-for",
+        ),
       );
     if (s.reason) article.append(node("p", `Why: ${s.reason}`, "muted"));
     if (!editing) {
@@ -418,11 +432,205 @@ export function renderSuggestions(container, data, handlers, ui = {}) {
   container.append(box);
   return true;
 }
+// ---- Lists (shared Home Assistant to-do lists) ----
+// ui: {lists, listOpen: Set, listMenu, listRename, listDrafts, listFull}.
+// Every change is a press that becomes an exact Home permissions proposal;
+// item text is untrusted (written by people or integrations): textContent.
+const listKey = (list, item) => `${list.entityId}|${item.uid}`;
+function listReasons(list) {
+  return [
+    ...new Set(
+      [list.controls.add, list.controls.update, list.controls.remove].map(
+        (c) => c.reason,
+      ),
+    ),
+  ];
+}
+function listItemRow(list, item, handlers, ui) {
+  const key = listKey(list, item);
+  const row = node("li", "", "list-item");
+  const update = list.controls.update;
+  const check = button("", "list-check", `Mark ${item.summary} done`);
+  check.disabled = !update.enabled;
+  check.addEventListener("click", () => handlers.complete(list, item));
+  row.append(check);
+  if (ui.listRename === key) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.maxLength = 200;
+    input.value = item.summary;
+    input.id = `list-rename-${list.entityId}-${item.uid}`.replace(
+      /[^A-Za-z0-9_-]/g,
+      "_",
+    );
+    input.setAttribute("aria-label", `New text for ${item.summary}`);
+    const save = button("Save", "approve", `Rename ${item.summary}`);
+    save.addEventListener("click", () =>
+      handlers.rename(list, item, input.value),
+    );
+    const cancel = button("Cancel", "", "Cancel renaming");
+    cancel.addEventListener("click", () => handlers.startRename(null));
+    const box = node("div", "", "list-rename");
+    box.append(input, save, cancel);
+    row.append(box);
+    return row;
+  }
+  row.append(node("span", item.summary, "list-text"));
+  const more = button("⋯", "list-more", `More for ${item.summary}`);
+  more.setAttribute("aria-haspopup", "true");
+  more.setAttribute("aria-expanded", String(ui.listMenu === key));
+  more.addEventListener("click", () =>
+    handlers.menu(ui.listMenu === key ? null : key),
+  );
+  row.append(more);
+  if (ui.listMenu === key) {
+    const menu = node("div", "", "list-menu");
+    menu.setAttribute("role", "menu");
+    const rename = button("Rename", "", `Rename ${item.summary}`);
+    rename.setAttribute("role", "menuitem");
+    rename.disabled = !update.enabled;
+    rename.addEventListener("click", () => handlers.startRename(key));
+    const remove = button("Remove", "", `Remove ${item.summary}`);
+    remove.setAttribute("role", "menuitem");
+    remove.disabled = !list.controls.remove.enabled;
+    remove.addEventListener("click", () => handlers.remove(list, item));
+    menu.append(rename, remove);
+    row.append(menu);
+  }
+  return row;
+}
+function listElement(list, handlers, ui) {
+  const open = ui.listOpen?.has(list.entityId) ?? false;
+  const article = node("article", "", "list-card");
+  const header = button(
+    "",
+    "list-header",
+    `${list.name}, ${list.openCount} open`,
+  );
+  header.setAttribute("aria-expanded", String(open));
+  header.append(
+    node("span", list.name, "list-name"),
+    node("span", `${list.openCount} open`, "list-count"),
+  );
+  header.addEventListener("click", () => handlers.toggle(list.entityId));
+  article.append(header);
+  if (!open) return article;
+  const body = node("div", "", "list-body");
+  if (!list.available)
+    body.append(
+      node(
+        "p",
+        "Couldn't read this list from Home Assistant right now.",
+        "muted",
+      ),
+    );
+  const items = node("ul", "", "list-items");
+  for (const item of list.items.filter((i) => i.status === "needs_action"))
+    items.append(listItemRow(list, item, handlers, ui));
+  if (!list.openCount && list.available)
+    items.append(node("li", "Nothing on this list.", "muted list-empty"));
+  body.append(items);
+  const shownOpen = list.items.filter(
+    (i) => i.status === "needs_action",
+  ).length;
+  if (list.openCount > shownOpen)
+    body.append(
+      node(
+        "p",
+        `Showing the first ${shownOpen} of ${list.openCount} open items.`,
+        "muted",
+      ),
+    );
+  const done = list.items.filter((i) => i.status === "completed");
+  if (list.doneCount) {
+    const details = node("details", "", "list-done");
+    details.append(node("summary", `Done (${list.doneCount})`));
+    const doneList = node("ul", "", "list-items");
+    for (const item of done) {
+      const row = node("li", "", "list-item done");
+      row.append(node("span", item.summary, "list-text"));
+      const reopen = button("Reopen", "", `Reopen ${item.summary}`);
+      reopen.disabled = !list.controls.update.enabled;
+      reopen.addEventListener("click", () => handlers.reopen(list, item));
+      row.append(reopen);
+      doneList.append(row);
+    }
+    details.append(doneList);
+    body.append(details);
+  }
+  const add = node("div", "", "list-add");
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 200;
+  input.value = ui.listDrafts?.[list.entityId] ?? "";
+  input.placeholder = "Add an item";
+  input.setAttribute("aria-label", `Add to ${list.name}`);
+  input.disabled = !list.controls.add.enabled;
+  input.addEventListener("input", () => {
+    ui.listDrafts ??= {};
+    ui.listDrafts[list.entityId] = input.value;
+  });
+  const addButton = button("Add", "approve", `Add to ${list.name}`);
+  addButton.disabled = !list.controls.add.enabled;
+  addButton.addEventListener("click", () => handlers.add(list, input.value));
+  add.append(input, addButton);
+  body.append(add);
+  for (const reason of listReasons(list))
+    body.append(node("p", reason, "muted list-reason"));
+  body.append(
+    node(
+      "p",
+      `As of ${clock(list.readAt)} · shared with everyone in the household and the Home Assistant app`,
+      "app-asof",
+    ),
+  );
+  article.append(body);
+  return article;
+}
+export function renderLists(container, data, handlers, ui = {}) {
+  const lists = data?.lists ?? [];
+  if (!lists.length) return false;
+  const box = node("section", "", "lists");
+  box.setAttribute("aria-label", "Lists");
+  box.append(node("h3", "Lists", "lists-heading"));
+  if (data.blocked) {
+    const paused = node(
+      "p",
+      "Home writes are paused: an earlier action has an unknown outcome. Lists stay readable; resolve that action in its chat to change them again.",
+      "lists-paused",
+    );
+    paused.setAttribute("role", "status");
+    box.append(paused);
+  }
+  if (ui.listFull) {
+    const full = node("div", "", "lists-full");
+    full.setAttribute("role", "status");
+    full.append(
+      node(
+        "p",
+        "This chat is full of receipts. Start a new Shared lists chat?",
+      ),
+    );
+    const start = button(
+      "Start a new chat",
+      "approve",
+      "Start a new Shared lists chat",
+    );
+    start.addEventListener("click", () => handlers.newChat());
+    full.append(start);
+    box.append(full);
+  }
+  for (const list of lists) box.append(listElement(list, handlers, ui));
+  container.append(box);
+  return true;
+}
 export function renderToday(container, data, handlers, ui = {}) {
   const fragment = document.createDocumentFragment();
   const suggested = handlers.suggestion
     ? renderSuggestions(fragment, data, handlers, ui)
     : false;
+  if (handlers.lists && ui.lists)
+    renderLists(fragment, ui.lists, handlers.lists, ui);
   if (suggested && !data.cards.length)
     fragment.append(
       node(
@@ -890,7 +1098,9 @@ export function renderFeedback(container, state, ui, handlers) {
 }
 
 // ---- Settings → Memory ----
-// ui: {editing: id|null}. Item text is untrusted when shown: textContent only.
+// Two sections: "Only you" (the owner's private memory) and "Household"
+// (shared with every authorized member's Hearth). ui: {editing: id|null,
+// draft, scope}. Item text is untrusted when shown: textContent only.
 function kb(bytes) {
   return `${(bytes / 1024).toFixed(1)} KB`;
 }
@@ -915,23 +1125,103 @@ export function memorySourceLabel(item) {
     ? `Accepted suggestion · ${item.sourceTitle || "chat"}`
     : "You wrote this";
 }
+// Household authors are only ever "You" or "another household member".
+export function householdSourceLabel(item) {
+  return `${item.mine ? "You added this" : "Added by another household member"}${item.editedByOther ? " · edited by another member" : ""}`;
+}
+const MEMORY_SCOPES = [
+  ["private", "Only you"],
+  ["household", "Household"],
+];
+function scopeChoice(name, value, onChange) {
+  const box = node("fieldset", "", "memory-scope");
+  box.append(node("legend", "Who it's for"));
+  for (const [scope, label] of MEMORY_SCOPES) {
+    const choice = node("label", "", "memory-scope-choice");
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = name;
+    radio.value = scope;
+    radio.checked = value === scope;
+    radio.addEventListener("change", () => {
+      if (radio.checked) onChange(scope);
+    });
+    choice.append(radio, node("span", label));
+    box.append(choice);
+  }
+  return box;
+}
+function memoryUsage(section, limit) {
+  const count = section.items.length;
+  return node(
+    "p",
+    `${count} item${count === 1 ? "" : "s"} · ${kb(section.usedBytes)} of ${kb(limit)} used by Hearth`,
+    "memory-usage",
+  );
+}
+function memoryTrimmed(section, limit) {
+  return node(
+    "p",
+    `${section.trimmed} oldest item${section.trimmed === 1 ? " is" : "s are"} over the ${kb(limit)} limit and not used by Hearth. Forget or shorten newer items to include ${section.trimmed === 1 ? "it" : "them"}.`,
+    "memory-warning",
+  );
+}
+function memoryRow(item, ui, handlers, household) {
+  const row = node("li", "", item.inContext ? "" : "trimmed");
+  if (ui.editing === item.id) {
+    const edit = memoryTextArea(
+      `memory-edit-${item.id}`,
+      item.text,
+      household ? "Edit household memory" : "Edit memory",
+    );
+    const actions = node("div", "", "today-actions");
+    const saveEdit = button("Save", "approve", "Save memory");
+    saveEdit.addEventListener("click", () =>
+      handlers.edit(item, edit.area.value),
+    );
+    const cancel = button("Cancel", "", "Cancel editing");
+    cancel.addEventListener("click", () => handlers.startEdit(null));
+    actions.append(saveEdit, cancel);
+    row.append(edit.wrap, actions);
+    return row;
+  }
+  row.append(node("p", item.text, "memory-text"));
+  row.append(
+    node(
+      "span",
+      `${household ? householdSourceLabel(item) : memorySourceLabel(item)} · ${day(item.updated)}${item.inContext ? "" : " · Not used (over limit)"}`,
+      "app-asof",
+    ),
+  );
+  const actions = node("div", "", "today-actions");
+  const edit = button("Edit", "", `Edit memory: ${item.text}`);
+  edit.addEventListener("click", () => handlers.startEdit(item.id));
+  const forget = button("Forget", "", `Forget memory: ${item.text}`);
+  forget.addEventListener("click", () => handlers.forget(item));
+  actions.append(edit, forget);
+  if (!household) {
+    const share = button(
+      "Share with household",
+      "",
+      `Share with household: ${item.text}`,
+    );
+    share.addEventListener("click", () => handlers.share(item));
+    actions.append(share);
+  }
+  row.append(actions);
+  return row;
+}
 export function renderMemory(container, data, ui, handlers) {
   const fragment = document.createDocumentFragment();
   const limit = data.limits?.contextBytes ?? 4096;
-  const usage = node(
-    "p",
-    `${data.items.length} item${data.items.length === 1 ? "" : "s"} · ${kb(data.usedBytes)} of ${kb(limit)} shared with Hearth`,
-    "memory-usage",
-  );
-  fragment.append(usage);
-  if (data.trimmed)
-    fragment.append(
-      node(
-        "p",
-        `${data.trimmed} oldest item${data.trimmed === 1 ? " is" : "s are"} over the ${kb(limit)} limit and not shared with Hearth. Forget or shorten newer items to include ${data.trimmed === 1 ? "it" : "them"}.`,
-        "memory-warning",
-      ),
-    );
+  const household = data.household ?? {
+    items: [],
+    usedBytes: 0,
+    trimmed: 0,
+    limits: { contextBytes: 4096 },
+  };
+  const householdLimit = household.limits?.contextBytes ?? 4096;
+  const scope = ui.scope === "household" ? "household" : "private";
   const add = node("div", "", "memory-add");
   const { wrap, area } = memoryTextArea(
     "memory-new",
@@ -943,9 +1233,28 @@ export function renderMemory(container, data, ui, handlers) {
     ui.draft = area.value;
   });
   const save = button("Remember", "approve", "Remember this");
-  save.addEventListener("click", () => handlers.add(area.value));
-  add.append(wrap, save);
+  save.addEventListener("click", () =>
+    handlers.add(
+      area.value,
+      ui.scope === "household" ? "household" : "private",
+    ),
+  );
+  add.append(
+    wrap,
+    scopeChoice("memory-new-scope", scope, (value) => {
+      ui.scope = value;
+    }),
+    save,
+  );
   fragment.append(add);
+
+  const mine = node("section", "", "memory-section");
+  mine.setAttribute("aria-label", "Only you");
+  mine.append(
+    node("h3", "Only you", "memory-heading"),
+    memoryUsage(data, limit),
+  );
+  if (data.trimmed) mine.append(memoryTrimmed(data, limit));
   const list = node("ul", "", "memory-list");
   if (!data.items.length)
     list.append(
@@ -955,42 +1264,40 @@ export function renderMemory(container, data, ui, handlers) {
         "muted memory-empty",
       ),
     );
-  for (const item of data.items) {
-    const row = node("li", "", item.inContext ? "" : "trimmed");
-    if (ui.editing === item.id) {
-      const edit = memoryTextArea(
-        `memory-edit-${item.id}`,
-        item.text,
-        "Edit memory",
-      );
-      const actions = node("div", "", "today-actions");
-      const saveEdit = button("Save", "approve", "Save memory");
-      saveEdit.addEventListener("click", () =>
-        handlers.edit(item, edit.area.value),
-      );
-      const cancel = button("Cancel", "", "Cancel editing");
-      cancel.addEventListener("click", () => handlers.startEdit(null));
-      actions.append(saveEdit, cancel);
-      row.append(edit.wrap, actions);
-    } else {
-      row.append(node("p", item.text, "memory-text"));
-      row.append(
-        node(
-          "span",
-          `${memorySourceLabel(item)} · ${day(item.updated)}${item.inContext ? "" : " · Not shared (over limit)"}`,
-          "app-asof",
-        ),
-      );
-      const actions = node("div", "", "today-actions");
-      const edit = button("Edit", "", `Edit memory: ${item.text}`);
-      edit.addEventListener("click", () => handlers.startEdit(item.id));
-      const forget = button("Forget", "", `Forget memory: ${item.text}`);
-      forget.addEventListener("click", () => handlers.forget(item));
-      actions.append(edit, forget);
-      row.append(actions);
-    }
-    list.append(row);
-  }
-  fragment.append(list);
+  for (const item of data.items)
+    list.append(memoryRow(item, ui, handlers, false));
+  mine.append(list);
+  fragment.append(mine);
+
+  const shared = node("section", "", "memory-section household");
+  shared.setAttribute("aria-label", "Household");
+  shared.append(
+    node(
+      "h3",
+      "Household \u2014 every member's Hearth uses these",
+      "memory-heading",
+    ),
+    node(
+      "p",
+      "Any household member can add, edit or forget these. They are context only and never allow Hearth to do anything.",
+      "muted",
+    ),
+    memoryUsage(household, householdLimit),
+  );
+  if (household.trimmed)
+    shared.append(memoryTrimmed(household, householdLimit));
+  const sharedList = node("ul", "", "memory-list household-list");
+  if (!household.items.length)
+    sharedList.append(
+      node(
+        "li",
+        "No household items yet. Add one above for the household, or share one of yours.",
+        "muted memory-empty",
+      ),
+    );
+  for (const item of household.items)
+    sharedList.append(memoryRow(item, ui, handlers, true));
+  shared.append(sharedList);
+  fragment.append(shared);
   container.replaceChildren(fragment);
 }

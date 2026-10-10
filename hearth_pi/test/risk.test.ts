@@ -657,3 +657,88 @@ test("review P1: scenes, covers, update entities and self-protection fail closed
     "high",
   );
 });
+
+test("shared lists: add/complete/reopen low; rename/remove medium; admin todo services rated by the same table", () => {
+  const todo = (op: string, extra: Record<string, string> = {}): Action =>
+    ({
+      kind: "todo",
+      entityId: "todo.example_groceries",
+      op,
+      ...extra,
+    }) as Action;
+  const cases: [Action, RiskLevel, string][] = [
+    [todo("add", { summary: "Oat milk" }), "low", "list_add"],
+    [todo("complete", { uid: "u1", label: "Oat milk" }), "low", "list_status"],
+    [todo("reopen", { uid: "u1", label: "Oat milk" }), "low", "list_status"],
+    [
+      todo("rename", { uid: "u1", summary: "Rye", label: "Bread" }),
+      "medium",
+      "list_rename",
+    ],
+    [todo("remove", { uid: "u1", label: "Bread" }), "medium", "list_remove"],
+    // Admin mode's generic service calls.
+    [
+      svc(
+        "todo",
+        "add_item",
+        { entity_id: ["todo.example_groceries"] },
+        { item: "Oat milk" },
+      ),
+      "low",
+      "list_add",
+    ],
+    [
+      svc(
+        "todo",
+        "update_item",
+        { entity_id: ["todo.example_groceries"] },
+        { item: "Oat milk", status: "completed" },
+      ),
+      "low",
+      "list_status",
+    ],
+    [
+      svc(
+        "todo",
+        "update_item",
+        { entity_id: ["todo.example_groceries"] },
+        { item: "Oat milk", rename: "Rye" },
+      ),
+      "medium",
+      "list_rename",
+    ],
+    [
+      svc(
+        "todo",
+        "remove_item",
+        { entity_id: ["todo.example_groceries"] },
+        { item: ["Bread"] },
+      ),
+      "medium",
+      "list_remove",
+    ],
+    [
+      svc("todo", "remove_completed_items", {
+        entity_id: ["todo.example_groceries"],
+      }),
+      "high",
+      "list_bulk_remove",
+    ],
+    [
+      svc("todo", "get_items", { entity_id: ["todo.example_groceries"] }),
+      "high",
+      "unknown_service",
+    ],
+    [
+      svc("todo", "add_item", { area_id: ["kitchen"] }, { item: "x" }),
+      "high",
+      "list_indirect",
+    ],
+  ];
+  for (const [action, level, rule] of cases) {
+    const result = classifyAction(action);
+    assert.equal(result.level, level, JSON.stringify(action));
+    assert.equal(result.rule, rule, JSON.stringify(action));
+  }
+  assert.equal(confirmationWord(todo("remove", { uid: "u1" })), "CONFIRM");
+});

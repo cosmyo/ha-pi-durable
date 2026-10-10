@@ -10,6 +10,7 @@ import type {
   RiskAssessment,
   RiskLevel,
   ServiceTarget,
+  TodoAction,
 } from "./documents.js";
 
 export const RISK_LEVELS: readonly RiskLevel[] = [
@@ -229,6 +230,35 @@ function classifyService(
       "high",
       "generic_homeassistant",
       `${name} can target any domain.`,
+    );
+  }
+  // Admin mode's generic service calls on to-do lists (see classifyTodo for
+  // the Shared lists actions). Device/area targets can reach any list.
+  if (domain === "todo") {
+    if (indirect)
+      return assess(
+        "high",
+        "list_indirect",
+        "Device/area to-do targets cannot be checked.",
+      );
+    if (service === "add_item")
+      return assess("low", "list_add", "Adds an item to a to-do list.");
+    if (service === "update_item")
+      return Object.keys(data).every((k) => k === "item" || k === "status")
+        ? assess("low", "list_status", "Marks a to-do item done or not done.")
+        : assess("medium", "list_rename", "Changes a to-do item's text.");
+    if (service === "remove_item")
+      return assess("medium", "list_remove", "Removes to-do items.");
+    if (service === "remove_completed_items")
+      return assess(
+        "high",
+        "list_bulk_remove",
+        "Removes every completed item from a list.",
+      );
+    return assess(
+      "high",
+      "unknown_service",
+      `${name} is not in the known table; unknown services ask.`,
     );
   }
   if (domain === "lock")
@@ -541,10 +571,40 @@ function classifySupervisor(
   );
 }
 
+// Shared lists: adding, completing and reopening are low; renaming and
+// removing change or drop what someone else wrote, so they are medium (and
+// never run without a person, see autoRunAllowed).
+export function classifyTodo(action: TodoAction): RiskAssessment {
+  switch (action.op) {
+    case "add":
+      return assess("low", "list_add", "Adds an item to a shared list.");
+    case "complete":
+    case "reopen":
+      return assess(
+        "low",
+        "list_status",
+        "Marks a shared list item done or not done.",
+      );
+    case "rename":
+      return assess(
+        "medium",
+        "list_rename",
+        "Changes the text of a shared list item.",
+      );
+    case "remove":
+      return assess(
+        "medium",
+        "list_remove",
+        "Removes an item from a shared list.",
+      );
+  }
+}
+
 export function classifyAction(
   action: Action,
   context: RiskContext = {},
 ): RiskAssessment {
+  if ("kind" in action && action.kind === "todo") return classifyTodo(action);
   if ("kind" in action) return classifyAdmin(action, context);
   const [domain = "", service = ""] = action.service.split(".");
   return classifyService(

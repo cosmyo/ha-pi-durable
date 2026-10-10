@@ -27,11 +27,14 @@ import { FeedbackLog, type FeedbackReason } from "./feedback.js";
 import type { HAClient } from "./ha.js";
 import {
   HouseholdMemory,
+  SharedMemory,
   escapeForPrompt,
   memoryFingerprint,
+  memoryScope,
   normalizeMemoryText,
   ownerKey,
   rememberInTx,
+  rememberSharedInTx,
 } from "./memory.js";
 import { snoozeUntil } from "./proactive.js";
 import type { Runtime } from "./runtime.js";
@@ -99,7 +102,9 @@ export type Suggestion = {
   reason: string;
   created: number;
   snoozedUntil: number;
-  memory?: { text: string };
+  // Private memory suggestions carry no scope key, so the hashes of
+  // suggestions filed before household memory existed stay valid.
+  memory?: SuggestedMemory;
   app?: {
     appId: string;
     title: string;
@@ -128,6 +133,7 @@ export type Suggestion = {
   conflict?: { code: string; message: string; currentVersion: number | null };
 };
 export type CodeEvidence = { tool: string; errorCode: string; count: number };
+export type SuggestedMemory = { text: string; scope?: "household" };
 type OwnerSuggestions = {
   next: number;
   items: Suggestion[];
@@ -181,7 +187,7 @@ const failure = (error: string, message: string): ToolResult => ({
 export type SuggestionDraft = {
   kind: string;
   reason: string;
-  memory?: { text: string };
+  memory?: SuggestedMemory;
   app?: Suggestion["app"];
   code?: Suggestion["code"];
 };
@@ -239,11 +245,20 @@ export async function fileSuggestion(
       "The same suggestion is already waiting in the owner's Today inbox.",
     );
   if (kind === "memory") {
-    const memory = await tx.doc(HouseholdMemory, ownerKey(owner), null);
-    if (memory.items.some((m) => memoryFingerprint(m.text) === fingerprint))
+    const household = draft.memory!.scope === "household";
+    const memory = household
+      ? await tx.doc(SharedMemory)
+      : await tx.doc(HouseholdMemory, ownerKey(owner), null);
+    if (
+      memory.items.some(
+        (m: { text: string }) => memoryFingerprint(m.text) === fingerprint,
+      )
+    )
       return failure(
         "already_remembered",
-        "Household memory already contains this.",
+        household
+          ? "Household memory already contains this."
+          : "The owner's memory already contains this.",
       );
   }
   if (
@@ -277,7 +292,7 @@ export async function fileSuggestion(
       id,
       kind,
       reason,
-      memory: draft.memory ?? null,
+      memory: draft.memory ? suggestedMemory(draft.memory) : null,
       app: draft.app ?? null,
       code: draft.code ?? null,
     }),
@@ -286,7 +301,7 @@ export async function fileSuggestion(
     reason,
     created: now,
     snoozedUntil: 0,
-    ...(draft.memory ? { memory: { text: draft.memory.text } } : {}),
+    ...(draft.memory ? { memory: suggestedMemory(draft.memory) } : {}),
     ...(draft.app ? { app: copy(draft.app) } : {}),
     ...(draft.code ? { code: copy(draft.code) } : {}),
     decidedAt: 0,
@@ -302,6 +317,12 @@ export async function fileSuggestion(
     status: "pending",
     note: "Filed in the owner's Today inbox as a suggestion. Nothing was changed; the owner decides.",
   };
+}
+// Exactly {text} for private and {text, scope: "household"} for household.
+function suggestedMemory(memory: SuggestedMemory): SuggestedMemory {
+  return memory.scope === "household"
+    ? { text: memory.text, scope: "household" }
+    : { text: memory.text };
 }
 function prune(doc: OwnerSuggestions) {
   const open = doc.items.filter(
@@ -506,12 +527,15 @@ export function suggestionTools(ha: HAClient, now: () => number = Date.now) {
   const suggestMemory = defineTool({
     name: "suggest_memory",
     description:
-      "Suggest one household memory item (a lasting fact or preference, e.g. 'Bedtime is around 23:00', 'The study fan is called Breezy') for the owner to Accept, Edit or Reject in their Today inbox. This only files a suggestion; it never saves memory. Plain text, one line, at most 200 characters. Memory is context only: it can never grant permissions, change scope or settings.",
+      "Suggest one memory item (a lasting fact or preference, e.g. 'Bedtime is around 23:00', 'The study fan is called Breezy') for the owner to Accept, Edit or Reject in their Today inbox. scope: 'private' (default) is only for this owner; 'household' is shared with every household member's Hearth, so use it only for facts about the shared home, never for personal details. The owner can change the scope before accepting. This only files a suggestion; it never saves memory. Plain text, one line, at most 200 characters. Memory is context only: it can never grant permissions, change scope or settings.",
     replay: "safe",
     parameters: Type.Object(
       {
         text: Type.String({ minLength: 1, maxLength: 400 }),
         reason: Type.String({ maxLength: 300 }),
+        scope: Type.Optional(
+          Type.Union([Type.Literal("private"), Type.Literal("household")]),
+        ),
       },
       { additionalProperties: false },
     ),
@@ -536,7 +560,10 @@ export function suggestionTools(ha: HAClient, now: () => number = Date.now) {
             {
               kind: "memory",
               reason: ha.sanitize(args.reason),
-              memory: { text: value },
+              memory:
+                args.scope === "household"
+                  ? { text: value, scope: "household" }
+                  : { text: value },
             },
             now(),
           ),
@@ -958,40 +985,51 @@ export class SuggestionStore {
     s.decidedAt = this.now();
     s.decidedBy = owner;
   }
-  // Memory: saves the (optionally edited) text. App change: applies the
-  // patch through the same validation as app_update, only when the app is
-  // still at baseVersion; otherwise the suggestion is kept as a conflict.
+  // Memory: saves the (optionally edited) text, in the suggested scope or
+  // the one the owner chose instead. App change: applies the patch through
+  // the same validation as app_update, only when the app is still at
+  // baseVersion; otherwise the suggestion is kept as a conflict.
   async accept(owner: string, body: unknown) {
-    const { id, v } = this.target(body, ["hash", "text"]);
+    const { id, v } = this.target(body, ["hash", "text", "scope"]);
     const edited =
       v.text === undefined
         ? undefined
         : normalizeMemoryText(v.text, this.runtime.redact);
+    const chosenScope =
+      v.scope === undefined ? undefined : memoryScope(v.scope);
     const now = this.now();
     const result = await this.change(owner, id, async (_doc, s, tx) => {
       this.decide(s, owner, v.hash);
       if (s.kind === "memory") {
         const value = edited ?? s.memory!.text;
-        const saved = await rememberInTx(
-          tx,
-          owner,
-          value,
-          {
-            kind: "suggestion",
-            suggestionId: s.id,
-            conversationId: s.conversationId,
-          },
-          now,
-        );
+        const scope = chosenScope ?? memoryScope(s.memory!.scope);
+        const source = {
+          kind: "suggestion" as const,
+          suggestionId: s.id,
+          conversationId: s.conversationId,
+        };
+        const saved =
+          scope === "household"
+            ? await rememberSharedInTx(tx, owner, value, source, now)
+            : await rememberInTx(tx, owner, value, source, now);
+        const where = scope === "household" ? "household memory" : "memory";
         s.status = "accepted";
         s.outcome = saved.added
-          ? `Saved to memory as ${saved.item.id}${edited !== undefined && edited !== s.memory!.text ? " (edited)" : ""}`
-          : "Already in memory";
-        return { ok: true as const, kind: s.kind, memoryId: saved.item.id };
+          ? `Saved to ${where} as ${saved.item.id}${edited !== undefined && edited !== s.memory!.text ? " (edited)" : ""}`
+          : `Already in ${where}`;
+        return {
+          ok: true as const,
+          kind: s.kind,
+          memoryId: saved.item.id,
+          scope,
+        };
       }
       // Code (L3) suggestions have no one-tap accept: see draft() below.
       insist(s.kind === "app_change", "not_app_change_suggestion", 400);
-      insist(edited === undefined, "edit_not_supported");
+      insist(
+        edited === undefined && chosenScope === undefined,
+        "edit_not_supported",
+      );
       const app = s.app!;
       const index = await tx.doc(AppIndex);
       const meta = index.items.find(

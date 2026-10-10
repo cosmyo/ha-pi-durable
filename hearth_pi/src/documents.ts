@@ -94,7 +94,20 @@ export type AdminAction =
       path: string;
       body?: JsonObject;
     };
-export type Action = ToggleAction | AdminAction;
+// One change to a Home Assistant to-do list (shared with every household
+// member and the HA app). Validated in lists.ts. `label` is the item's current
+// text as read by the controller (never supplied by a model or a person): it
+// is part of the hash and re-checked right before the attempt.
+export type TodoOp = "add" | "complete" | "reopen" | "rename" | "remove";
+export type TodoAction = {
+  kind: "todo";
+  entityId: string;
+  op: TodoOp;
+  uid?: string;
+  summary?: string;
+  label?: string;
+};
+export type Action = ToggleAction | AdminAction | TodoAction;
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 export type RiskAssessment = {
   level: RiskLevel;
@@ -148,7 +161,8 @@ export type Proposal = {
   // instead of a model tool call.
   origin?:
     | { kind: "app"; appId: string; version: number; elementId: string }
-    | { kind: "world"; entityId: string };
+    | { kind: "world"; entityId: string }
+    | { kind: "list"; entityId: string };
 };
 export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   kind: "hearth.proposals",
