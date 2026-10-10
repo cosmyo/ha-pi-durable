@@ -1,4 +1,8 @@
-import { loadConfig } from "./config.js";
+import {
+  configurationDiagnostic,
+  loadConfig,
+  workspaceOwners,
+} from "./config.js";
 import { dropAppPrivileges } from "./bootstrap.js";
 import { configuredModels } from "./models.js";
 import { Runtime } from "./runtime.js";
@@ -15,8 +19,12 @@ import {
   resolveBriefingSummaryModel,
 } from "./briefing-summary.js";
 
+// Set while App options are validated, so a startup failure can name the
+// specific configuration problem without echoing any value.
+let configuring = true;
 try {
   const config = await loadConfig();
+  configuring = false;
   await dropAppPrivileges(config);
   // ChatGPT/Codex login is always offered; Anthropic only behind its flag.
   // One Pi ModelRuntime serves both, each with its own private credential file.
@@ -97,6 +105,7 @@ try {
       workspaceExtension(
         new WorkspaceClient("/workspace_link/bridge/worker.sock", key),
         secrets,
+        new Set(workspaceOwners(config)),
       ),
     );
   }
@@ -164,10 +173,14 @@ try {
         () => process.exit(1),
       );
     });
-} catch {
-  // Raw upstream/config/network errors can contain secrets. Never log them.
+} catch (error) {
+  // Raw upstream/config/network errors can contain secrets. Never log them;
+  // a known configuration Fault code (never an option value) is safe.
+  const reason = configuring ? configurationDiagnostic(error) : undefined;
   console.error(
-    "Hearth Pi could not start. Check mode, credentials, model, scope, options and exclusive data ownership.",
+    reason
+      ? `Hearth Pi could not start: ${reason}. Check the App options; see DOCS.md.`
+      : "Hearth Pi could not start. Check mode, credentials, model, scope, options and exclusive data ownership.",
   );
   process.exitCode = 1;
 }

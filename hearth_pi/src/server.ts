@@ -9,7 +9,7 @@ import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { HomePermissions, Proposals } from "./documents.js";
 import { HomeCanvas } from "./canvas.js";
 import { Boundary } from "./auth.js";
-import type { Config } from "./config.js";
+import { workspaceOwners, type Config } from "./config.js";
 import type { Runtime } from "./runtime.js";
 import type { Actions } from "./ha.js";
 import { Fault, insist, object, text, redactor } from "./safety.js";
@@ -141,6 +141,12 @@ export function appServer(
         : true;
   const ready = () =>
     configuredReady() || authProviders().some((s) => s.configured());
+  // Code (workspace) sessions belong only to the configured workspace
+  // owners; Runtime enforces it for every session route and store.
+  const workspaceOwnerSet = new Set(workspaceOwners(config));
+  if (config.workspaceEnabled) runtime.workspaceOwners = workspaceOwnerSet;
+  const workspaceAllowed = (owner: string) =>
+    config.workspaceEnabled === true && workspaceOwnerSet.has(owner);
   const apps = new AppStore(runtime, actions.engine.ha);
   const proactive =
     options.proactive ??
@@ -246,7 +252,8 @@ export function appServer(
           entityScopeCount: new Set(config.policy.entities).size,
           homePermissions: await actions.engine.settings(owner),
           experimental: true,
-          workspaceEnabled: config.workspaceEnabled ?? false,
+          // Per owner: other owners get no Code affordances at all.
+          workspaceEnabled: workspaceAllowed(owner),
           authProviders: authProviders().map((s) => s.provider),
           inferenceReady: ready(),
         });
@@ -365,6 +372,11 @@ export function appServer(
         insist(
           kind === "home" || (kind === "workspace" && config.workspaceEnabled),
           "workspace_not_enabled",
+          403,
+        );
+        insist(
+          kind === "home" || workspaceAllowed(owner),
+          "workspace_not_allowed",
           403,
         );
         return json(res, 201, {

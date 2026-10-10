@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Code workspace owners: new optional App option `workspace_owner_ids` (up to 5 HA user IDs, a subset of `authorized_user_ids`) lets a household with several authorized owners enable Code sessions for the named owners only. Other owners get `403 workspace_not_allowed`, no Code sessions in their list and no Code button (bootstrap `workspaceEnabled` is per owner); the controller also refuses to send a non-owner's Code session to the worker. Empty keeps the previous rule (exactly one authorized owner). Startup now logs the specific configuration Fault code (never option values) when App options are invalid.
+
 ## 0.3.3 — shared household context
 
 - Shared lists: Home Assistant to-do lists (for example a shopping list) appear under **Today → Lists** and in Home chats for every authorized owner. Adding, completing and reopening an item are low risk; renaming and removing are medium and always ask. Lists must be allowed explicitly in scoped mode (`allowed_entities` plus the `todo.*_item` services); a changed or missing item is refused before anything is sent, and an unknown outcome is never retried.

@@ -45,6 +45,7 @@ options:
   model: ""
   openai_api_key: ""
   workspace_enabled: false
+  workspace_owner_ids: []
   access_mode: scoped
   risk_judge_model: auto
   risk_judge_url: ""
@@ -66,6 +67,8 @@ schema:
   model: str
   openai_api_key: password
   workspace_enabled: bool
+  workspace_owner_ids:
+    - str
   access_mode: list(scoped|admin)
   risk_judge_model: str
   risk_judge_url: str

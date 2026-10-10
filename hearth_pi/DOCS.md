@@ -33,6 +33,7 @@ provider: openai-codex
 model: ""
 openai_api_key: ""
 workspace_enabled: false
+workspace_owner_ids: []
 access_mode: scoped
 risk_judge_model: auto
 risk_judge_url: ""
@@ -49,7 +50,22 @@ Select `provider: offline` instead to test startup without AI credentials; its r
 
 ## Optional Code mode
 
-Leave `workspace_enabled: false` for the normal App-store installation. The sidebar/App installation does **not** provision the isolated coding worker. Code mode requires the separate trusted-operator setup in the [workspace guide](../docs/workspace.md), one authorized operator and its own backups. There is no one-click Code-worker installation in this preview; do not enable it without the worker or relax its confinement.
+Leave `workspace_enabled: false` for the normal App-store installation. The sidebar/App installation does **not** provision the isolated coding worker. Code mode requires the separate trusted-operator setup in the [workspace guide](../docs/workspace.md), named workspace owners and its own backups. There is no one-click Code-worker installation in this preview; do not enable it without the worker or relax its confinement.
+
+**Who may use Code sessions.** With `workspace_owner_ids: []` (the default) the original rule applies: `workspace_enabled: true` needs exactly one entry in `authorized_user_ids`, and that owner is the workspace owner. A household with two or more authorized owners lists who may code instead, for example:
+
+```yaml
+authorized_user_ids:
+  - REPLACE_WITH_FIRST_HA_USER_ID
+  - REPLACE_WITH_SECOND_HA_USER_ID
+workspace_enabled: true
+workspace_owner_ids:
+  - REPLACE_WITH_FIRST_HA_USER_ID
+```
+
+Each listed ID must also be in `authorized_user_ids` (at most 5). Only listed owners see the **Code** button and their Code sessions; every other authorized owner keeps Home sessions only, and the server refuses their Code requests with `workspace_not_allowed`. Removing someone from the list hides their earlier Code sessions without deleting them. All listed owners share one workspace volume and its files, so list only people who trust each other with them.
+
+If Hearth does not start after a configuration change, the App log names the problem without any option value, for example `Hearth Pi could not start: invalid configuration: workspace_requires_one_trusted_owner` (a second owner was added while `workspace_owner_ids` is empty), `workspace_owner_not_authorized` (a listed ID is not in `authorized_user_ids`) or `invalid_workspace_owner_ids` (more than 5 entries or a malformed ID).
 
 ## Navigation (unreleased source slice)
 
@@ -77,7 +93,8 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 - `service_actions_enabled`: false by default. Optional `allowed_services` contains only `light.turn_on`, `light.turn_off`, `switch.turn_on`, `switch.turn_off` and, for [Shared lists](#shared-lists-unreleased-source-slice), `todo.add_item`, `todo.update_item`, `todo.remove_item` (at most these seven), with exact allowed entities. `todo.remove_completed_items` and other `todo` services cannot be configured. **Home permissions** defaults to Read-only with writes disabled, otherwise Ask: the model proposes and the human approves the immutable entity/data/hash once. The authenticated owner may explicitly acknowledge Full access / auto-approve for only these configured exact actions (optional brightness 0-255 for light.turn_on). This is not all HA services or host/admin access; Code is unchanged and separately confined. No indirect area/device/group selectors. An HTTP receipt is not device verification.
 - `access_mode`: `scoped` by default. `admin` is an owner opt-in that gives Hearth Home Assistant admin power through risk-classified proposals; see [Admin access mode](#admin-access-mode-unreleased-source-slice). `risk_judge_model`, `risk_judge_url`, `risk_judge_api_key`, `risk_judge_timeout_ms` and `risk_judge_session_ttl_ms` configure the optional risk judge described there (the key is a server-side secret like `openai_api_key`).
 - `briefing_summary_model`: `auto` by default (same resolution as `risk_judge_model`'s `auto`: `gpt-5.6-luna`, then `claude-haiku-4-5`, else off). `off` disables the optional per-briefing model-written summary entirely; `<provider>/<modelId>` names a different signed-in Pi runtime model. See [Today, briefings and watchers](#today-briefings-and-watchers-unreleased-source-slice). The summary is also off unless an owner turns on **Add a short summary** for that specific briefing.
-- `workspace_enabled`: false by default. True requires exactly one trusted operator and a **separate confined worker** installed by the trusted host operator; it does not create a container or expose Docker. [Workspace guide](../docs/workspace.md).
+- `workspace_enabled`: false by default. True requires workspace owners (below) and a **separate confined worker** installed by the trusted host operator; it does not create a container or expose Docker. [Workspace guide](../docs/workspace.md).
+- `workspace_owner_ids`: empty by default, meaning "the one authorized owner" (then `authorized_user_ids` must have exactly one entry). Otherwise up to 5 HA user IDs, each also in `authorized_user_ids`, who alone may create and use Code sessions; see [Optional Code mode](#optional-code-mode).
 
 ## Session model and thinking
 

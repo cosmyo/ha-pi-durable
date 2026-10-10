@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { resolve } from "node:path";
-import { insist, object, text, entityPattern } from "./safety.js";
+import { Fault, insist, object, text, entityPattern } from "./safety.js";
 import { anthropicAuthEnabled } from "./features.js";
 
 export const MAX_ENTITIES = 10000;
@@ -55,6 +55,10 @@ export type Config = {
   thinkingLevel?: ModelThinkingLevel;
   anthropicAuthEnabled?: boolean;
   workspaceEnabled?: boolean;
+  // Authorized owners who may use Code (workspace) sessions: the
+  // workspace_owner_ids option, else the one authorized owner. loadConfig
+  // always sets it when the workspace is enabled; see workspaceOwners().
+  workspaceOwners?: string[];
   policy: Policy;
   judge?: JudgeConfig;
   // "off", "auto" or "<provider>/<modelId>": the optional briefing summary's
@@ -73,12 +77,50 @@ function strings(value: unknown, max: number): string[] {
   );
   return [...new Set(value as string[])];
 }
-export async function loadConfig(): Promise<Config> {
+// All listed owners share the one confined worker volume; keep it small.
+export const MAX_WORKSPACE_OWNERS = 5;
+// Fault codes loadConfig raises for a specific, value-free configuration
+// problem. Startup may name these (never the option values); any other
+// failure keeps the generic message because raw errors can contain secrets.
+export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
+  "explicit_mode_required",
+  "invalid_access_mode",
+  "invalid_risk_judge_model",
+  "invalid_risk_judge_url",
+  "invalid_risk_judge_timeout",
+  "invalid_risk_judge_session_ttl",
+  "risk_judge_url_required",
+  "invalid_briefing_summary_model",
+  "anthropic_auth_disabled",
+  "workspace_requires_one_trusted_owner",
+  "workspace_requires_ingress",
+  "invalid_workspace_owner_ids",
+  "workspace_owner_not_authorized",
+  "provider_key_required",
+]);
+// The startup log line for a loadConfig failure: the known Fault code only.
+export function configurationDiagnostic(error: unknown): string | undefined {
+  return error instanceof Fault && CONFIG_FAULT_CODES.has(error.code)
+    ? `invalid configuration: ${error.code}`
+    : undefined;
+}
+// Owners allowed Code (workspace) sessions; empty when the workspace is off.
+// A hand-built Config without workspaceOwners keeps the original rule: the
+// one authorized owner (or the local-development owner).
+export function workspaceOwners(config: Config): string[] {
+  if (!config.workspaceEnabled) return [];
+  if (config.workspaceOwners) return config.workspaceOwners;
+  if (config.mode === "local") return ["local-admin"];
+  return config.authorizedUsers.length === 1 ? config.authorizedUsers : [];
+}
+export async function loadConfig(
+  optionsFile = "/data/options.json",
+): Promise<Config> {
   const mode = process.env.HEARTH_MODE;
   insist(mode === "local" || mode === "ingress", "explicit_mode_required");
   const options =
     mode === "ingress"
-      ? object(JSON.parse(await readFile("/data/options.json", "utf8")), [
+      ? object(JSON.parse(await readFile(optionsFile, "utf8")), [
           "authorized_user_ids",
           "service_actions_enabled",
           "allowed_services",
@@ -88,6 +130,7 @@ export async function loadConfig(): Promise<Config> {
           "model",
           "openai_api_key",
           "workspace_enabled",
+          "workspace_owner_ids",
           "anthropic_auth_enabled",
           "access_mode",
           "risk_judge_model",
@@ -223,7 +266,24 @@ export async function loadConfig(): Promise<Config> {
   );
   const workspaceEnabled = options.workspace_enabled ?? false;
   insist(typeof workspaceEnabled === "boolean");
-  if (workspaceEnabled)
+  // An empty list (the App option's default) means "not set".
+  const workspaceOwnerIds = options.workspace_owner_ids ?? [];
+  insist(
+    Array.isArray(workspaceOwnerIds) &&
+      workspaceOwnerIds.length <= MAX_WORKSPACE_OWNERS &&
+      workspaceOwnerIds.every(
+        (id) => typeof id === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(id),
+      ),
+    "invalid_workspace_owner_ids",
+  );
+  const configuredWorkspaceOwners = [...new Set(workspaceOwnerIds as string[])];
+  if (workspaceEnabled && configuredWorkspaceOwners.length) {
+    insist(mode === "ingress", "workspace_requires_ingress");
+    insist(
+      configuredWorkspaceOwners.every((id) => authorizedUsers.includes(id)),
+      "workspace_owner_not_authorized",
+    );
+  } else if (workspaceEnabled)
     insist(
       mode === "ingress" && authorizedUsers.length === 1,
       "workspace_requires_one_trusted_owner",
@@ -270,6 +330,11 @@ export async function loadConfig(): Promise<Config> {
     thinkingLevel,
     anthropicAuthEnabled: anthropicEnabled,
     workspaceEnabled,
+    workspaceOwners: workspaceEnabled
+      ? configuredWorkspaceOwners.length
+        ? configuredWorkspaceOwners
+        : authorizedUsers
+      : [],
     policy:
       access === "admin"
         ? {

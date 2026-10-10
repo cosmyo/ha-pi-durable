@@ -346,7 +346,7 @@ function suggestionCard(s, data, handlers, ui) {
       article.append(
         node(
           "p",
-          "Code sessions are off for this installation. An operator can turn on workspace_enabled (see the workspace guide) to draft this in a Code session.",
+          "Code sessions are off for you on this installation. An operator can turn on workspace_enabled or add you to workspace_owner_ids (see the workspace guide) to draft this in a Code session.",
           "muted",
         ),
       );

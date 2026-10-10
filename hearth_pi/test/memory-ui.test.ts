@@ -336,7 +336,7 @@ test("Today code (L3) suggestions: security-review label + typed confirmation, D
   noExecutableMarkup(target);
   assert.match(
     target.textContent!,
-    /Code sessions are off for this installation/,
+    /Code sessions are off for you on this installation/,
   );
   assert.equal(
     [...target.querySelectorAll("button")].filter(

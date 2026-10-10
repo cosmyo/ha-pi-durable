@@ -196,16 +196,32 @@ export class Runtime {
       throw error;
     }
   }
+  /**
+   * Owners allowed Code (workspace) sessions, set by the server from the App
+   * configuration when the workspace is enabled. Undefined keeps only the
+   * extension-group check (workspace off, or tests without a server).
+   */
+  workspaceOwners?: ReadonlySet<string>;
+  private workspaceAllowed(owner: string) {
+    return !this.workspaceOwners || this.workspaceOwners.has(owner);
+  }
+  // Another owner's earlier Code sessions stay hidden and refused while
+  // they are not a workspace owner; nothing is deleted.
   async list(owner: string) {
+    const allowed = this.workspaceAllowed(owner);
     return ((await this.harness.snapshot(Catalog, ctx))?.items ?? []).filter(
-      (s) => s.owner === owner,
+      (s) => s.owner === owner && (allowed || s.kind !== "workspace"),
     );
   }
   async session(owner: string, id: number) {
+    const item = (
+      (await this.harness.snapshot(Catalog, ctx))?.items ?? []
+    ).find((s) => s.id === id && s.owner === owner);
+    insist(item, "session_not_found", 404);
     insist(
-      (await this.list(owner)).some((s) => s.id === id),
-      "session_not_found",
-      404,
+      item.kind !== "workspace" || this.workspaceAllowed(owner),
+      "workspace_not_allowed",
+      403,
     );
     const conversation = await this.harness.conversation(
       id as ConversationId,
@@ -255,6 +271,11 @@ export class Runtime {
       kind === "home" ||
         (kind === "workspace" && this.groups.workspace.length > 0),
       "workspace_not_enabled",
+      403,
+    );
+    insist(
+      kind === "home" || this.workspaceAllowed(owner),
+      "workspace_not_allowed",
       403,
     );
     const name = this.redact(text(title, 80));

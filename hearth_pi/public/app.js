@@ -2472,7 +2472,9 @@ const suggestionHandlers = {
             ? "Type CONFIRM exactly to draft this security-sensitive suggestion."
             : error.message === "workspace_not_enabled"
               ? "Code sessions are off for this installation."
-              : `Not drafted: ${error.message}.`,
+              : error.message === "workspace_not_allowed"
+                ? "Code sessions are not available to you on this installation."
+                : `Not drafted: ${error.message}.`,
         );
       }
     })(),
