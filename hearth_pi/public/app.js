@@ -2112,7 +2112,7 @@ function paintAssist() {
   if (link)
     $("assist-link").textContent = link.published
       ? "Linked to Home Assistant through Supervisor discovery."
-      : "Not yet published to Home Assistant; Hearth keeps trying.";
+      : "Not yet published to Home Assistant; Hearth retries for a few minutes. Restart Hearth Pi to try again.";
 }
 async function loadAssist() {
   try {

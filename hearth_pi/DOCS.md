@@ -211,7 +211,7 @@ Off by default (`assist_enabled: false`). Hearth Assist lets Home Assistant's **
 **Who is speaking**
 
 - **The Assist button** in the Home Assistant app or frontend: Home Assistant tells Hearth which user is signed in. A user in `authorized_user_ids` gets their own Home permissions and household role, exactly as in Hearth (an owner on Full access may auto-run a low-risk change; members and guests keep their limits). Anyone else is refused.
-- **Voice satellites** usually arrive without a user, so an administrator maps each satellite device to one person in the App configuration. People cannot claim devices themselves in this version:
+- **Voice satellites** usually arrive without a user, so an administrator maps each satellite device to one person in the App configuration. A turn from a satellite always uses this mapping and the Ask ceiling, even when Home Assistant attaches a signed-in user's context to it (for example follow-up speech after a dashboard started the conversation): anyone in the room can speak. People cannot claim devices themselves in this version:
 
   ```yaml
   assist_satellites:

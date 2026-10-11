@@ -61,7 +61,7 @@ class HearthConfigFlow(ConfigFlow, domain=DOMAIN):
         # One entry per discovery message (Supervisor keeps its id when the
         # add-on publishes a new secret). A rediscovery of a configured
         # entry updates its host, port and secret and reloads it.
-        await self.async_set_unique_id(discovery_info.uuid)
+        await self.async_set_unique_id(discovery_info.uuid, raise_on_progress=False)
         self._abort_if_unique_id_configured(updates=link)
         self._link = link
         self._addon = discovery_info.name or "Hearth Pi"

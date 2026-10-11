@@ -162,12 +162,16 @@ export function resolveSpeaker(
 ): Speaker {
   if (request.extraSystemPrompt)
     return { kind: "refused", speech: ASSIST_SPEECH.automation };
-  if (request.userId)
-    return authorized(request.userId)
-      ? { kind: "person", owner: request.userId, channel: "assist" }
-      : { kind: "refused", speech: ASSIST_SPEECH.notAuthorized };
-  if (request.deviceId) {
-    const mapped = satellites.find((s) => s.deviceId === request.deviceId);
+  if (request.userId && !authorized(request.userId))
+    return { kind: "refused", speech: ASSIST_SPEECH.notAuthorized };
+  // A turn from a satellite always speaks as the mapped person with the Ask
+  // ceiling, even when Home Assistant attaches a user's context to it (follow-up
+  // speech after start_conversation/announce inherits the caller's context, and
+  // anyone in the room can speak).
+  const mapped = request.deviceId
+    ? satellites.find((s) => s.deviceId === request.deviceId)
+    : undefined;
+  if (request.satelliteId || mapped) {
     if (mapped && authorized(mapped.userId))
       return {
         kind: "person",
@@ -177,6 +181,10 @@ export function resolveSpeaker(
       };
     return { kind: "refused", speech: ASSIST_SPEECH.unknownSatellite };
   }
+  if (request.userId)
+    return { kind: "person", owner: request.userId, channel: "assist" };
+  if (request.deviceId)
+    return { kind: "refused", speech: ASSIST_SPEECH.unknownSatellite };
   return { kind: "refused", speech: ASSIST_SPEECH.noSpeaker };
 }
 

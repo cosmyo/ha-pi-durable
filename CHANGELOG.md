@@ -5,7 +5,7 @@
 - Hearth Assist (opt-in, `assist_enabled: false` by default): Home Assistant's Assist can use Hearth as its conversation agent through the new `hearth_pi` custom integration in this repository (install with HACS as a custom repository; `hacs.json` at the root). Hearth publishes a link (host, port, API version, a 32-byte secret in `/data/core-link.key`) to Core only through Supervisor discovery; Core talks to a separate listener on port 8098 that is not published on the host, with the secret compared in constant time, any Origin refused, 8 KB bodies and per-person rate limits. Owners can replace the secret in Settings → About.
 - Who is speaking: the Assist button's signed-in user keeps their own Home permissions and household role; voice satellites are mapped to a person by an administrator (`assist_satellites`) and always ask before a change (an Ask ceiling: Full access falls to a pending proposal instead of failing). Unmapped satellites, unknown users and automation-started turns are refused with a spoken line. Saying "yes" never approves anything.
 - One rolling Voice chat per person, durable mapping of Home Assistant conversations (about 5 minutes) and request ids so a repeated request never runs twice, short spoken replies streamed as they are written, "still working" after about 22 seconds while the turn continues durably, and a closing sentence written by the controller from real receipts — a phone push is mentioned only when Home Assistant accepted it (voice turns send phone approvals at once).
-- New App options: needs a version bump on release. Not yet verified on a live installation; see DOCS.md.
+- New App options `assist_enabled` and `assist_satellites` (version 0.5.0).
 
 ## 0.4.0 — phone approvals, undo, household roles
 

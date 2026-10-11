@@ -197,6 +197,7 @@ async function fixture(
       conversation_id?: string | null;
       request_id?: string;
       extra_system_prompt?: string | null;
+      satellite_id?: string | null;
     } = { user_id: OWNER },
   ) => {
     const response = await raw("/core/v1/conversation", {
@@ -213,7 +214,7 @@ async function fixture(
         user_id: who.user_id ?? null,
         conversation_id: who.conversation_id ?? null,
         device_id: who.device_id ?? null,
-        satellite_id: null,
+        satellite_id: who.satellite_id ?? null,
         language: "en",
         extra_system_prompt: who.extra_system_prompt ?? null,
       }),
@@ -423,6 +424,39 @@ test("assist: a mapped satellite on an owner with Full access files a pending As
   );
   assert.equal((await f.proposals(chat.id))[0]!.status, "accepted");
   assert.equal(f.lights.length, 1);
+});
+
+test("assist: a satellite turn that carries an owner's context still uses the mapping and the Ask ceiling", async (t) => {
+  const f = await fixture(t);
+  await f.mode("full");
+  f.provider.faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("ha_propose_service", turnOn), {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("Okay, the lamp."),
+  ]);
+  // Home Assistant attached the owner's context (e.g. follow-up speech after
+  // start_conversation from the owner's dashboard): anyone in the room speaks.
+  const { end } = await f.say("Turn on the lamp", {
+    user_id: OWNER,
+    device_id: SATELLITE,
+  });
+  assert.equal(end.status, "done");
+  const [chat] = await f.voiceChats();
+  assert(chat);
+  const [proposal] = await f.proposals(chat.id);
+  assert.equal(proposal!.status, "pending");
+  assert.equal(proposal!.authorization?.mode, "ask");
+  assert.equal(proposal!.authorization?.channel, "satellite");
+  assert.equal(f.lights.length, 0);
+  // A satellite that is not mapped is refused even with an owner's context.
+  const unmapped = await f.say("Turn on the lamp", {
+    user_id: OWNER,
+    device_id: "0123456789abcdef0123456789abcdee",
+    satellite_id: "assist_satellite.example",
+  });
+  assert.equal(unmapped.end.status, "refused");
+  assert.equal(f.lights.length, 0);
 });
 
 test("assist: the HA app Assist button keeps the person's own permissions and household role", async (t) => {

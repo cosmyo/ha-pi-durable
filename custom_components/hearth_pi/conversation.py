@@ -105,7 +105,7 @@ class HearthConversationEntity(
         chat_log: conversation.ChatLog,
     ) -> conversation.ConversationResult:
         """Send one turn to Hearth and stream its reply into the chat log."""
-        if len(user_input.text) > MAX_TEXT:
+        if len(user_input.text) > MAX_TEXT or len(user_input.text.encode()) > 6000:
             response = intent.IntentResponse(language=user_input.language)
             response.async_set_error(
                 intent.IntentResponseErrorCode.UNKNOWN, SPEECH_TOO_LONG
