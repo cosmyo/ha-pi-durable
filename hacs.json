@@ -1,0 +1,6 @@
+{
+  "name": "Hearth Pi",
+  "content_in_root": false,
+  "render_readme": false,
+  "homeassistant": "2025.6.0"
+}

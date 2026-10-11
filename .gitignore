@@ -22,3 +22,8 @@ AGENTS.md.override
 *.pem
 *.key
 /hearth_pi/eval/report.md
+
+# Python test environment for custom_components/hearth_pi (never committed)
+.venv-ha/
+__pycache__/
+.pytest_cache/

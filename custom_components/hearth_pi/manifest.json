@@ -1,0 +1,14 @@
+{
+  "domain": "hearth_pi",
+  "name": "Hearth Pi",
+  "after_dependencies": ["hassio"],
+  "codeowners": [],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/cosmyo/ha-pi-durable/blob/main/hearth_pi/DOCS.md#hearth-assist-voice",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/cosmyo/ha-pi-durable/issues",
+  "requirements": [],
+  "version": "0.5.0"
+}

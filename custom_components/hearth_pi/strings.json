@@ -1,0 +1,20 @@
+{
+  "config": {
+    "flow_title": "{addon}",
+    "step": {
+      "hassio_confirm": {
+        "title": "Use Hearth Pi for Assist",
+        "description": "Link Home Assistant Assist to the {addon} app? Hearth then appears as a conversation agent you can choose in a voice assistant. Hearth's own Home permissions and approvals decide every change; voice never approves anything."
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach Hearth. Check that the app is running and Assist is enabled in its configuration.",
+      "invalid_auth": "Hearth did not accept the link. Restart the Hearth app so it publishes the link again."
+    },
+    "abort": {
+      "already_configured": "Hearth is already linked; the link was updated.",
+      "invalid_discovery": "The Hearth app published an invalid link.",
+      "use_discovery": "Hearth is set up automatically from the Hearth Pi app. Set assist_enabled: true in the app's configuration and restart it."
+    }
+  }
+}
