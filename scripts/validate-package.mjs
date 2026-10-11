@@ -56,6 +56,9 @@ assert.equal(config.options.service_actions_enabled, false);
 assert.equal(config.options.access_mode, "scoped");
 assert.equal(config.schema.access_mode, "list(scoped|admin)");
 assert.equal(config.options.risk_judge_model, "auto");
+// Phone approvals are owner opt-in and off by default.
+assert.equal(config.options.approval_notifications, false);
+assert.equal(config.schema.approval_notifications, "bool");
 assert.equal(config.schema.risk_judge_api_key, "password");
 assert.deepEqual(
   Object.keys(config.options).sort(),

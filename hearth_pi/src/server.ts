@@ -27,6 +27,7 @@ import { ListStore } from "./lists.js";
 import { ProfileStore } from "./profile.js";
 import { SuggestionStore } from "./suggestions.js";
 import { WorldStore } from "./world.js";
+import { ApprovalPush } from "./approval-push.js";
 
 // Cached once per process: the package version shown read-only in the
 // Settings \u2192 About sheet. Never written to, never user-controlled.
@@ -103,6 +104,8 @@ export function appServer(
     secrets?: string[];
     // Started by main.ts; tests may pass their own (or none: not started).
     proactive?: Proactive;
+    // Phone approvals; built from the App configuration when absent.
+    approvalPush?: ApprovalPush;
   } = {},
 ) {
   const boundary = new Boundary(config),
@@ -174,6 +177,16 @@ export function appServer(
     return { ...today, unread: today.unread + unseen, suggestions: open };
   };
   const world = new WorldStore(runtime, actions.engine.ha);
+  // Phone approvals: available only with approval_notifications in ingress
+  // mode (local mode has no HA user to bind a tap to).
+  const approvalPush =
+    options.approvalPush ??
+    new ApprovalPush(runtime, actions.engine, {
+      available:
+        config.mode === "ingress" && config.approvalNotifications === true,
+      selfSlug: config.selfSlug || config.policy.selfSlug || "",
+    });
+  void approvalPush.start().catch(() => {});
   const streams = new Set<ServerResponse>();
   const sessionStreams = new Map<number, Set<() => void>>();
   // Oldest-first per-owner stream stoppers; a new stream over the limit
@@ -427,6 +440,24 @@ export function appServer(
         if (req.method === "GET")
           return json(res, 200, await profile.get(owner));
         return json(res, 200, await profile.put(owner, await body(req)));
+      }
+      if (req.method === "GET" && path === "/api/approval-push")
+        return json(res, 200, await approvalPush.get(owner));
+      const pushRoute =
+        /^\/api\/approval-push\/(enabled|targets\/add|targets\/remove)$/.exec(
+          path,
+        );
+      if (pushRoute && req.method === "POST") {
+        const v = await body(req);
+        return json(
+          res,
+          200,
+          pushRoute[1] === "enabled"
+            ? await approvalPush.setEnabled(owner, v)
+            : pushRoute[1] === "targets/add"
+              ? await approvalPush.addTarget(owner, v)
+              : await approvalPush.removeTarget(owner, v),
+        );
       }
       if (req.method === "GET" && path === "/api/memory")
         return json(res, 200, await memory.list(owner));
@@ -909,6 +940,7 @@ export function appServer(
       for (const subscription of options.subscriptions ?? [])
         await subscription.close();
       await proactive.stop();
+      await approvalPush.stop();
       await actions.close();
       await runtime.close();
       server.closeAllConnections();

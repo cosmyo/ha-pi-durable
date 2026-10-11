@@ -468,6 +468,29 @@
         </select>
         <button id="you-save" type="button">Save</button>
       </div>
+      <section
+        id="push-section"
+        class="push-section"
+        aria-labelledby="push-heading"
+        hidden
+      >
+        <h3 id="push-heading">Phone approvals</h3>
+        <p class="muted">
+          Shows only the risk level and a one-line action. Low and medium can be
+          approved from the notification; high and critical open Hearth.
+        </p>
+        <button
+          id="push-enabled"
+          type="button"
+          role="switch"
+          aria-checked="false"
+        >
+          Off
+        </button>
+        <p id="push-status" role="status" aria-live="polite"></p>
+        <ul id="push-targets" class="push-list"></ul>
+        <ul id="push-candidates" class="push-list"></ul>
+      </section>
       <div class="actions">
         <button id="you-close" type="button">Close</button>
       </div>

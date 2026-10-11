@@ -56,6 +56,69 @@ import {
   WORLD_REGISTRY_TTL,
   type RegistryProjection,
 } from "./world-layout.js";
+import {
+  HAEventSubscriber,
+  type HAEventOptions,
+  type NotificationActionEvent,
+} from "./ha-events.js";
+
+// Phone approvals (src/approval-push.ts): the only notification shapes the
+// controller can send. Fixed template, fixed notify.mobile_app_* target, no
+// free text from a model or a tool. Never reachable from any extension.
+export const MOBILE_APP_SERVICE = /^mobile_app_[a-z0-9_]{1,80}$/;
+export const NOTIFICATION_ACTION = /^HEARTH_[ARP]_[A-Z2-7]{26}$/;
+export const NOTIFICATION_TAG = /^hearth_[a-f0-9]{16}$/;
+export type NotificationButton =
+  | { action: string; title: string; authenticationRequired?: true }
+  | { action: "URI"; title: "Open Hearth"; uri: string };
+export type DeviceNotification =
+  | {
+      title: string;
+      message: string;
+      data: { tag: string; group: string; actions: NotificationButton[] };
+    }
+  | { message: "clear_notification"; data: { tag: string } };
+// A phone Hearth could notify for an owner: their own person's mobile_app
+// device tracker with an existing notify.mobile_app_* service.
+export type PhoneCandidate = { service: string; label: string };
+// Home Assistant's slugify for plain names (notify service object ids).
+export function haSlug(value: string): string {
+  return value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+function checkNotification(service: string, payload: DeviceNotification) {
+  insist(MOBILE_APP_SERVICE.test(service), "push_target_invalid", 400);
+  insist(NOTIFICATION_TAG.test(payload.data.tag), "push_payload_invalid");
+  if (payload.message === "clear_notification") {
+    insist(
+      Object.keys(payload).length === 2 &&
+        Object.keys(payload.data).length === 1,
+      "push_payload_invalid",
+    );
+    return;
+  }
+  const p = payload as Extract<DeviceNotification, { title: string }>;
+  insist(
+    Object.keys(p).length === 3 &&
+      p.title.length <= 60 &&
+      p.message.length >= 1 &&
+      p.message.length <= 120 &&
+      p.data.group === "hearth-approvals" &&
+      Object.keys(p.data).length === 3 &&
+      p.data.actions.length >= 1 &&
+      p.data.actions.length <= 3 &&
+      p.data.actions.every((a) =>
+        a.action === "URI"
+          ? "uri" in a && /^\/hassio\/ingress\/[a-z0-9_]{1,64}$/.test(a.uri)
+          : NOTIFICATION_ACTION.test(a.action) && a.title.length <= 20,
+      ),
+    "push_payload_invalid",
+  );
+}
 
 export class HAClient {
   readonly actions = new HomeActions(this);
@@ -93,6 +156,136 @@ export class HAClient {
   }
   sanitize(value: string): string {
     return this.redact(value);
+  }
+  // Phone approvals: the long-lived notification-action subscriber. Its
+  // socket can send only auth, one subscribe_events and ping.
+  eventSubscriber(
+    onEvent: (event: NotificationActionEvent) => void,
+    options?: HAEventOptions,
+  ) {
+    return new HAEventSubscriber(
+      this.socket,
+      this.token,
+      this.redact,
+      onEvent,
+      options,
+    );
+  }
+  // Phone approvals' send path, separate from the action ledger: one POST of
+  // a fixed-shape notification to notify.mobile_app_<device>. Controller
+  // only: no model tool, proposal or route can call it, and scoped mode's
+  // allowed_services (which never includes notify) still refuses notify for
+  // every proposal. A failure is reported once and never retried.
+  async notifyDevice(
+    service: string,
+    payload: DeviceNotification,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    checkNotification(service, payload);
+    insist(this.token, "ha_unconfigured", 503);
+    const timeout = AbortSignal.timeout(10000);
+    let ok = false;
+    try {
+      const response = await this.transport(
+        `http://supervisor/core/api/services/notify/${service}`,
+        {
+          method: "POST",
+          redirect: "error",
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+          signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+        },
+      );
+      ok = response.ok;
+      await response.body?.cancel();
+    } catch {
+      ok = false;
+    }
+    insist(ok, "push_send_failed", 502);
+  }
+  // The owner's own phones, from controller reads only: person.* whose
+  // user_id is the owner, its device_trackers, the entity registry entries of
+  // platform mobile_app, their devices, and an existing
+  // notify.mobile_app_<slug(device name)> service. Nothing else is kept.
+  async ownerPhoneCandidates(
+    owner: string,
+    signal?: AbortSignal,
+  ): Promise<PhoneCandidate[]> {
+    const states = await this.request("states", signal);
+    insist(
+      Array.isArray(states) && states.length <= MAX_ENTITIES,
+      "ha_read_failed",
+      502,
+    );
+    const trackers = new Set<string>();
+    for (const item of states as Record<string, unknown>[]) {
+      const id = item?.entity_id;
+      if (typeof id !== "string" || !id.startsWith("person.")) continue;
+      const attrs =
+        item.attributes && typeof item.attributes === "object"
+          ? (item.attributes as Record<string, unknown>)
+          : {};
+      if (attrs.user_id !== owner || !Array.isArray(attrs.device_trackers))
+        continue;
+      for (const tracker of attrs.device_trackers.slice(0, 20))
+        if (typeof tracker === "string" && entityPattern.test(tracker))
+          trackers.add(tracker);
+    }
+    if (!trackers.size) return [];
+    const registry = await haWebSocketSession(
+      this.socket,
+      this.token,
+      this.redact,
+      async (call) => ({
+        entities: await call("config/entity_registry/list", {}),
+        devices: await call("config/device_registry/list", {}),
+      }),
+      signal,
+      HA_REGISTRY_LIMITS,
+    );
+    const deviceIds = new Set<string>();
+    for (const entry of Array.isArray(registry.entities)
+      ? (registry.entities as Record<string, unknown>[])
+      : [])
+      if (
+        typeof entry?.entity_id === "string" &&
+        trackers.has(entry.entity_id) &&
+        entry.platform === "mobile_app" &&
+        typeof entry.device_id === "string"
+      )
+        deviceIds.add(entry.device_id);
+    if (!deviceIds.size) return [];
+    const services = await this.request("services", signal);
+    insist(
+      Array.isArray(services) && services.length <= 500,
+      "ha_read_failed",
+      502,
+    );
+    const notify = (services as Record<string, unknown>[]).find(
+      (s) => s?.domain === "notify",
+    )?.services;
+    const available = (name: string) =>
+      !!notify && typeof notify === "object" && Object.hasOwn(notify, name);
+    const out: PhoneCandidate[] = [];
+    for (const device of Array.isArray(registry.devices)
+      ? (registry.devices as Record<string, unknown>[])
+      : []) {
+      if (typeof device?.id !== "string" || !deviceIds.has(device.id)) continue;
+      const name = typeof device.name === "string" ? device.name : "";
+      const service = `mobile_app_${haSlug(name)}`;
+      if (!name || !MOBILE_APP_SERVICE.test(service) || !available(service))
+        continue;
+      const shown =
+        typeof device.name_by_user === "string" && device.name_by_user.trim()
+          ? device.name_by_user
+          : name;
+      if (!out.some((c) => c.service === service))
+        out.push({ service, label: this.redact(shown).slice(0, 60) });
+    }
+    return out.slice(0, 8);
   }
   // Home World: the three read-only registry lists over one bounded socket,
   // projected at once to the read scope (area/device names only).

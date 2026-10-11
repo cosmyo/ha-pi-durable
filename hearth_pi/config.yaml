@@ -53,6 +53,7 @@ options:
   risk_judge_timeout_ms: 15000
   risk_judge_session_ttl_ms: 300000
   briefing_summary_model: auto
+  approval_notifications: false
 schema:
   authorized_user_ids:
     - str
@@ -76,3 +77,4 @@ schema:
   risk_judge_timeout_ms: int(1000,30000)
   risk_judge_session_ttl_ms: int(0,3600000)
   briefing_summary_model: str
+  approval_notifications: bool

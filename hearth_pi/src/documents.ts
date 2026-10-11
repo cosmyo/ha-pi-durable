@@ -157,6 +157,11 @@ export type Proposal = {
     inputIds: number[];
   };
   attemptedAt?: number;
+  // Phone approvals: committed before the one send to the owner's phones
+  // (never resent, even when the send failed).
+  notified?: { at: number; tag: string; count: number };
+  // Set when the decision was a tap on a phone notification.
+  decidedVia?: "push";
   // Set when a person pressed an app ToggleAction or a Home World device
   // instead of a model tool call.
   origin?:

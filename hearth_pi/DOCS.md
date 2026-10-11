@@ -41,6 +41,7 @@ risk_judge_api_key: ""
 risk_judge_timeout_ms: 15000
 risk_judge_session_ttl_ms: 300000
 briefing_summary_model: auto
+approval_notifications: false
 ```
 
 Select `provider: offline` instead to test startup without AI credentials; its replies are synthetic, not model inference. Do **not** create or paste an HA long-lived access token: the App gets its server-side HA API credential from Supervisor. Never put provider credentials or login redirect URLs in chat or issue reports.
@@ -95,6 +96,7 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 - `briefing_summary_model`: `auto` by default (same resolution as `risk_judge_model`'s `auto`: `gpt-5.6-luna`, then `claude-haiku-4-5`, else off). `off` disables the optional per-briefing model-written summary entirely; `<provider>/<modelId>` names a different signed-in Pi runtime model. See [Today, briefings and watchers](#today-briefings-and-watchers-unreleased-source-slice). The summary is also off unless an owner turns on **Add a short summary** for that specific briefing.
 - `workspace_enabled`: false by default. True requires workspace owners (below) and a **separate confined worker** installed by the trusted host operator; it does not create a container or expose Docker. [Workspace guide](../docs/workspace.md).
 - `workspace_owner_ids`: empty by default, meaning "the one authorized owner" (then `authorized_user_ids` must have exactly one entry). Otherwise up to 5 HA user IDs, each also in `authorized_user_ids`, who alone may create and use Code sessions; see [Optional Code mode](#optional-code-mode).
+- `approval_notifications`: false by default. True lets each owner confirm their own phones for [Phone approvals](#phone-approvals-unreleased-source-slice). Ingress mode only (local development refuses to start with `approval_notifications_requires_ingress`).
 
 ## Session model and thinking
 
@@ -174,6 +176,14 @@ Shared list changes follow the same modes, with one limit: in scoped mode Full a
 Emergency Read-only stays available during work. It invalidates pending actions and promptly prevents/cancels dispatch; it cannot undo an already attempted effect. Receipts show human/automatic authorization, revision and accepted versus unknown. An unresolved dispatch/unknown blocks Home writes installation-wide, including new sessions, other owners, mode toggles and restarts. Only the owning human's reconciliation of the specific unknown clears it; check independently and never automatically retry. Other owners see only that writes are blocked, not private receipt details. Stop task is not a substitute for Read-only.
 
 In Scoped mode: no Home shell/config/SSH/Docker, scripts, automation changes, Core or Supervisor-admin operations (see [Admin access mode](#admin-access-mode-unreleased-source-slice) for the owner opt-in); automations can only be inspected read-only (see [Automation troubleshooting](#automation-troubleshooting-unreleased-source-slice)). No generic service/JSON proxy or new Supervisor privilege. Avoid safety-critical devices. This slice is offline/source-tested only; live/mobile/restore/power-loss paths need separate authorization and validation.
+
+## Phone approvals (unreleased source slice)
+
+Opt-in with `approval_notifications: true`. Each owner then opens **Settings → You → Phone approvals**, picks **Use this phone** next to one of their own phones and taps **It's my phone** on the notification that arrives (within 10 minutes). Hearth lists only phones with the Home Assistant Companion app whose device tracker belongs to the Home Assistant person linked to your user, and uses a phone only after that tap came from your own Home Assistant user. Up to 4 phones per owner; turn the switch off or **Remove** a phone at any time.
+
+When Hearth proposes a Home change in a chat and it is still waiting for you 20 seconds later (with at least a minute before it expires), your confirmed phones get one notification: `Hearth · <level> risk` and one line naming the service and entity (or config item / Supervisor path), never values such as codes, never device names. **Low and medium** risk can be approved or rejected there; Approve asks the phone to unlock first where the Companion app supports it (iOS; on Android a lock-screen Approve may not require unlocking, so keep medium actions in mind). **High and critical** offer only **Reject** and **Open Hearth**: approving them always needs the exact card in Hearth, and critical still needs its typed word. Nothing you type in a notification is ever read.
+
+A tap counts only once, only for that exact proposal, only before it expires, and only when Home Assistant reports it came from your own user. Hearth re-checks permissions, expiry and the write pause exactly as for a tap in the app. Each proposal is sent at most once (a failed send is not retried), at most 20 per owner per hour; the notification is removed when the proposal is decided or expires. Your own presses in apps, Home World and Today → Lists are not sent. Taps made while Hearth's connection to Home Assistant is down are lost; the proposal then simply expires. Pending approvals never survive a restart, and neither do notification links. If Home Assistant later links that phone to a different person, Hearth stops using it and shows **Confirm this phone again**.
 
 ## Admin access mode (unreleased source slice)
 

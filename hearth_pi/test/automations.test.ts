@@ -788,9 +788,15 @@ test("static: automation troubleshooting code has no write path to HA", async ()
   // Only one function writes to the socket, and it checks the allowlist.
   assert.equal(ws.match(/\.send\(/g)?.length, 1);
   const ha = await readFile(new URL("../src/ha.ts", import.meta.url), "utf8");
-  // Config paths are read through the GET-only getter; the single POST path is
-  // the existing service dispatch with an explicit Action.
-  assert.equal(ha.match(/"POST"/g)?.length, 1);
+  // Config paths are read through the GET-only getter. The POST paths are
+  // the existing service dispatch with an explicit Action and Phone
+  // approvals' fixed-shape notify.mobile_app_* notifier (controller only).
+  assert.equal(ha.match(/"POST"/g)?.length, 2);
+  assert.match(
+    ha,
+    /`http:\/\/supervisor\/core\/api\/services\/notify\/\$\{service\}`/,
+  );
+  assert.match(ha, /checkNotification\(service, payload\);/);
   assert.match(ha, /method: action \? "POST" : "GET"/);
   assert.match(
     ha,

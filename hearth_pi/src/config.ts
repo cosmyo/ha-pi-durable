@@ -59,6 +59,12 @@ export type Config = {
   // workspace_owner_ids option, else the one authorized owner. loadConfig
   // always sets it when the workspace is enabled; see workspaceOwners().
   workspaceOwners?: string[];
+  // Phone approvals (src/approval-push.ts): the approval_notifications
+  // option, ingress mode only. Absent means off.
+  approvalNotifications?: boolean;
+  // This add-on's Supervisor slug in either access mode (for the "Open
+  // Hearth" notification link); empty when unknown.
+  selfSlug?: string;
   policy: Policy;
   judge?: JudgeConfig;
   // "off", "auto" or "<provider>/<modelId>": the optional briefing summary's
@@ -96,6 +102,7 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "workspace_requires_ingress",
   "invalid_workspace_owner_ids",
   "workspace_owner_not_authorized",
+  "approval_notifications_requires_ingress",
   "provider_key_required",
 ]);
 // The startup log line for a loadConfig failure: the known Fault code only.
@@ -139,6 +146,7 @@ export async function loadConfig(
           "risk_judge_timeout_ms",
           "risk_judge_session_ttl_ms",
           "briefing_summary_model",
+          "approval_notifications",
         ])
       : {};
   const port =
@@ -288,6 +296,14 @@ export async function loadConfig(
       mode === "ingress" && authorizedUsers.length === 1,
       "workspace_requires_one_trusted_owner",
     );
+  const approvalNotifications =
+    options.approval_notifications ??
+    process.env.HEARTH_APPROVAL_NOTIFICATIONS === "true";
+  insist(typeof approvalNotifications === "boolean");
+  insist(
+    !approvalNotifications || mode === "ingress",
+    "approval_notifications_requires_ingress",
+  );
   const apiKey = text(
     options.openai_api_key ?? process.env.OPENAI_API_KEY ?? "",
     500,
@@ -335,6 +351,8 @@ export async function loadConfig(
         ? configuredWorkspaceOwners
         : authorizedUsers
       : [],
+    approvalNotifications,
+    selfSlug: selfSlug(process.env.HOSTNAME, mode === "ingress"),
     policy:
       access === "admin"
         ? {

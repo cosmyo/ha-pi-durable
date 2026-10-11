@@ -93,6 +93,15 @@ export function autoRunAllowed(
   if (risk.level === "low") return true;
   return risk.level === "medium" && judge.verdict === "agreed";
 }
+// Phone approvals (src/approval-push.ts) learn about new pending model
+// proposals and about decisions through these hooks; they never decide.
+export type ApprovalHooks = {
+  pending(owner: string, sessionId: number, proposal: Proposal): void;
+  settled(): void;
+};
+// Where a decision came from. "push" is a tap on a phone notification bound
+// to the owner's HA user and a single-use nonce (src/approval-push.ts).
+export type DecisionVia = "ui" | "push";
 const NO_JUDGE: JudgeRecord = {
   model: "off",
   verdict: "not_applicable",
@@ -110,7 +119,22 @@ export class HomeActions {
   private inFlight = new Set<Promise<unknown>>();
   private authorizedOwners = new Set<string>();
   judge: RiskJudge = offJudge;
+  private hooks?: ApprovalHooks;
   constructor(readonly ha: HAClient) {}
+  useApprovalHooks(hooks: ApprovalHooks) {
+    this.hooks = hooks;
+  }
+  // Whether the server boundary's current configuration authorizes owner.
+  isAuthorized(owner: string) {
+    return this.authorizedOwners.has(owner);
+  }
+  private settled() {
+    try {
+      this.hooks?.settled();
+    } catch {
+      // Notification cleanup is best effort and never affects a decision.
+    }
+  }
   useJudge(judge: RiskJudge) {
     this.judge = judge;
   }
@@ -355,6 +379,7 @@ export class HomeActions {
       for (const [controller, actionOwner] of this.controllers)
         if (actionOwner === owner) controller.abort();
     });
+    this.settled();
     return this.settings(owner);
   }
   private async home(tx: Tx, sessionId: ConversationId, owner?: string) {
@@ -510,6 +535,16 @@ export class HomeActions {
           return copy(item);
         }, context),
       );
+      if (
+        proposal.status === "pending" &&
+        proposal.authorization?.source === "human" &&
+        !proposal.origin
+      )
+        try {
+          this.hooks?.pending(owner, api.conversationId, proposal);
+        } catch {
+          // Phone approvals never affect admission.
+        }
       if (proposal.authorization?.source === "automatic") {
         this.host();
         await this.dispatch(owner, api.conversationId, proposal, true, signal);
@@ -626,7 +661,34 @@ export class HomeActions {
     decision: "approve" | "reject" | "resolve",
     note = "",
     confirm = "",
+    via: DecisionVia = "ui",
   ) {
+    try {
+      return await this.decideOnce(
+        owner,
+        sessionId,
+        id,
+        hash,
+        decision,
+        note,
+        confirm,
+        via,
+      );
+    } finally {
+      if (decision !== "resolve") this.settled();
+    }
+  }
+  private async decideOnce(
+    owner: string,
+    sessionId: number,
+    id: string,
+    hash: string,
+    decision: "approve" | "reject" | "resolve",
+    note: string,
+    confirm: string,
+    via: DecisionVia,
+  ) {
+    insist(via === "ui" || decision !== "resolve", "invalid_request");
     const runtime = this.host();
     const conversation = await runtime.session(owner, sessionId);
     const proposal = (
@@ -654,6 +716,7 @@ export class HomeActions {
           } else {
             insist(item.status === "pending", "proposal_already_decided", 409);
             item.status = "rejected";
+            if (via === "push") item.decidedVia = "push";
           }
           item.decidedBy = owner;
           item.decidedAt = Date.now();
@@ -662,6 +725,14 @@ export class HomeActions {
       return;
     }
     insist(proposal.status === "pending", "proposal_already_decided", 409);
+    // A phone notification may approve only low and medium; high and
+    // critical need the exact card in Hearth (and critical its typed word).
+    if (via === "push")
+      insist(
+        proposal.risk?.level === "low" || proposal.risk?.level === "medium",
+        "push_approval_not_allowed",
+        403,
+      );
     // Critical: a second explicit step, typing the exact word shown.
     if (proposal.risk?.level === "critical")
       insist(
@@ -688,10 +759,46 @@ export class HomeActions {
         false,
         controller.signal,
         true,
+        via,
       );
     } finally {
       this.controllers.delete(controller);
     }
+  }
+  // Phone approvals: record that this pending model proposal is about to be
+  // sent to the owner's phones, BEFORE the send, so it is sent at most once.
+  // Returns the proposal, or null when it may not (or no longer) be sent.
+  async markNotified(
+    owner: string,
+    sessionId: number,
+    id: string,
+    hash: string,
+    notified: NonNullable<Proposal["notified"]>,
+    minRemainingMs: number,
+  ): Promise<Proposal | null> {
+    const runtime = this.host();
+    const conversationId = sessionId as ConversationId;
+    return this.gate.run(() =>
+      runtime.harness.commit(async (tx) => {
+        const session = (await tx.doc(Catalog)).items.find(
+          (s) => s.id === sessionId && s.owner === owner,
+        );
+        if (!session || session.kind === "workspace") return null;
+        const item = (await tx.doc(Proposals, conversationId)).items[id];
+        if (
+          !item ||
+          item.hash !== hash ||
+          item.status !== "pending" ||
+          item.origin ||
+          item.notified ||
+          item.authorization?.owner !== owner ||
+          item.expires - notified.at < minRemainingMs
+        )
+          return null;
+        item.notified = { ...notified };
+        return copy(item);
+      }, ctx),
+    );
   }
   private async authorize(
     tx: Tx,
@@ -753,6 +860,7 @@ export class HomeActions {
     automatic: boolean,
     signal: AbortSignal,
     validate = false,
+    via: DecisionVia = "ui",
   ) {
     const runtime = this.host();
     if (validate) await this.ha.validateLive(proposal.action, signal);
@@ -790,6 +898,7 @@ export class HomeActions {
         (await tx.doc(HomePermissions)).actionRevision++;
         item.decidedBy = owner;
         item.decidedAt = Date.now();
+        if (via === "push") item.decidedVia = "push";
       }, ctx),
     );
     let send: Promise<void> | undefined;

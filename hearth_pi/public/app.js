@@ -2273,12 +2273,109 @@ $("you-save").addEventListener("click", async () => {
     youFeedback(`Not saved: ${youError(error)}`);
   }
 });
+// --- Settings \u2192 You \u2192 Phone approvals (opt-in App option). Your own
+// phones only; a phone is used after you tap "It's my phone" on it. ---
+let pushData = null;
+const PUSH_STATUS = {
+  active: "Confirmed",
+  proof: "Waiting for you to tap \u2018It\u2019s my phone\u2019\u2026",
+  expired: "Not confirmed in time \u2014 use this phone again",
+  disabled: "Confirm this phone again",
+};
+const PUSH_ERRORS = {
+  approval_push_stale: "Changed elsewhere; reloaded \u2014 try again.",
+  push_target_limit: "You already have 4 phones. Remove one first.",
+  push_proof_limit: "Too many confirmations this hour. Try later.",
+  push_send_failed: "The notification could not be sent. Try again later.",
+  push_candidate_not_found: "That phone is no longer yours in Home Assistant.",
+  push_target_exists: "That phone is already confirmed.",
+};
+function pushStatus(value) {
+  $("push-status").textContent = value;
+}
+function paintPush() {
+  const section = $("push-section");
+  if (!pushData?.available) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  const toggle = $("push-enabled");
+  toggle.setAttribute("aria-checked", String(pushData.enabled));
+  toggle.textContent = pushData.enabled ? "On" : "Off";
+  const targets = document.createDocumentFragment();
+  for (const target of pushData.targets) {
+    const row = node("li");
+    const info = node("span");
+    info.append(
+      node("strong", target.label),
+      node(
+        "span",
+        ` \u00b7 ${PUSH_STATUS[target.status] ?? target.status}`,
+        "muted",
+      ),
+    );
+    const remove = node("button", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", () =>
+      pushChange("approval-push/targets/remove", { id: target.id }),
+    );
+    row.append(info, remove);
+    targets.append(row);
+  }
+  $("push-targets").replaceChildren(targets);
+  const candidates = document.createDocumentFragment();
+  for (const candidate of pushData.candidates) {
+    const row = node("li");
+    const use = node("button", "Use this phone");
+    use.type = "button";
+    use.addEventListener("click", () =>
+      pushChange("approval-push/targets/add", { candidate: candidate.id }),
+    );
+    row.append(node("span", candidate.label), use);
+    candidates.append(row);
+  }
+  $("push-candidates").replaceChildren(candidates);
+  if (pushData.candidatesUnavailable)
+    pushStatus("Could not read your phones from Home Assistant.");
+  else if (!pushData.targets.length && !pushData.candidates.length)
+    pushStatus(
+      "No phone with the Home Assistant app is linked to your person in Home Assistant.",
+    );
+}
+async function loadPush() {
+  try {
+    pushData = await api("approval-push");
+    paintPush();
+  } catch {
+    pushData = null;
+    paintPush();
+  }
+}
+async function pushChange(path, payload) {
+  if (!pushData) return;
+  try {
+    pushStatus("Saving\u2026");
+    pushData = await api(path, { ...payload, revision: pushData.revision });
+    pushStatus("");
+    paintPush();
+  } catch (error) {
+    pushStatus(PUSH_ERRORS[error.message] ?? `Not saved: ${error.message}.`);
+    if (error.message === "approval_push_stale") await loadPush();
+  }
+}
+$("push-enabled").addEventListener("click", () => {
+  if (pushData)
+    void pushChange("approval-push/enabled", { enabled: !pushData.enabled });
+});
 function openYou() {
   closeSettingsSheet();
   youFeedback("");
+  pushStatus("");
   $("you-dialog").showModal();
   $("you-row").setAttribute("aria-expanded", "true");
   void loadYou();
+  void loadPush();
 }
 $("you-row").addEventListener("click", openYou);
 $("you-close").addEventListener("click", () => $("you-dialog").close());

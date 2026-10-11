@@ -885,6 +885,20 @@ export function renderProposals(
           `${proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
         ),
       );
+    // Phone approvals: whether this went to the owner's phones and whether
+    // the decision was a tap on one.
+    if (proposal.decidedVia === "push")
+      card.append(
+        node(
+          "p",
+          proposal.status === "rejected"
+            ? "Rejected from your phone"
+            : "Approved from your phone",
+          "muted",
+        ),
+      );
+    else if (proposal.notified && proposal.status === "pending")
+      card.append(node("p", "Sent to your phone", "muted"));
     const fingerprint = node("details");
     fingerprint.append(
       node("summary", "Exact immutable fingerprint"),
