@@ -476,15 +476,34 @@ export class HomeActions {
       .sort((a, b) => b.admitted - a.admitted);
     return requestText(inputs[0]?.content);
   }
+  // The current run's inputs: their permission bindings, and the channel
+  // ceiling (Hearth Assist). One satellite input in the run is enough to
+  // lower the whole run to Ask. An input without a record keeps failing the
+  // Full checks exactly as before (its binding is missing).
   private async inputBinding(tx: Tx, sessionId: ConversationId) {
     const ids = (await tx.doc(LiveDoc, sessionId)).run?.inputs ?? [];
     const inputs = Object.values((await tx.doc(Inputs, sessionId)).requests);
+    const found = ids.map((id) => inputs.find((i) => i.submissionId === id));
+    const channel = found.some((i) => i?.channel === "satellite")
+      ? ("satellite" as const)
+      : found.some((i) => i?.channel === "assist")
+        ? ("assist" as const)
+        : undefined;
     return {
       ids: [...ids] as number[],
-      bindings: ids.map(
-        (id) => inputs.find((i) => i.submissionId === id)?.homePermission,
-      ),
+      bindings: found.map((i) => i?.homePermission),
+      ceiled: found.some((i) => i?.ceiling === "ask"),
+      channel,
     };
+  }
+  // Effective mode for a model proposal: the lower of the owner's mode and
+  // the run's channel ceiling. Full falls to Ask (a pending proposal for
+  // exact human approval) instead of failing; Ask and Read-only stay.
+  private effectiveMode(
+    binding: PermissionBinding,
+    input: { ceiled: boolean },
+  ): HomeMode {
+    return binding.mode === "full" && input.ceiled ? "ask" : binding.mode;
   }
   private assertFullGrant(owner: string, p: HomePermission) {
     insist(
@@ -576,7 +595,8 @@ export class HomeActions {
           const binding = this.binding(p);
           insist(binding.mode !== "read-only", "home_read_only", 403);
           const input = await this.inputBinding(tx, api.conversationId);
-          if (binding.mode === "full") this.assertFull(owner, p, input);
+          const mode = this.effectiveMode(binding, input);
+          if (mode === "full") this.assertFull(owner, p, input);
           insist(
             (await this.barriers(tx)).length === 0,
             "home_outcome_unresolved",
@@ -587,7 +607,7 @@ export class HomeActions {
           insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
           const now = Date.now();
           const automatic =
-            binding.mode === "full" &&
+            mode === "full" &&
             autoRunAllowed(risk, judge, action, this.ha.admin);
           const item: Proposal = {
             id,
@@ -607,9 +627,11 @@ export class HomeActions {
               : {}),
             authorization: {
               ...binding,
+              mode,
               source: automatic ? "automatic" : "human",
               owner,
               inputIds: input.ids,
+              ...(input.channel ? { channel: input.channel } : {}),
             },
           };
           doc.items[id] = item;
@@ -1017,6 +1039,8 @@ export class HomeActions {
         403,
       );
       const input = await this.inputBinding(tx, sessionId);
+      // A channel ceiling (voice satellite) never runs without a person.
+      insist(!input.ceiled, "input_channel_ceiling", 403);
       this.assertFull(owner, p, input);
       insist(
         digest(input.ids) === digest(proposal.authorization.inputIds),

@@ -26,6 +26,7 @@ import {
   Proposals,
   HomePermissions,
   ModelSelection,
+  type InputChannel,
 } from "./documents.js";
 import type { HomeActions } from "./home-actions.js";
 import { HomeCanvas, scopedCanvas } from "./canvas.js";
@@ -582,15 +583,25 @@ export class Runtime {
       images: !!resolved?.input.includes("image"),
     };
   }
+  // `options` (Hearth Assist only, never from a browser body): the input's
+  // channel and its Ask ceiling, committed with the input itself.
   async submit(
     owner: string,
     id: number,
     requestId: unknown,
     content: unknown,
     attachments?: unknown,
+    options: { channel?: InputChannel; ceiling?: "ask" } = {},
   ): Promise<number> {
     const key = text(requestId, 80);
     insist(requestPattern.test(key));
+    insist(
+      (options.channel === undefined ||
+        options.channel === "assist" ||
+        options.channel === "satellite") &&
+        (options.ceiling === undefined || options.ceiling === "ask") &&
+        (options.channel !== "satellite" || options.ceiling === "ask"),
+    );
     const images = parseImages(attachments);
     const message = this.redact(text(content, 4000, images.length ? 0 : 1));
     insist(this.redact(key) === key, "credentials_in_request_id");
@@ -602,7 +613,13 @@ export class Runtime {
         await this.harness.snapshot(Inputs, conversation.id, ctx)
       )?.requests[key];
       if (previous) {
-        insist(previous.hash === hash, "idempotency_conflict", 409);
+        insist(
+          previous.hash === hash &&
+            previous.channel === options.channel &&
+            previous.ceiling === options.ceiling,
+          "idempotency_conflict",
+          409,
+        );
         return (
           previous.submissionId ||
           this.place(id, key, previous.content, previous.images)
@@ -658,6 +675,8 @@ export class Runtime {
           ...(images.length ? { images } : {}),
           submissionId: 0,
           admitted: Date.now(),
+          ...(options.channel ? { channel: options.channel } : {}),
+          ...(options.ceiling ? { ceiling: options.ceiling } : {}),
           ...((await tx.doc(Catalog)).items.find((s) => s.id === id)?.kind !==
             "workspace" && this.homeActions
             ? { homePermission: await this.homeActions.bind(tx, owner) }

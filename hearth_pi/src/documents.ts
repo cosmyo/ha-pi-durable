@@ -42,7 +42,13 @@ export type Input = {
   submissionId: number;
   admitted: number;
   homePermission?: PermissionBinding;
+  // Hearth Assist: where the words came from. A voice reply is short and
+  // spoken; a satellite input also carries an Ask ceiling, so a run that
+  // includes it never auto-runs a Home change (home-actions.ts).
+  channel?: InputChannel;
+  ceiling?: "ask";
 };
+export type InputChannel = "assist" | "satellite";
 export const Inputs = defineDoc<{ requests: Record<string, Input> }>({
   kind: "hearth.inputs",
   version: 1,
@@ -156,6 +162,9 @@ export type Proposal = {
     source: "human" | "automatic";
     owner: string;
     inputIds: number[];
+    // Set when the request came through Hearth Assist; "satellite" means
+    // the run's Ask ceiling lowered the owner's mode.
+    channel?: InputChannel;
   };
   attemptedAt?: number;
   // Phone approvals: committed before the one send to the owner's phones
@@ -181,6 +190,26 @@ export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   history: "latest",
   fork: "initial",
   initial: () => ({ items: {} }),
+  checkpointWhen,
+});
+
+// Hearth Assist (src/assist.ts): each person's rolling Voice chat, which Home
+// Assistant conversation (for about 5 minutes) and which recent request id
+// went to which chat, so a repeated request never runs in a second chat.
+// Keys are prefixed ("o_…", "c_…", "r_…") and bounded in assist.ts.
+export type VoiceOwner = { chat: number; generation: number };
+export const VoiceSessions = defineDoc<{
+  owners: Record<string, VoiceOwner>;
+  conversations: Record<
+    string,
+    { owner: string; chat: number; expires: number }
+  >;
+  requests: Record<string, { owner: string; chat: number; at: number }>;
+}>({
+  kind: "hearth.voice-sessions",
+  version: 1,
+  scope: "session",
+  initial: () => ({ owners: {}, conversations: {}, requests: {} }),
   checkpointWhen,
 });
 
