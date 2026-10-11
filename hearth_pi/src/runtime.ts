@@ -215,6 +215,9 @@ export class Runtime {
             );
       }
       harness.resume();
+      // Unknown outcomes with checks left keep reading Home Assistant state
+      // back (read-only; never a retry).
+      void homeActions?.resumeReconciliation().catch(() => undefined);
       return runtime;
     } catch (error) {
       await db.close();
@@ -583,15 +586,17 @@ export class Runtime {
       images: !!resolved?.input.includes("image"),
     };
   }
-  // `options` (Hearth Assist only, never from a browser body): the input's
-  // channel and its Ask ceiling, committed with the input itself.
+  // `options` (set by the server, never from a browser body): the input's
+  // channel and its Ask ceiling (Hearth Assist), and `direct` when it is the
+  // person's own turn (the composer, or the Assist button under their own
+  // user), committed with the input itself.
   async submit(
     owner: string,
     id: number,
     requestId: unknown,
     content: unknown,
     attachments?: unknown,
-    options: { channel?: InputChannel; ceiling?: "ask" } = {},
+    options: { channel?: InputChannel; ceiling?: "ask"; direct?: boolean } = {},
   ): Promise<number> {
     const key = text(requestId, 80);
     insist(requestPattern.test(key));
@@ -600,8 +605,12 @@ export class Runtime {
         options.channel === "assist" ||
         options.channel === "satellite") &&
         (options.ceiling === undefined || options.ceiling === "ask") &&
-        (options.channel !== "satellite" || options.ceiling === "ask"),
+        (options.channel !== "satellite" || options.ceiling === "ask") &&
+        (options.direct === undefined || typeof options.direct === "boolean") &&
+        // A ceiled input (anyone in the room can speak) is never direct.
+        !(options.direct && options.ceiling),
     );
+    const direct = options.direct === true;
     const images = parseImages(attachments);
     const message = this.redact(text(content, 4000, images.length ? 0 : 1));
     insist(this.redact(key) === key, "credentials_in_request_id");
@@ -616,7 +625,8 @@ export class Runtime {
         insist(
           previous.hash === hash &&
             previous.channel === options.channel &&
-            previous.ceiling === options.ceiling,
+            previous.ceiling === options.ceiling &&
+            (previous.direct === true) === direct,
           "idempotency_conflict",
           409,
         );
@@ -677,6 +687,7 @@ export class Runtime {
           admitted: Date.now(),
           ...(options.channel ? { channel: options.channel } : {}),
           ...(options.ceiling ? { ceiling: options.ceiling } : {}),
+          ...(direct ? { direct: true as const } : {}),
           ...((await tx.doc(Catalog)).items.find((s) => s.id === id)?.kind !==
             "workspace" && this.homeActions
             ? { homePermission: await this.homeActions.bind(tx, owner) }

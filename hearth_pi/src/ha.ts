@@ -826,6 +826,33 @@ export class HAClient {
     );
     return entitySnapshot(entityId, raw, Date.now());
   }
+  // Group members of one entity in reach (attributes.entity_id; [] for a
+  // plain entity), for the unknown-outcome pause. null when unreadable.
+  async groupMembers(
+    entityId: string,
+    signal?: AbortSignal,
+  ): Promise<string[] | null> {
+    try {
+      this.entity(entityId);
+      const raw = (await this.request(
+        `states/${encodeURIComponent(entityId)}`,
+        signal,
+      )) as Record<string, unknown> | null;
+      if (!raw || typeof raw !== "object" || raw.entity_id !== entityId)
+        return null;
+      const attrs =
+        raw.attributes && typeof raw.attributes === "object"
+          ? (raw.attributes as Record<string, unknown>)
+          : {};
+      return Array.isArray(attrs.entity_id)
+        ? attrs.entity_id
+            .filter((m): m is string => typeof m === "string")
+            .slice(0, 500)
+        : [];
+    } catch {
+      return null;
+    }
+  }
   // Facts the deterministic classifier needs, read by the controller (never
   // by a model): this add-on's slug and targeted covers' device classes.
   async riskContext(

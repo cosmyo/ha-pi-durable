@@ -884,7 +884,7 @@ export function renderProposals(
       card.append(
         node(
           "p",
-          `${proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
+          `${proposal.authorization.source === "trusted" ? `Trusted / ran without asking (${proposal.risk?.level ?? "unrated"} risk)` : proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
         ),
       );
     // Phone approvals: whether this went to the owner's phones and whether
@@ -968,11 +968,20 @@ export function renderProposals(
       }
       card.append(buttons);
     }
+    // Unknown outcomes: Hearth's read-only checks of Home Assistant state.
+    for (const check of proposal.reconcile?.checks ?? [])
+      card.append(
+        node(
+          "p",
+          `${new Date(check.at).toLocaleTimeString()} · ${check.note}`,
+          "muted",
+        ),
+      );
     if (proposal.status === "unknown") {
       card.append(
         node(
           "p",
-          "Outcome unknown. It will not be retried. Check the device yourself.",
+          "Outcome unknown. It will not be retried. Hearth reads the device state back a few times; check the device yourself too.",
           "error",
         ),
       );

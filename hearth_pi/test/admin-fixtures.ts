@@ -17,6 +17,7 @@ import {
   ADMIN_FULL_ACKNOWLEDGEMENT,
   FULL_ACKNOWLEDGEMENT,
 } from "../src/home-actions.js";
+import type { InputChannel } from "../src/documents.js";
 import type { Policy } from "../src/config.js";
 import type { SocketFactory, SocketLike } from "../src/ha-websocket.js";
 import type { RiskJudge } from "../src/judge.js";
@@ -299,15 +300,29 @@ export function fakeAdminHA(
   return { ha, writes, frames, supervisorCalls, configs };
 }
 
+export type SubmitOptions = {
+  channel?: InputChannel;
+  ceiling?: "ask";
+  direct?: boolean;
+};
 export async function adminHarness(
-  options: Parameters<typeof fakeAdminHA>[0] & { judge?: RiskJudge } = {},
+  options: Parameters<typeof fakeAdminHA>[0] & {
+    judge?: RiskJudge;
+    // Trusted owners (trusted_user_ids) and how run() submits by default.
+    trusted?: string[];
+    submit?: SubmitOptions;
+  } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "hearth-admin-"));
   const provider = offline();
   const fake = fakeAdminHA(options);
   const { ha } = fake;
   if (options.judge) ha.actions.useJudge(options.judge);
-  ha.actions.authorizeOwners(["owner", "local-admin"]);
+  ha.actions.authorizeOwners(
+    ["owner", "local-admin"],
+    {},
+    options.trusted ?? [],
+  );
   const runtime = await Runtime.open(
     dir,
     provider.models,
@@ -327,9 +342,11 @@ export async function adminHarness(
       p.revision,
       p.policy,
       value === "full"
-        ? ha.admin
-          ? ADMIN_FULL_ACKNOWLEDGEMENT
-          : FULL_ACKNOWLEDGEMENT
+        ? ha.actions.isTrusted(owner)
+          ? ha.actions.acknowledgementFor(owner)
+          : ha.admin
+            ? ADMIN_FULL_ACKNOWLEDGEMENT
+            : FULL_ACKNOWLEDGEMENT
         : undefined,
     );
   };
@@ -339,6 +356,7 @@ export async function adminHarness(
     args: Record<string, unknown>,
     message = "Please do this for me",
     before: { tool: string; args: Record<string, unknown> }[] = [],
+    submit: SubmitOptions = options.submit ?? {},
   ) => {
     provider.faux.setResponses([
       ...before.map((b) =>
@@ -356,6 +374,8 @@ export async function adminHarness(
       id,
       `request-admin-${++n}`,
       message,
+      undefined,
+      submit,
     );
     await (await runtime.harness.submission(sid as SubmissionId, ctx))!.wait(
       ctx,

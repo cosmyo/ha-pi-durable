@@ -14,6 +14,7 @@ import {
   type ToggleControl,
 } from "./apps.js";
 import { entityPattern, insist, object, text } from "./safety.js";
+import { writesPaused } from "./reconcile.js";
 import {
   anomalyOf,
   autoLayout,
@@ -268,7 +269,8 @@ export class WorldStore {
       night,
       nightSource,
       mode: permissions.effectiveMode,
-      blocked: permissions.blocked,
+      // Every write paused (one entity's pause shows on its own control).
+      blocked: writesPaused(permissions),
       values,
       controls,
     };

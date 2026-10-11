@@ -12,6 +12,7 @@ import type { HAClient } from "./ha.js";
 import { memoryFingerprint } from "./memory.js";
 import type { Runtime } from "./runtime.js";
 import { insist, object, text } from "./safety.js";
+import { writesPaused, type WritePause } from "./reconcile.js";
 
 export const LIST_LIMITS = {
   lists: 8,
@@ -261,9 +262,12 @@ export type ListControl = { enabled: boolean; reason: string };
 // one list right now; reasons mirror app toggle controls (apps.ts).
 export function listControls(
   ha: HAClient,
-  permissions: { effectiveMode: string; blocked: boolean },
+  permissions: { effectiveMode: string; blocked: boolean; pause?: WritePause },
   features: number | null,
+  entityId?: string,
 ) {
+  // An unresolved outcome pauses this list (or every write).
+  const paused = writesPaused(permissions, entityId);
   const control = (ops: readonly TodoOp[], full: string): ListControl => {
     const service = todoService(ops[0]!);
     const scoped =
@@ -274,7 +278,7 @@ export function listControls(
       ? `Outside Hearth's configured service scope (${service}); this stays read-only.`
       : permissions.effectiveMode === "read-only"
         ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to change lists."
-        : permissions.blocked
+        : paused
           ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
           : !supported
             ? "This list does not support this in Home Assistant."
@@ -286,7 +290,7 @@ export function listControls(
         scoped &&
         supported &&
         permissions.effectiveMode !== "read-only" &&
-        !permissions.blocked,
+        !paused,
       reason,
     };
   };
@@ -346,11 +350,19 @@ export class ListStore {
                 readAt: this.now(),
                 available: false,
               }),
-          controls: listControls(this.ha, permissions, read?.features ?? null),
+          controls: listControls(
+            this.ha,
+            permissions,
+            read?.features ?? null,
+            entityId,
+          ),
         };
       }),
       mode: permissions.effectiveMode,
-      blocked: permissions.blocked,
+      // Every write, or one of these lists, is paused.
+      blocked:
+        writesPaused(permissions) ||
+        ids.some((id) => writesPaused(permissions, id)),
     };
   }
   async press(owner: string, body: unknown) {
@@ -360,7 +372,7 @@ export class ListStore {
     await this.runtime.session(owner, sessionId);
     const settings = await this.ha.actions.settings(owner);
     insist(settings.effectiveMode !== "read-only", "home_read_only", 403);
-    insist(!settings.blocked, "home_outcome_unresolved", 409);
+    insist(!writesPaused(settings), "home_outcome_unresolved", 409);
     const action = todoAction({
       kind: "todo",
       entityId: v.entityId,
@@ -370,6 +382,11 @@ export class ListStore {
         ? {}
         : { summary: this.runtime.redact(text(v.summary, 2000, 0)) }),
     });
+    insist(
+      !writesPaused(settings, action.entityId),
+      "home_outcome_unresolved",
+      409,
+    );
     const proposal = await this.ha.actions.press(owner, sessionId, action, {
       kind: "list",
       entityId: action.entityId,

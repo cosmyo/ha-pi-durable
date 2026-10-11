@@ -550,7 +550,7 @@ test("Ask: an item renamed between proposal and approval is refused with zero PO
   }
 });
 
-test("a failed list write is unknown, never retried, and pauses Home writes for every owner until its owner resolves it", async () => {
+test("a failed list write is unknown, never retried, and pauses writes to that list for every owner until its owner resolves it; other entities stay writable", async () => {
   const f = fakeListHA({
     post: async () => {
       throw new Error("synthetic transport failure");
@@ -601,15 +601,16 @@ test("a failed list write is unknown, never retried, and pauses Home writes for 
       press(f.ha, "other", otherId, { op: "complete", uid: "u1" }),
       /home_outcome_unresolved/,
     );
-    await assert.rejects(
-      f.ha.actions.press(
-        "other",
-        otherId,
-        { service: "light.turn_on", entityId: "light.example", data: {} },
-        { kind: "world", entityId: "light.example" },
-      ),
-      /home_outcome_unresolved/,
+    // The pause covers the list only: another entity can still be changed
+    // (here an exact pending proposal, since "other" is on Ask).
+    const light = await f.ha.actions.press(
+      "other",
+      otherId,
+      { service: "light.turn_on", entityId: "light.example", data: {} },
+      { kind: "world", entityId: "light.example" },
     );
+    assert.equal(light.status, "pending");
+    await f.ha.actions.decide("other", otherId, light.id, light.hash, "reject");
     const lists = await h.store.lists("other");
     assert.equal(lists.blocked, true);
     assert.match(lists.lists[0]!.controls.add.reason, /paused/);

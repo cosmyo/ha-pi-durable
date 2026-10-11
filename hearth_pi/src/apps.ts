@@ -23,6 +23,7 @@ import {
   type AppVersionInfo,
 } from "./app-docs.js";
 import type { HAClient } from "./ha.js";
+import { writesPaused, type WritePause } from "./reconcile.js";
 import type { Runtime } from "./runtime.js";
 import {
   COMPONENTS,
@@ -621,17 +622,17 @@ export function adminControl(
 // right now (shared by app ToggleActions and Home World devices).
 export function toggleControl(
   ha: HAClient,
-  permissions: { effectiveMode: string; blocked: boolean },
+  permissions: { effectiveMode: string; blocked: boolean; pause?: WritePause },
   entityId: string,
   state: string | undefined,
 ): ToggleControl {
   const domain = entityId.split(".")[0]!;
+  // An unresolved outcome pauses this entity (or every write).
+  const paused = writesPaused(permissions, entityId);
   if (ha.admin) {
     const next = adminControl(entityId, state);
     const enabled =
-      !!next &&
-      permissions.effectiveMode !== "read-only" &&
-      !permissions.blocked;
+      !!next && permissions.effectiveMode !== "read-only" && !paused;
     return {
       enabled,
       mode: permissions.effectiveMode,
@@ -640,7 +641,7 @@ export function toggleControl(
         ? "Hearth has no control for this kind of device; this stays read-only."
         : permissions.effectiveMode === "read-only"
           ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to use this control."
-          : permissions.blocked
+          : paused
             ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
             : !next
               ? "Hearth only acts from a known state."
@@ -659,7 +660,7 @@ export function toggleControl(
     ? "Outside Hearth's configured service scope; this control stays read-only."
     : permissions.effectiveMode === "read-only"
       ? "Home permissions are Read-only. Choose Ask or Full access in Home permissions to use this control."
-      : permissions.blocked
+      : paused
         ? "Home writes are paused: an earlier action has an unknown outcome. Resolve it in its chat first."
         : state !== "on" && state !== "off"
           ? "Hearth only toggles from a known on/off state."
@@ -670,7 +671,7 @@ export function toggleControl(
     enabled:
       scoped &&
       permissions.effectiveMode !== "read-only" &&
-      !permissions.blocked &&
+      !paused &&
       (state === "on" || state === "off"),
     mode: permissions.effectiveMode,
     reason,
@@ -689,7 +690,7 @@ export async function pressHomeToggle(
 ) {
   const settings = await ha.actions.settings(owner);
   insist(settings.effectiveMode !== "read-only", "home_read_only", 403);
-  insist(!settings.blocked, "home_outcome_unresolved", 409);
+  insist(!writesPaused(settings, entityId), "home_outcome_unresolved", 409);
   await runtime.session(owner, sessionId);
   const current = await ha.state(entityId);
   let action: unknown;

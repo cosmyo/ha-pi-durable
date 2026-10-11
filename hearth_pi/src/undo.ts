@@ -35,6 +35,8 @@ export type EntitySnapshot = {
   state: string;
   attrs: Record<string, Scalar>;
   lastChangedMs: number;
+  // Home Assistant's last_updated (attribute changes too), when reported.
+  lastUpdatedMs?: number;
   readAt: number;
 };
 // A list change needs no read: the controller already read the item's text
@@ -140,12 +142,14 @@ export function entitySnapshot(
     else if (typeof v === "string") attrs[key] = v.slice(0, 64);
   }
   const changed = Date.parse(String(value.last_changed ?? ""));
+  const updated = Date.parse(String(value.last_updated ?? ""));
   const snapshot: EntitySnapshot = {
     kind: "entity",
     entityId,
     state: value.state.slice(0, 64),
     attrs,
     lastChangedMs: Number.isFinite(changed) ? changed : 0,
+    ...(Number.isFinite(updated) ? { lastUpdatedMs: updated } : {}),
     readAt,
   };
   return JSON.stringify(snapshot).length <= UNDO_SNAPSHOT_BYTES

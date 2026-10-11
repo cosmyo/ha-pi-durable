@@ -268,11 +268,25 @@ function paintRole(role) {
   $("you-role").textContent = line;
   $("you-role").hidden = !line;
 }
+// Whether an unresolved outcome pauses every Home write (older servers send
+// only `blocked`); a pause of some entities shows on their own controls.
+function writesPausedAll(value) {
+  return value?.pause ? value.pause.all : !!value?.blocked;
+}
+function pauseSummary(value) {
+  const receipts = `Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.`;
+  if (writesPausedAll(value))
+    return ` Writes paused installation-wide for an unresolved outcome. ${receipts}`;
+  const entities = value.pause?.entities ?? [];
+  if (!entities.length) return "";
+  const shown = entities.slice(0, 5).join(", ");
+  return ` Writes to ${shown}${entities.length > 5 ? ` and ${entities.length - 5} more` : ""} paused for an unresolved outcome; Hearth reads their state back and never retries. ${receipts}`;
+}
 function updatePermissions(value) {
   if (!value) return;
   permissions = value;
   $("home-mode").value = value.effectiveMode;
-  const modeLabel = value.blocked
+  const modeLabel = writesPausedAll(value)
     ? "Paused"
     : value.role === "guest"
       ? "Guest \u00b7 Read-only"
@@ -299,11 +313,23 @@ function updatePermissions(value) {
   $("permission-scope-note").textContent = admin
     ? "Admin access: Hearth may propose any Home Assistant service, automation/script/scene, registry/helper and allowlisted Supervisor change. Each is risk-classified: Full access auto-runs only low risk (medium only when the risk judge agrees); high and critical always ask, and critical needs a typed confirmation. No host shell, filesystem or Docker."
     : "Only configured exact light/switch on/off and light brightness. No Home shell, config, SSH, Docker, scripts or admin access.";
+  const fullLabel = value.trusted
+    ? "Full access / trusted: every risk level"
+    : admin
+      ? "Full access / low-risk auto"
+      : "Full access / auto-approve";
   homeSafety = admin
-    ? `Home permissions · ${value.effectiveMode === "full" ? "Full access / low-risk auto" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · Admin access`
-    : `Home permissions · ${value.effectiveMode === "full" ? "Full access / auto-approve" : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
+    ? `Home permissions · ${value.effectiveMode === "full" ? fullLabel : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · Admin access`
+    : `Home permissions · ${value.effectiveMode === "full" ? fullLabel : value.effectiveMode === "ask" ? "Ask / exact review" : "Read-only"} · ${value.entityScopeCount} configured entities`;
   $("permission-summary").textContent =
-    `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
+    `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${pauseSummary(value)}`;
+  // Trusted owners (trusted_user_ids, App configuration only).
+  $("permission-trusted").hidden = !value.trusted;
+  $("permission-trusted").textContent = value.trusted
+    ? value.effectiveMode === "full"
+      ? "Trusted: everything runs on Full. Your own turns in Hearth and the Assist button run at every risk level without asking, with no risk judge and no typed confirmation. Voice satellites and work you did not start still ask."
+      : "Trusted: everything runs on Full. Choose Full access to use it; you confirm once."
+    : "";
   for (const option of $("home-mode").options)
     option.disabled =
       (!value.enabled && option.value !== "read-only") ||
@@ -632,7 +658,7 @@ function snapshot(value) {
   const signature = JSON.stringify([
     value.proposals,
     permissions?.effectiveMode,
-    permissions?.blocked,
+    writesPausedAll(permissions),
   ]);
   if (signature !== actionSignature) {
     actionSignature = signature;
@@ -640,7 +666,8 @@ function snapshot(value) {
       $("approvals"),
       value.proposals,
       decide,
-      permissions?.effectiveMode !== "read-only" && !permissions?.blocked,
+      permissions?.effectiveMode !== "read-only" &&
+        !writesPausedAll(permissions),
     );
   }
   busy = !!value.view.docs["pi.live"]?.run;
@@ -1861,7 +1888,7 @@ function showActionApproval(sessionId, proposal, after) {
         await after(appMessage(error, "Decision not recorded"));
       }
     },
-    permissions?.effectiveMode !== "read-only" && !permissions?.blocked,
+    permissions?.effectiveMode !== "read-only" && !writesPausedAll(permissions),
   );
   $("app-approval").showModal();
 }

@@ -35,7 +35,22 @@ import {
   reverseEntityAction,
   reverseTodoAction,
   sameAsBefore,
+  type EntitySnapshot,
 } from "./undo.js";
+import {
+  RECONCILE_DELAYS_MS,
+  RECONCILE_GAVE_UP,
+  RECONCILE_NOTES,
+  RECONCILED_DID_NOT_HAPPEN,
+  RECONCILED_SUCCEEDED,
+  entityResult,
+  reconcilePlan,
+  riskMembers,
+  scopesOverlap,
+  todoResult,
+  writeScope,
+} from "./reconcile.js";
+import type { RiskContext } from "./risk.js";
 
 export const ACTION_SCHEMA = 1;
 export const FULL_ACKNOWLEDGEMENT =
@@ -44,6 +59,14 @@ export const FULL_ACKNOWLEDGEMENT =
 // bounds what may run without a person.
 export const ADMIN_FULL_ACKNOWLEDGEMENT =
   "Auto-approve only low-risk Home Assistant admin actions, and medium ones a risk judge agrees with; high and critical always ask; no host shell or filesystem.";
+// A trusted owner's Full grant (trusted_user_ids, App configuration only):
+// their own direct turns run at every risk level, without the risk judge or
+// a typed confirmation. The text says so; acknowledging it is the one
+// confirmation.
+export const TRUSTED_FULL_ACKNOWLEDGEMENT =
+  "Trusted: everything runs on Full. Every supported Home action within this exact configured policy runs without asking, at every risk level, when it comes from your own turn in Hearth or the Assist button; voice satellites and work you did not start still ask. No host or admin access.";
+export const TRUSTED_ADMIN_FULL_ACKNOWLEDGEMENT =
+  "Trusted: everything runs on Full. Every Home Assistant admin action from your own turn in Hearth or the Assist button runs without asking at every risk level, including high and critical, with no risk judge and no typed confirmation; voice satellites and work you did not start still ask. No host shell or filesystem.";
 export function policyFingerprint(ha: HAClient): string {
   if (ha.policy.access === "admin")
     return digest({
@@ -121,6 +144,28 @@ const NO_JUDGE: JudgeRecord = {
   reason: "Pressed by you directly; no judge needed.",
   latencyMs: 0,
 };
+const TRUSTED_JUDGE: JudgeRecord = {
+  model: "off",
+  verdict: "not_applicable",
+  reason: "Trusted person's own turn on Full access; no judge.",
+  latencyMs: 0,
+};
+// Waits between reconciliation checks (fake in tests).
+export type ReconcileSleep = (ms: number, signal: AbortSignal) => Promise<void>;
+const realSleep: ReconcileSleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new Error("stopped"));
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        reject(new Error("stopped"));
+      },
+      { once: true },
+    );
+  });
 
 // One engine owns permission revisions and both human/automatic action admission.
 // The gate never spans HA waits. Dispatch intent and attempt are separate durable commits.
@@ -131,7 +176,12 @@ export class HomeActions {
   private controllers = new Map<AbortController, string>();
   private inFlight = new Set<Promise<unknown>>();
   private authorizedOwners = new Set<string>();
+  private trustedOwners = new Set<string>();
   private roles: Readonly<Record<string, Exclude<HouseholdRole, "owner">>> = {};
+  // Unknown-outcome reconciliation: read-only checks, stopped on close.
+  private reconcileStop = new AbortController();
+  private reconciling = new Set<string>();
+  sleep: ReconcileSleep = realSleep;
   judge: RiskJudge = offJudge;
   private hooks?: ApprovalHooks;
   constructor(readonly ha: HAClient) {}
@@ -154,6 +204,22 @@ export class HomeActions {
   }
   get acknowledgement() {
     return this.ha.admin ? ADMIN_FULL_ACKNOWLEDGEMENT : FULL_ACKNOWLEDGEMENT;
+  }
+  // A trusted owner acknowledges what their Full grant means; a change of
+  // trust therefore invalidates an earlier grant (acknowledge again).
+  acknowledgementFor(owner: string) {
+    if (!this.isTrusted(owner)) return this.acknowledgement;
+    return this.ha.admin
+      ? TRUSTED_ADMIN_FULL_ACKNOWLEDGEMENT
+      : TRUSTED_FULL_ACKNOWLEDGEMENT;
+  }
+  // A configured trusted owner who is still an authorized owner.
+  isTrusted(owner: string) {
+    return (
+      this.trustedOwners.has(owner) &&
+      this.authorizedOwners.has(owner) &&
+      this.role(owner) === "owner"
+    );
   }
   // Deterministic class first; the judge may then only escalate.
   private assess(
@@ -179,13 +245,21 @@ export class HomeActions {
   // durable harness. An unconfigured engine grants no Home write authority.
   // Household roles come from the same configuration: members and guests;
   // everyone else authorized is an owner.
+  // Trusted owners (trusted_user_ids) must be authorized owners.
   authorizeOwners(
     owners: readonly string[],
     roles: Readonly<Record<string, Exclude<HouseholdRole, "owner">>> = {},
+    trusted: readonly string[] = [],
   ) {
     insist(!this.runtime, "owners_already_attached", 503);
+    insist(
+      trusted.every((id) => owners.includes(id) && !Object.hasOwn(roles, id)),
+      "trusted_user_not_owner_role",
+      503,
+    );
     this.authorizedOwners = new Set(owners);
     this.roles = { ...roles };
+    this.trustedOwners = new Set(trusted);
   }
   role(owner: string): HouseholdRole {
     return Object.hasOwn(this.roles, owner) ? this.roles[owner]! : "owner";
@@ -297,7 +371,7 @@ export class HomeActions {
         item.grant.owner !== owner ||
         item.grant.policy !== policy ||
         item.grant.schema !== ACTION_SCHEMA ||
-        item.grant.acknowledgement !== this.acknowledgement)
+        item.grant.acknowledgement !== this.acknowledgementFor(owner))
     ) {
       item.mode = this.ha.policy.enabled ? "ask" : "read-only";
       item.revision++;
@@ -336,6 +410,7 @@ export class HomeActions {
       hash: string;
       status: string;
       owner: string;
+      scope?: string[];
     }[] = [];
     for (const session of (await tx.doc(Catalog)).items) {
       if (session.kind === "workspace") continue;
@@ -349,6 +424,7 @@ export class HomeActions {
             hash: item.hash,
             status: item.status,
             owner: session.owner,
+            ...(item.scope ? { scope: [...item.scope] } : {}),
           });
     }
     return barriers;
@@ -362,7 +438,8 @@ export class HomeActions {
         return {
           ...p,
           effectiveMode: this.binding(p).mode,
-          acknowledgement: this.acknowledgement,
+          acknowledgement: this.acknowledgementFor(owner),
+          trusted: this.isTrusted(owner),
           access: this.ha.admin ? "admin" : "scoped",
           judge: this.judge.describe(),
           enabled: this.ha.policy.enabled,
@@ -370,6 +447,14 @@ export class HomeActions {
           entityScopeCount: new Set(this.ha.policy.entities).size,
           services: [...new Set(this.ha.policy.services)].sort(),
           blocked: barriers.length > 0,
+          // What an unresolved outcome pauses: every write, or only writes
+          // to these entities (src/reconcile.ts writeScope).
+          pause: {
+            all: barriers.some((b) => !b.scope),
+            entities: [
+              ...new Set(barriers.flatMap((b) => b.scope ?? [])),
+            ].sort(),
+          },
           unresolved: barriers
             .filter((b) => b.owner === owner)
             .map(({ owner: _owner, ...b }) => b),
@@ -398,7 +483,8 @@ export class HomeActions {
       typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint),
     );
     insist(
-      acknowledgement === undefined || acknowledgement === this.acknowledgement,
+      acknowledgement === undefined ||
+        acknowledgement === this.acknowledgementFor(owner),
     );
     const runtime = this.host();
     await this.gate.run(async () => {
@@ -415,7 +501,7 @@ export class HomeActions {
           insist(this.ha.policy.enabled, "actions_disabled", 403);
         if (mode === "full")
           insist(
-            acknowledgement === this.acknowledgement,
+            acknowledgement === this.acknowledgementFor(owner),
             "full_acknowledgement_required",
             400,
           );
@@ -429,7 +515,7 @@ export class HomeActions {
                 owner,
                 policy: p.policy,
                 schema: ACTION_SCHEMA,
-                acknowledgement: this.acknowledgement,
+                acknowledgement: this.acknowledgementFor(owner),
                 at: Date.now(),
               }
             : null;
@@ -493,6 +579,8 @@ export class HomeActions {
       ids: [...ids] as number[],
       bindings: found.map((i) => i?.homePermission),
       ceiled: found.some((i) => i?.ceiling === "ask"),
+      // Every input of the run is the person's own turn.
+      direct: found.length > 0 && found.every((i) => i?.direct === true),
       channel,
     };
   }
@@ -511,10 +599,31 @@ export class HomeActions {
         p.grant?.owner === owner &&
         p.grant.policy === p.policy &&
         p.grant.schema === ACTION_SCHEMA &&
-        p.grant.acknowledgement === this.acknowledgement,
+        p.grant.acknowledgement === this.acknowledgementFor(owner),
       "full_grant_required",
       403,
     );
+  }
+  // A trusted owner's proposal may run at any risk level only from their own
+  // direct turn on Full access: no channel ceiling, every input of the run
+  // direct and admitted under this exact Full grant (never upgraded).
+  private trustedRun(
+    owner: string,
+    p: HomePermission,
+    input: {
+      ids: number[];
+      bindings: (PermissionBinding | undefined)[];
+      ceiled: boolean;
+      direct: boolean;
+    },
+  ) {
+    if (!this.isTrusted(owner) || input.ceiled || !input.direct) return false;
+    try {
+      this.assertFull(owner, p, input);
+      return true;
+    } catch {
+      return false;
+    }
   }
   private assertFull(
     owner: string,
@@ -536,7 +645,7 @@ export class HomeActions {
     context: Context,
   ): Promise<Proposal> {
     const id = String(api.taskId);
-    const { owner, latest } = await this.gate.run(() =>
+    const { owner, latest, trusted } = await this.gate.run(() =>
       api.commit(async (tx) => {
         const session = await this.home(tx, api.conversationId);
         insist(
@@ -549,6 +658,11 @@ export class HomeActions {
         return {
           owner: session.owner,
           latest: await this.latestRequest(tx, api.conversationId),
+          trusted: this.trustedRun(
+            session.owner,
+            p,
+            await this.inputBinding(tx, api.conversationId),
+          ),
         };
       }, context),
     );
@@ -569,21 +683,23 @@ export class HomeActions {
       // List actions get the controller-read item text (hashed, re-checked).
       action = await this.ha.prepareAction(action, signal);
       await this.ha.validateLive(action, signal);
-      const base = classifyAction(
-        action,
-        await this.ha.riskContext(action, signal),
-      );
+      const facts = await this.ha.riskContext(action, signal);
+      const base = classifyAction(action, facts);
+      const scope = await this.scopeOf(action, facts, signal);
       // The judge sees only the owner's latest message and this exact action.
-      const judge = await this.judge.evaluate(
-        {
-          owner,
-          conversation: api.conversationId,
-          request: latest,
-          action,
-          level: base.level,
-        },
-        signal,
-      );
+      // A trusted person's own turn on Full access never asks the judge.
+      const judge = trusted
+        ? TRUSTED_JUDGE
+        : await this.judge.evaluate(
+            {
+              owner,
+              conversation: api.conversationId,
+              request: latest,
+              action,
+              level: base.level,
+            },
+            signal,
+          );
       const risk = this.assess(action, base, judge);
       this.assertRoleAllows(owner, risk.level);
       const proposal = await this.gate.run(() =>
@@ -597,16 +713,16 @@ export class HomeActions {
           const input = await this.inputBinding(tx, api.conversationId);
           const mode = this.effectiveMode(binding, input);
           if (mode === "full") this.assertFull(owner, p, input);
-          insist(
-            (await this.barriers(tx)).length === 0,
-            "home_outcome_unresolved",
-            409,
-          );
+          await this.assertNotPaused(tx, scope);
           const doc = await tx.doc(Proposals, api.conversationId);
           if (doc.items[id]) return copy(doc.items[id]!);
           insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
           const now = Date.now();
+          // Trusted: checked before the judge was skipped and again here.
+          const trustedNow =
+            trusted && mode === "full" && this.trustedRun(owner, p, input);
           const automatic =
+            !trustedNow &&
             mode === "full" &&
             autoRunAllowed(risk, judge, action, this.ha.admin);
           const item: Proposal = {
@@ -628,11 +744,16 @@ export class HomeActions {
             authorization: {
               ...binding,
               mode,
-              source: automatic ? "automatic" : "human",
+              source: trustedNow
+                ? "trusted"
+                : automatic
+                  ? "automatic"
+                  : "human",
               owner,
               inputIds: input.ids,
               ...(input.channel ? { channel: input.channel } : {}),
             },
+            ...(scope ? { scope } : {}),
           };
           doc.items[id] = item;
           return copy(item);
@@ -648,7 +769,10 @@ export class HomeActions {
         } catch {
           // Phone approvals never affect admission.
         }
-      if (proposal.authorization?.source === "automatic") {
+      if (
+        proposal.authorization?.source === "automatic" ||
+        proposal.authorization?.source === "trusted"
+      ) {
         this.host();
         await this.dispatch(owner, api.conversationId, proposal, true, signal);
         return (await this.host().harness.snapshot(
@@ -661,6 +785,30 @@ export class HomeActions {
     } finally {
       this.controllers.delete(controller);
     }
+  }
+  // The entities an action can change, for the unknown-outcome pause:
+  // admin service targets' group members come from the classifier's live
+  // read; a scoped toggle reads its one entity.
+  private async scopeOf(
+    action: Action,
+    facts: RiskContext,
+    signal: AbortSignal,
+  ): Promise<string[] | undefined> {
+    if (!("kind" in action)) {
+      const members = await this.ha.groupMembers(action.entityId, signal);
+      return writeScope(action, () => members);
+    }
+    return writeScope(action, riskMembers(facts));
+  }
+  // An unresolved outcome pauses new writes to the same entities, and every
+  // write when either side can reach anything. Never a retry path: a new
+  // proposal for the same entity waits until the unknown is settled.
+  private async assertNotPaused(tx: Tx, scope: string[] | undefined) {
+    insist(
+      !(await this.barriers(tx)).some((b) => scopesOverlap(b.scope, scope)),
+      "home_outcome_unresolved",
+      409,
+    );
   }
   // A person pressed an app ToggleAction. Same ledger, barriers, approval and
   // dispatch as model proposals: Read-only denies before any HA request; Ask
@@ -705,10 +853,9 @@ export class HomeActions {
     try {
       action = await this.ha.prepareAction(action, signal);
       await this.ha.validateLive(action, signal);
-      const risk = classifyAction(
-        action,
-        await this.ha.riskContext(action, signal),
-      );
+      const facts = await this.ha.riskContext(action, signal);
+      const risk = classifyAction(action, facts);
+      const scope = await this.scopeOf(action, facts, signal);
       this.assertRoleAllows(owner, risk.level);
       const proposal = await this.gate.run(() =>
         runtime.harness.commit(async (tx) => {
@@ -719,11 +866,7 @@ export class HomeActions {
           const binding = this.binding(p);
           insist(binding.mode !== "read-only", "home_read_only", 403);
           if (binding.mode === "full") this.assertFullGrant(owner, p);
-          insist(
-            (await this.barriers(tx)).length === 0,
-            "home_outcome_unresolved",
-            409,
-          );
+          await this.assertNotPaused(tx, scope);
           const doc = await tx.doc(Proposals, conversationId);
           insist(Object.keys(doc.items).length < 100, "proposal_limit", 429);
           // Model proposals use their task id; app presses use a disjoint
@@ -751,11 +894,19 @@ export class HomeActions {
               : {}),
             authorization: {
               ...binding,
-              source: "human",
+              // A trusted owner's own press on Full access runs at its
+              // risk level (Undo's forced ask still asks).
+              source:
+                binding.mode === "full" &&
+                !options.forceAsk &&
+                this.isTrusted(owner)
+                  ? "trusted"
+                  : "human",
               owner,
               inputIds: [],
             },
             origin: { ...origin },
+            ...(scope ? { scope } : {}),
           };
           doc.items[id] = item;
           return copy(item);
@@ -764,9 +915,10 @@ export class HomeActions {
       // A direct press in Full access runs only when low risk; otherwise the
       // owner reviews the exact action like any other proposal.
       if (
-        options.forceAsk ||
-        proposal.authorization?.mode !== "full" ||
-        !autoRunAllowed(risk, NO_JUDGE, action, this.ha.admin)
+        proposal.authorization?.source !== "trusted" &&
+        (options.forceAsk ||
+          proposal.authorization?.mode !== "full" ||
+          !autoRunAllowed(risk, NO_JUDGE, action, this.ha.admin))
       )
         return proposal;
       await this.dispatch(owner, conversationId, proposal, false, signal);
@@ -1021,29 +1173,36 @@ export class HomeActions {
         409,
       );
     if (automatic) {
+      const source = proposal.authorization?.source;
       insist(
-        proposal.authorization?.source === "automatic",
+        source === "automatic" || source === "trusted",
         "automatic_receipt_required",
         403,
       );
-      insist(
-        proposal.risk &&
-          proposal.judge &&
-          autoRunAllowed(
-            proposal.risk,
-            proposal.judge,
-            proposal.action,
-            this.ha.admin,
-          ),
-        "risk_requires_approval",
-        403,
-      );
+      // Trusted: the configured trusted owner's own direct turn, at any
+      // risk level; otherwise only what the risk rules allow.
+      if (source === "trusted")
+        insist(this.isTrusted(owner), "trusted_owner_required", 403);
+      else
+        insist(
+          proposal.risk &&
+            proposal.judge &&
+            autoRunAllowed(
+              proposal.risk,
+              proposal.judge,
+              proposal.action,
+              this.ha.admin,
+            ),
+          "risk_requires_approval",
+          403,
+        );
       const input = await this.inputBinding(tx, sessionId);
       // A channel ceiling (voice satellite) never runs without a person.
       insist(!input.ceiled, "input_channel_ceiling", 403);
+      if (source === "trusted") insist(input.direct, "input_not_direct", 403);
       this.assertFull(owner, p, input);
       insist(
-        digest(input.ids) === digest(proposal.authorization.inputIds),
+        digest(input.ids) === digest(proposal.authorization!.inputIds),
         "action_input_changed",
         409,
       );
@@ -1068,6 +1227,9 @@ export class HomeActions {
       (proposal.risk?.level === "low" || proposal.risk?.level === "medium")
         ? await this.ha.undoSnapshot(proposal.action, signal)
         : null;
+    // Reconciliation: the targets' readings right before the attempt, so an
+    // unknown outcome can later be read back (never a reason to block).
+    const prior = await this.reconcileBefore(proposal.action, before, signal);
     await this.gate.run(() =>
       runtime.harness.commit(async (tx) => {
         insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
@@ -1087,11 +1249,7 @@ export class HomeActions {
           item,
           automatic,
         );
-        insist(
-          (await this.barriers(tx)).length === 0,
-          "home_outcome_unresolved",
-          409,
-        );
+        await this.assertNotPaused(tx, item.scope);
         item.authorization ??= {
           ...binding,
           owner,
@@ -1104,6 +1262,7 @@ export class HomeActions {
         item.decidedAt = Date.now();
         if (via === "push") item.decidedVia = "push";
         if (before) item.undo = { before };
+        if (prior) item.reconcile = { before: prior, checks: [] };
       }, ctx),
     );
     let send: Promise<void> | undefined;
@@ -1137,7 +1296,7 @@ export class HomeActions {
           }
           /* Otherwise: never retry. */
         }
-        await runtime.harness.commit(async (tx) => {
+        const ended = await runtime.harness.commit(async (tx) => {
           const item = (await tx.doc(Proposals, sessionId)).items[proposal.id]!;
           if (item.status === "dispatching") {
             item.status = status;
@@ -1147,7 +1306,9 @@ export class HomeActions {
               item.resolution = runtime.redact(failure.slice(0, 300));
             (await tx.doc(HomePermissions)).actionRevision++;
           }
+          return item.status;
         }, ctx);
+        if (ended === "unknown") this.reconcileLater(sessionId, proposal.id);
       })();
       this.inFlight.add(send);
     });
@@ -1157,8 +1318,164 @@ export class HomeActions {
       if (send) this.inFlight.delete(send);
     }
   }
+  // Entity readings before the attempt for an action with a well-defined
+  // target state (the Undo reading when it covers the one target). Bounded;
+  // a failure only means "did not happen" cannot be confirmed later.
+  private async reconcileBefore(
+    action: Action,
+    undo: Awaited<ReturnType<HAClient["undoSnapshot"]>>,
+    signal: AbortSignal,
+  ): Promise<EntitySnapshot[] | null> {
+    const plan = reconcilePlan(action);
+    if (plan?.kind !== "entity") return null;
+    const ids = plan.goals.map((g) => g.entityId);
+    if (undo?.kind === "entity" && ids.length === 1 && ids[0] === undo.entityId)
+      return [undo];
+    const read = await this.readEntities(ids, signal, 2000);
+    return read.every((r) => r) ? (read as EntitySnapshot[]) : null;
+  }
+  private readEntities(
+    ids: readonly string[],
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+  ) {
+    return Promise.all(
+      ids.map((id) =>
+        this.ha.undoState(id, signal, timeoutMs).catch(() => null),
+      ),
+    );
+  }
+  // After an unknown outcome: read the targets back at 5 s, 30 s and 2 min
+  // (continuing after a restart). Read-only; it never sends a service call.
+  private reconcileLater(sessionId: ConversationId, id: string, from = 0) {
+    const key = `${sessionId}:${id}`;
+    if (this.stopping || this.reconciling.has(key)) return;
+    if (from >= RECONCILE_DELAYS_MS.length) return;
+    this.reconciling.add(key);
+    const signal = this.reconcileStop.signal;
+    const run = (async () => {
+      try {
+        for (let i = from; i < RECONCILE_DELAYS_MS.length; i++) {
+          await this.sleep(
+            RECONCILE_DELAYS_MS[i]! -
+              (i > from ? RECONCILE_DELAYS_MS[i - 1]! : 0),
+            signal,
+          );
+          const more = await this.reconcileOnce(
+            sessionId,
+            id,
+            i === RECONCILE_DELAYS_MS.length - 1,
+            signal,
+          );
+          if (!more) break;
+        }
+      } catch {
+        // Stopped or unreadable: the outcome stays unknown for a person.
+      } finally {
+        this.reconciling.delete(key);
+      }
+    })();
+    this.inFlight.add(run);
+    void run.finally(() => this.inFlight.delete(run));
+  }
+  // One read-only check. Returns whether another check should follow.
+  private async reconcileOnce(
+    sessionId: ConversationId,
+    id: string,
+    last: boolean,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const runtime = this.host();
+    const item = (await runtime.harness.snapshot(Proposals, sessionId, ctx))
+      ?.items[id];
+    if (!item || item.status !== "unknown") return false;
+    const plan = reconcilePlan(item.action);
+    if (!plan) return false;
+    const result =
+      plan.kind === "entity"
+        ? entityResult(
+            plan.goals,
+            await this.readEntities(
+              plan.goals.map((g) => g.entityId),
+              signal,
+              5000,
+            ),
+            item.reconcile?.before,
+          )
+        : todoResult(
+            plan.action,
+            await this.ha
+              .readTodo(plan.action.entityId, signal)
+              .catch(() => null),
+          );
+    insist(!signal.aborted && !this.stopping, "closing", 503);
+    return this.gate.run(() =>
+      runtime.harness.commit(async (tx) => {
+        const current = (await tx.doc(Proposals, sessionId)).items[id];
+        // A person resolved it meanwhile (or it changed): nothing to record.
+        if (
+          !current ||
+          current.status !== "unknown" ||
+          current.hash !== item.hash
+        )
+          return false;
+        const record = (current.reconcile ??= { checks: [] });
+        const at = Date.now();
+        record.checks.push({ at, result, note: RECONCILE_NOTES[result] });
+        const settled =
+          result === "intended"
+            ? "succeeded"
+            : last && result === "unchanged"
+              ? "did_not_happen"
+              : undefined;
+        if (settled) {
+          record.outcome = settled;
+          current.status = "resolved";
+          current.resolution =
+            settled === "succeeded"
+              ? RECONCILED_SUCCEEDED
+              : RECONCILED_DID_NOT_HAPPEN;
+          (await tx.doc(HomePermissions)).actionRevision++;
+          return false;
+        }
+        if (last)
+          record.checks.push({
+            at,
+            result,
+            note: RECONCILE_GAVE_UP,
+          });
+        return !last;
+      }, ctx),
+    );
+  }
+  // At startup: continue reconciling unknown outcomes that still have
+  // checks left (dispatches a restart interrupted included).
+  async resumeReconciliation() {
+    const runtime = this.host();
+    for (const session of (await runtime.harness.snapshot(Catalog, ctx))
+      ?.items ?? []) {
+      if (session.kind === "workspace") continue;
+      const items =
+        (
+          await runtime.harness.snapshot(
+            Proposals,
+            session.id as ConversationId,
+            ctx,
+          )
+        )?.items ?? {};
+      for (const item of Object.values(items))
+        if (item.status === "unknown" && reconcilePlan(item.action))
+          this.reconcileLater(
+            session.id as ConversationId,
+            item.id,
+            item.reconcile?.checks.filter((c) => c.note !== RECONCILE_GAVE_UP)
+              .length ?? 0,
+          );
+    }
+  }
   async close() {
     this.stopping = true;
+    this.reconcileStop.abort();
     for (const controller of this.controllers.keys()) controller.abort();
     await Promise.allSettled(this.inFlight);
   }

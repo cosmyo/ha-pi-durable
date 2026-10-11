@@ -1,6 +1,6 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { CheckpointInfo } from "@earendil-works/pi-durable";
-import type { UndoRecord } from "./undo.js";
+import type { EntitySnapshot, UndoRecord } from "./undo.js";
 
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) =>
   info.deltasSinceBase >= 31;
@@ -47,6 +47,11 @@ export type Input = {
   // includes it never auto-runs a Home change (home-actions.ts).
   channel?: InputChannel;
   ceiling?: "ask";
+  // A person's own turn: typed in Hearth, or spoken through the Assist
+  // button under their own Home Assistant user. Absent for anything else
+  // (satellites, work Hearth or another system started). Trusted owners'
+  // proposals auto-run only when every input of the run has it.
+  direct?: true;
 };
 export type InputChannel = "assist" | "satellite";
 export const Inputs = defineDoc<{ requests: Record<string, Input> }>({
@@ -159,7 +164,9 @@ export type Proposal = {
   decidedAt: number;
   resolution: string;
   authorization?: PermissionBinding & {
-    source: "human" | "automatic";
+    // "trusted": a trusted owner's own direct turn on Full access ran it
+    // at its risk level without a judge or a typed confirmation.
+    source: "human" | "automatic" | "trusted";
     owner: string;
     inputIds: number[];
     // Set when the request came through Hearth Assist; "satellite" means
@@ -175,6 +182,13 @@ export type Proposal = {
   // Undo: the state read right before the change (committed with the
   // dispatch intent) and, once accepted, until when Undo is offered.
   undo?: UndoRecord;
+  // The entities this action can change (targets and group members), for
+  // the unknown-outcome pause. Absent: anything (config, Supervisor, device
+  // or area targets, older receipts); such an unknown pauses every write.
+  scope?: string[];
+  // Unknown outcomes: read-only checks of Home Assistant state after the
+  // attempt (src/reconcile.ts). Never a service call.
+  reconcile?: ReconcileRecord;
   // Set when a person pressed an app ToggleAction or a Home World device
   // instead of a model tool call.
   origin?:
@@ -182,6 +196,13 @@ export type Proposal = {
     | { kind: "world"; entityId: string }
     | { kind: "list"; entityId: string }
     | { kind: "undo"; proposalId: string; hash: string };
+};
+export type ReconcileResult = "intended" | "unchanged" | "mixed" | "unreadable";
+export type ReconcileRecord = {
+  // Target readings right before the attempt (committed with the intent).
+  before?: EntitySnapshot[];
+  checks: { at: number; result: ReconcileResult; note: string }[];
+  outcome?: "succeeded" | "did_not_happen";
 };
 export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   kind: "hearth.proposals",

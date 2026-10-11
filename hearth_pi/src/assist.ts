@@ -595,9 +595,15 @@ export class Assist {
     request: AssistRequest,
     speaker: Extract<Speaker, { kind: "person" }>,
   ) {
+    // The Assist button under the person's own user is their direct turn;
+    // a satellite (Ask ceiling: anyone in the room can speak) never is.
     return this.runtime.submit(owner, chat, key, request.text, undefined, {
       channel: speaker.channel,
-      ...(speaker.ceiling ? { ceiling: speaker.ceiling } : {}),
+      ...(speaker.ceiling
+        ? { ceiling: speaker.ceiling }
+        : speaker.channel === "assist"
+          ? { direct: true }
+          : {}),
     });
   }
   // The assistant text of one settled run: every assistant message after

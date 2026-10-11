@@ -2,6 +2,7 @@ import {
   configurationDiagnostic,
   householdRoles,
   loadConfig,
+  trustedOwners,
   workspaceOwners,
 } from "./config.js";
 import { dropAppPrivileges } from "./bootstrap.js";
@@ -69,6 +70,7 @@ try {
   ha.actions.authorizeOwners(
     config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
     config.mode === "local" ? {} : householdRoles(config),
+    trustedOwners(config),
   );
   // Admin access mode: the read scope is every entity Home Assistant reports.
   if (ha.admin) {
