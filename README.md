@@ -4,7 +4,7 @@
 
 ![Original Hearth Pi mark](hearth_pi/icon.png)
 
-**Independent community App · 0.4.0 · experimental.** Not an official Home Assistant or Pi product. The pinned Pi 1.0.1 APIs are experimental. This is a technical preview, not a production recommendation or external security audit.
+**Independent community App · 0.5.0 · experimental.** Not an official Home Assistant or Pi product. The pinned Pi 1.0.1 APIs are experimental. This is a technical preview, not a production recommendation or external security audit.
 
 [![Checks and native container smoke](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml/badge.svg)](https://github.com/cosmyo/ha-pi-durable/actions/workflows/check.yml)
 
@@ -23,7 +23,7 @@ _The original 0.1.0 GIF is a real browser capture with synthetic offline data an
 
 **Unreleased native companion slice in this source:** ask Hearth to build a status view. `ha_build_view` selects exact approved entity references, obtains values through the controller, and atomically saves a timestamped canvas with a recovery receipt in Pi Durable. The authenticated UI hydrates it beside chat; refresh/follow-up controls draft ordinary Home inputs, not actions. No Muse SDK/account/integration. This is source implementation with offline integration/recovery tests—not a deployed all-home, proactive-memory or voice feature. [Companion direction and current limits](docs/hearth-companion.md).
 
-For ordinary voice control, consider [official Assist](https://www.home-assistant.io/voice_control/) first. Hearth Pi explores durable execution and explicit boundaries, not administrative autonomy. We do not promise exactly-once physical effects, local inference or power-loss proof.
+For ordinary voice control, consider [official Assist](https://www.home-assistant.io/voice_control/) first. Optional **Hearth Assist** (`assist_enabled`, off by default) makes Hearth an Assist conversation agent through a small integration installed with HACS from this repository: the Assist button keeps each person's own permissions, mapped voice satellites always ask before a change, and voice never approves anything. [Setup and limits](hearth_pi/DOCS.md#hearth-assist-voice). Hearth Pi explores durable execution and explicit boundaries, not administrative autonomy. We do not promise exactly-once physical effects, local inference or power-loss proof.
 
 ## Try without AI credentials
 
@@ -43,7 +43,7 @@ Open `http://127.0.0.1:8099/`; username **hearth**, password as entered. The rea
 
 ## Home Assistant installation
 
-Requires **Home Assistant OS**, an administrator account and an **amd64 or aarch64** host. Use an authorized test installation with a backup; this is an experimental third-party App, not HACS or a Devices & services integration.
+Requires **Home Assistant OS**, an administrator account and an **amd64 or aarch64** host. Use an authorized test installation with a backup; this is an experimental third-party App, not HACS or a Devices & services integration (only the optional Hearth Assist voice link adds a HACS integration).
 
 [![Add Hearth Pi's repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fcosmyo%2Fha-pi-durable)
 
@@ -70,7 +70,7 @@ This repository also ships **Hearth Judge**, a second, independent add-on (`hear
 - `anthropic` (flagged, unreleased): Claude OAuth through Pi ModelRuntime, with copy-code headless login. Requires the opt-in flag above; default model `claude-sonnet-5`, thinking off. Select it in App configuration before using **Anthropic login** or `/login anthropic`. Conversation and selected tool output go to Anthropic. This is an experimental community compatibility path; subscription entitlement and included usage are not guaranteed.
 - `openai-codex`: ChatGPT subscription OAuth through Pi ModelRuntime. Sign in from **ChatGPT login** in the App. Account eligibility, model availability and provider limits still apply. Never put tokens or redirect URLs in chat/issues/recordings.
 
-Explicit protected storage replaces Pi's default credential/resource discovery. No personal `~/.pi` configuration, extensions or credentials are copied into the App or worker. Voice integration and general Pi extension/MCP loading are not supported in this preview.
+Explicit protected storage replaces Pi's default credential/resource discovery. No personal `~/.pi` configuration, extensions or credentials are copied into the App or worker. General Pi extension/MCP loading is not supported in this preview; voice uses the optional Hearth Assist link.
 
 When an online provider is used, input, conversation context, tool declarations and selected tool output go to that provider. That includes coding files you explicitly read. Requests use `store:false`; provider retention/account policies still apply. Reported token counts are **not a bill**. There is no App telemetry. [Security and threat model](docs/security.md).
 

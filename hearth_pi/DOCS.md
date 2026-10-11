@@ -1,6 +1,6 @@
 # Installation and configuration (experimental 0.2.0)
 
-Use an **authorized test Home Assistant OS installation**, an administrator account and a backup/rollback plan. Supported architectures: **amd64** and **aarch64**. This is an experimental community App, not an official HA/Pi product, a HACS package or a Devices & services integration. Container/Core installations without Supervisor cannot install it. See [validation](../docs/validation.md) for actual evidence—not a blanket compatibility claim.
+Use an **authorized test Home Assistant OS installation**, an administrator account and a backup/rollback plan. Supported architectures: **amd64** and **aarch64**. This is an experimental community App, not an official HA/Pi product. The App itself is not a HACS package or a Devices & services integration; the optional [Hearth Assist](#hearth-assist-voice) voice link adds a small integration that you install through HACS. Container/Core installations without Supervisor cannot install it. See [validation](../docs/validation.md) for actual evidence—not a blanket compatibility claim.
 
 ## Add the repository and install
 
@@ -44,6 +44,8 @@ briefing_summary_model: auto
 approval_notifications: false
 member_user_ids: []
 guest_user_ids: []
+assist_enabled: false
+assist_satellites: []
 ```
 
 Select `provider: offline` instead to test startup without AI credentials; its replies are synthetic, not model inference. Do **not** create or paste an HA long-lived access token: the App gets its server-side HA API credential from Supervisor. Never put provider credentials or login redirect URLs in chat or issue reports.
@@ -193,6 +195,51 @@ Opt-in with `approval_notifications: true`. Each owner or member (not guests) th
 When Hearth proposes a Home change in a chat and it is still waiting for you 20 seconds later (with at least a minute before it expires), your confirmed phones get one notification: `Hearth · <level> risk` and one line naming the service and entity (or config item / Supervisor path), never values such as codes, never device names. **Low and medium** risk can be approved or rejected there; Approve asks the phone to unlock first where the Companion app supports it (iOS; on Android a lock-screen Approve may not require unlocking, so keep medium actions in mind). **High and critical** offer only **Reject** and **Open Hearth**: approving them always needs the exact card in Hearth, and critical still needs its typed word. Nothing you type in a notification is ever read.
 
 A tap counts only once, only for that exact proposal, only before it expires, and only when Home Assistant reports it came from your own user. Hearth re-checks permissions, expiry and the write pause exactly as for a tap in the app. Each proposal is sent at most once (a failed send is not retried), at most 20 per owner per hour; the notification is removed when the proposal is decided or expires. Your own presses in apps, Home World and Today → Lists are not sent. Taps made while Hearth's connection to Home Assistant is down are lost; the proposal then simply expires. Pending approvals never survive a restart, and neither do notification links. If Home Assistant later links that phone to a different person, Hearth stops using it and shows **Confirm this phone again**.
+
+## Hearth Assist (voice)
+
+Off by default (`assist_enabled: false`). Hearth Assist lets Home Assistant's **Assist** use Hearth as its conversation agent: the Assist button in the Home Assistant app and frontend, and voice satellites. Hearth's own Home permissions, risk classifier, approvals and receipts decide every change; Home Assistant only passes the words and who is speaking.
+
+**Set it up**
+
+1. In the Hearth Pi App **Configuration**, set `assist_enabled: true` (and, for voice satellites, `assist_satellites`; see below), save and restart **only Hearth Pi**. Hearth creates a link secret (`/data/core-link.key`, mode `0600`) and publishes the link (host, port, API version and the secret) to Home Assistant Core through Supervisor discovery. Only Core can read it. Hearth's Assist listener (port 8098) is reachable on the internal Supervisor network only; it is not published on your host.
+2. Install the integration with [HACS](https://hacs.xyz/): **HACS → ⋮ → Custom repositories**, add `https://github.com/cosmyo/ha-pi-durable` with type **Integration**, install **Hearth Pi** and restart Home Assistant. The App never writes to Home Assistant's `/config`; HACS installs `custom_components/hearth_pi` like any custom integration. Custom integrations are not reviewed by Home Assistant; read the code first.
+3. **Settings → Devices & services** shows **Discovered: Hearth Pi**. Select **Add**, then **Submit**; Home Assistant checks the link once. If nothing is discovered, restart the Hearth Pi App once after installing the integration. You never type or see the secret.
+4. **Settings → Voice assistants**: open (or add) an assistant and choose **Hearth Pi** as its **Conversation agent**. Keep **Prefer handling commands locally** on; read what that means below.
+5. Settings → About in Hearth shows **Voice (Hearth Assist)**: whether the link is published and how many satellites speak for you.
+
+**Who is speaking**
+
+- **The Assist button** in the Home Assistant app or frontend: Home Assistant tells Hearth which user is signed in. A user in `authorized_user_ids` gets their own Home permissions and household role, exactly as in Hearth (an owner on Full access may auto-run a low-risk change; members and guests keep their limits). Anyone else is refused.
+- **Voice satellites** usually arrive without a user, so an administrator maps each satellite device to one person in the App configuration. People cannot claim devices themselves in this version:
+
+  ```yaml
+  assist_satellites:
+    - device_id: REPLACE_WITH_THE_SATELLITE_DEVICE_ID
+      user_id: REPLACE_WITH_THAT_PERSONS_HA_USER_ID
+  ```
+
+  Find the device ID under **Settings → Devices & services → Devices**: open the satellite; it is the last part of the page address (`/config/devices/device/<id>`). Every `user_id` must also be in `authorized_user_ids`, and a device can appear only once. Anyone near a satellite speaks as its person and speech-to-text can mishear, so a satellite has an **Ask ceiling**: a change requested through it is always a pending proposal for that person's exact approval, even when they use Full access. Read-only stays Read-only, guests stay read-only and members keep member limits.
+
+- **Refused in this version:** satellites that are not mapped, Home Assistant users not in `authorized_user_ids`, turns without any user or mapped satellite, and anything started by an automation (for example `assist_satellite.start_conversation` or any turn carrying an automation's extra prompt). Assist speaks a short line instead.
+
+**How a voice turn works**
+
+- Each person has one rolling **Voice** chat in Hearth; when it is full, a new one starts. A Home Assistant conversation stays with that chat for about 5 minutes. A request Home Assistant repeats (same Assist context) never runs twice.
+- Replies are kept short and plain for speech and are streamed as they are written. If Hearth has not finished after about 22 seconds, Assist says Hearth is still working; the turn keeps running and the result appears in your Voice chat. It is never cancelled.
+- After the reply, Hearth's controller (not the model) adds one sentence from what really happened: _"I've asked for approval on your phone"_ only when Home Assistant accepted a [phone approval](#phone-approvals-unreleased-source-slice) notification for that change (for voice it is sent at once instead of after 20 seconds); otherwise _"It's waiting for your approval in Hearth"_; or the receipt: accepted, failed, or that Hearth could not confirm whether it happened. It also says when Home writes are paused by an earlier unknown outcome.
+- **Saying "yes" never approves anything.** Approve on the exact card in Hearth or from a confirmed phone.
+- If Hearth is still busy with your previous request, at capacity, or you send more than 20 requests a minute, Assist says so and nothing is queued.
+
+**"Prefer handling commands locally"**
+
+Keep it **on** for fast everyday commands. But know what it does: Home Assistant then handles every command it recognizes **itself**, with the entities you exposed to Assist. Those commands never reach Hearth, so Hearth's Home permissions, risk classifier, approvals, receipts and unknown-outcome pause **do not apply** to them. **Do not expose locks, alarms, garage doors, gates or similar devices to Assist** (Settings → Voice assistants → Expose). Hearth itself ignores the Assist exposure list: its own `allowed_entities` and access mode decide what it can read and propose.
+
+**Privacy.** Voice transcripts and Hearth's replies are also kept by Home Assistant: they appear in Assist's debug view and conversation history, which Home Assistant administrators can see, besides the person's private Voice chat in Hearth. The words go to the chat's model provider like any message.
+
+**The link secret** is stored in Hearth's `/data`, in Supervisor's discovery store and in Home Assistant's config entry, and therefore in backups. Whoever holds it can speak to Hearth as any authorized person (through satellites only with the Ask ceiling). An owner can replace it under **Settings → About → Voice (Hearth Assist) → Replace link secret**; Home Assistant receives the new one through discovery automatically, and the old one stops working at once. To turn Assist off, set `assist_enabled: false` and remove the Hearth Pi integration in Home Assistant.
+
+**Not yet verified on a real installation:** that Home Assistant opens the discovery for this custom integration, HACS installing an integration from a repository that also holds Apps, satellite timeouts with long turns, and long silences while an optional risk judge (up to its timeout) decides.
 
 ## Admin access mode (unreleased source slice)
 
