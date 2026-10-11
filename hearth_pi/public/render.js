@@ -887,6 +887,9 @@ export function renderProposals(
           `${proposal.authorization.source === "trusted" ? `Trusted / ran without asking (${proposal.risk?.level ?? "unrated"} risk)` : proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
         ),
       );
+    // The injection guard flagged tool output in this turn: it asked.
+    if (proposal.authorization?.guard === "flagged")
+      card.append(node("p", "Ask: outside content looked like instructions"));
     // Phone approvals: whether this went to the owner's phones and whether
     // the decision was a tap on one.
     if (proposal.decidedVia === "push")
@@ -1180,4 +1183,14 @@ export function toYaml(value, indent = "") {
       .join("\n");
   }
   return `${indent}${scalar(value)}`;
+}
+// Injection guard status (never the URL or key): off, on or unavailable,
+// with today's counters.
+export function guardStatusText(status) {
+  if (!status?.enabled) return "Injection guard: off";
+  const today = status.today ?? {};
+  const counts = `today ${today.scanned ?? 0} scanned, ${today.flagged ?? 0} flagged${today.unavailable ? `, ${today.unavailable} unscanned` : ""}`;
+  return status.state === "unavailable"
+    ? `Injection guard: unavailable (${status.lastError ?? "error"}) · ${counts}`
+    : `Injection guard: on · ${counts}${status.lastError ? ` · last error: ${status.lastError}` : ""}`;
 }

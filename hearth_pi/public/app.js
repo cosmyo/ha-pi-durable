@@ -5,6 +5,7 @@ import {
   renderCanvas,
   renderWorldProposal,
   todoActionTitle,
+  guardStatusText,
 } from "./render.js";
 import {
   renderApp,
@@ -2165,10 +2166,21 @@ $("assist-rotate").addEventListener("click", async () => {
     $("assist-status").textContent = `Not replaced: ${error.message}.`;
   }
 });
+async function loadGuard() {
+  try {
+    $("about-guard").textContent = guardStatusText(
+      await api("injection-guard"),
+    );
+  } catch {
+    $("about-guard").textContent = "Injection guard: status unavailable";
+  }
+}
 function openAbout() {
   closeSettingsSheet();
   $("assist-status").textContent = "";
+  $("about-guard").textContent = "";
   $("about-dialog").showModal();
+  void loadGuard();
   if (assistEnabled) void loadAssist();
 }
 $("settings-about-row").addEventListener("click", openAbout);

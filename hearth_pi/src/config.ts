@@ -40,6 +40,13 @@ export type JudgeConfig = {
   // Reuse one advisory judge session (prompt cache) within this window.
   sessionTtlMs: number;
 };
+// Optional prompt-injection guard for tool output (src/injection-guard.ts):
+// any HTTP service implementing POST <url>/v1/guard/injection. Empty url: off.
+export type InjectionGuardConfig = {
+  url: string;
+  apiKey: string;
+  timeoutMs: number;
+};
 export const JUDGE_MODEL_PATTERN =
   /^(off|auto|[a-z0-9][a-z0-9._-]{0,63}\/[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119})$/;
 export type Config = {
@@ -85,6 +92,7 @@ export type Config = {
   hostname?: string;
   policy: Policy;
   judge?: JudgeConfig;
+  injectionGuard?: InjectionGuardConfig;
   // "off", "auto" or "<provider>/<modelId>": the optional briefing summary's
   // model (src/briefing-summary.ts). Optional so existing test/local
   // fixtures that build a Config without it keep working; main.ts defaults
@@ -114,6 +122,9 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "invalid_risk_judge_timeout",
   "invalid_risk_judge_session_ttl",
   "risk_judge_url_required",
+  "invalid_injection_guard_url",
+  "invalid_injection_guard_api_key",
+  "invalid_injection_guard_timeout",
   "invalid_briefing_summary_model",
   "anthropic_auth_disabled",
   "workspace_requires_one_trusted_owner",
@@ -234,6 +245,9 @@ export async function loadConfig(
           "risk_judge_api_key",
           "risk_judge_timeout_ms",
           "risk_judge_session_ttl_ms",
+          "injection_guard_url",
+          "injection_guard_api_key",
+          "injection_guard_timeout_ms",
           "briefing_summary_model",
           "approval_notifications",
           "member_user_ids",
@@ -293,24 +307,10 @@ export async function loadConfig(
     200,
   );
   insist(JUDGE_MODEL_PATTERN.test(judgeModel), "invalid_risk_judge_model");
-  const judgeUrl = text(
+  const judgeUrl = endpointOption(
     options.risk_judge_url ?? process.env.HEARTH_RISK_JUDGE_URL ?? "",
-    300,
-    0,
+    "invalid_risk_judge_url",
   );
-  if (judgeUrl) {
-    // Syntax only here; private-address resolution is re-checked per call.
-    insist(URL.canParse(judgeUrl), "invalid_risk_judge_url");
-    const parsed = new URL(judgeUrl);
-    insist(
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-        !parsed.username &&
-        !parsed.password &&
-        !parsed.search &&
-        !parsed.hash,
-      "invalid_risk_judge_url",
-    );
-  }
   const judgeKey = text(
     options.risk_judge_api_key ?? process.env.HEARTH_RISK_JUDGE_API_KEY ?? "",
     500,
@@ -340,6 +340,31 @@ export async function loadConfig(
   insist(
     !judgeModel.startsWith("endpoint/") || judgeUrl,
     "risk_judge_url_required",
+  );
+  // Prompt-injection guard for tool output: off unless a URL is set.
+  const guardUrl = endpointOption(
+    options.injection_guard_url ?? process.env.HEARTH_INJECTION_GUARD_URL ?? "",
+    "invalid_injection_guard_url",
+  );
+  const guardKey =
+    options.injection_guard_api_key ??
+    process.env.HEARTH_INJECTION_GUARD_API_KEY ??
+    "";
+  insist(
+    typeof guardKey === "string" &&
+      (!guardKey || /^[A-Za-z0-9._~+/=:-]{1,500}$/.test(guardKey)),
+    "invalid_injection_guard_api_key",
+  );
+  const guardTimeout = Number(
+    options.injection_guard_timeout_ms ??
+      process.env.HEARTH_INJECTION_GUARD_TIMEOUT_MS ??
+      3000,
+  );
+  insist(
+    Number.isInteger(guardTimeout) &&
+      guardTimeout >= 500 &&
+      guardTimeout <= 30000,
+    "invalid_injection_guard_timeout",
   );
   const briefingSummaryModel = text(
     options.briefing_summary_model ||
@@ -541,10 +566,33 @@ export async function loadConfig(
       timeoutMs: judgeTimeout,
       sessionTtlMs: judgeTtl,
     },
+    injectionGuard: {
+      url: guardUrl,
+      apiKey: guardKey,
+      timeoutMs: guardTimeout,
+    },
     briefingSummaryModel,
     haToken: process.env.SUPERVISOR_TOKEN ?? "",
     apiKey,
   };
+}
+
+// An optional http(s) service base URL from the App options: syntax only
+// here; private-address resolution is re-checked on every call.
+function endpointOption(value: unknown, code: string): string {
+  const url = text(value, 300, 0);
+  if (!url) return url;
+  insist(URL.canParse(url), code);
+  const parsed = new URL(url);
+  insist(
+    (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      !parsed.username &&
+      !parsed.password &&
+      !parsed.search &&
+      !parsed.hash,
+    code,
+  );
+  return url;
 }
 
 // Supervisor names an add-on container's host after its slug with "_" → "-"

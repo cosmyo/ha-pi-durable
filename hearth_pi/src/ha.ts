@@ -44,6 +44,7 @@ import {
 } from "./skills.js";
 import { worldSetupTools } from "./world-setup.js";
 import { voiceSection } from "./assist.js";
+import { withInjectionGuard } from "./injection-guard.js";
 import {
   ROLE_EXTENSION,
   toolAllowed,
@@ -1031,6 +1032,8 @@ export function haExtension(
   ];
   return defineExtension({
     name: ROLE_EXTENSION[role],
+    // Every Home tool's output passes the optional injection guard before
+    // the model sees it (src/injection-guard.ts).
     // Every Home tool is wrapped so a failed call adds one bounded, durable
     // L3 signal counter (tool name + error code); this never changes a
     // tool's own result and never runs for Code (workspace) sessions.
@@ -1038,7 +1041,15 @@ export function haExtension(
     // re-checks the session owner's current role when it runs.
     tools: baseTools
       .filter((tool) => toolAllowed(role, tool.name))
-      .map((tool) => withFailureSignal(withRoleCheck(tool, roleOf), now)),
+      .map((tool) =>
+        // Outermost: the model-facing result is what the guard scanned.
+        withInjectionGuard(
+          withFailureSignal(withRoleCheck(tool, roleOf), now),
+          () => ha.actions.injectionGuard,
+          "tool",
+          now,
+        ),
+      ),
     sections: [
       section(
         "hearth_safety",

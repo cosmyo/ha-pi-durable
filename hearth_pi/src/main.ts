@@ -18,6 +18,7 @@ import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
 import { WorkspaceClient, workspaceExtension } from "./workspace.js";
 import { Proactive } from "./proactive.js";
 import { JudgeSessions, RiskJudgeService, resolveJudge } from "./judge.js";
+import { InjectionGuard } from "./injection-guard.js";
 import {
   BriefingSummaryService,
   resolveBriefingSummaryModel,
@@ -43,6 +44,7 @@ try {
       config.haToken,
       config.password,
       config.judge?.apiKey ?? "",
+      config.injectionGuard?.apiKey ?? "",
     ],
     config.anthropicAuthEnabled === true
       ? ["openai-codex", "anthropic"]
@@ -100,6 +102,13 @@ try {
       judge.timeoutMs,
       (value) => ha.sanitize(value),
       new JudgeSessions(judge.sessionTtlMs),
+    ),
+  );
+  // Optional prompt-injection guard for Home tool output (off without a
+  // URL). Its key is a redacted secret like the judge's.
+  ha.actions.useInjectionGuard(
+    new InjectionGuard(
+      config.injectionGuard ?? { url: "", apiKey: "", timeoutMs: 3000 },
     ),
   );
   const home = [haExtension(ha)];

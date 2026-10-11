@@ -23,6 +23,7 @@ import { Serial, digest, insist, text } from "./safety.js";
 import { classifyAction, confirmationWord, maxRisk, riskRank } from "./risk.js";
 import type { HouseholdRole } from "./config.js";
 import { offJudge, type RiskJudge } from "./judge.js";
+import type { InjectionGuard } from "./injection-guard.js";
 import type {
   Action,
   JudgeRecord,
@@ -183,6 +184,8 @@ export class HomeActions {
   private reconciling = new Set<string>();
   sleep: ReconcileSleep = realSleep;
   judge: RiskJudge = offJudge;
+  // Optional prompt-injection guard for Home tool output (main.ts).
+  injectionGuard?: InjectionGuard;
   private hooks?: ApprovalHooks;
   constructor(readonly ha: HAClient) {}
   useApprovalHooks(hooks: ApprovalHooks) {
@@ -201,6 +204,9 @@ export class HomeActions {
   }
   useJudge(judge: RiskJudge) {
     this.judge = judge;
+  }
+  useInjectionGuard(guard: InjectionGuard) {
+    this.injectionGuard = guard;
   }
   get acknowledgement() {
     return this.ha.admin ? ADMIN_FULL_ACKNOWLEDGEMENT : FULL_ACKNOWLEDGEMENT;
@@ -564,8 +570,10 @@ export class HomeActions {
   }
   // The current run's inputs: their permission bindings, and the channel
   // ceiling (Hearth Assist). One satellite input in the run is enough to
-  // lower the whole run to Ask. An input without a record keeps failing the
-  // Full checks exactly as before (its binding is missing).
+  // lower the whole run to Ask, and so is the injection guard's mark on the
+  // run (flagged tool output; src/injection-guard.ts), which only this
+  // run's inputs carry. An input without a record keeps failing the Full
+  // checks exactly as before (its binding is missing).
   private async inputBinding(tx: Tx, sessionId: ConversationId) {
     const ids = (await tx.doc(LiveDoc, sessionId)).run?.inputs ?? [];
     const inputs = Object.values((await tx.doc(Inputs, sessionId)).requests);
@@ -579,19 +587,23 @@ export class HomeActions {
       ids: [...ids] as number[],
       bindings: found.map((i) => i?.homePermission),
       ceiled: found.some((i) => i?.ceiling === "ask"),
+      guarded: found.some((i) => i?.guard?.result === "flagged"),
       // Every input of the run is the person's own turn.
       direct: found.length > 0 && found.every((i) => i?.direct === true),
       channel,
     };
   }
   // Effective mode for a model proposal: the lower of the owner's mode and
-  // the run's channel ceiling. Full falls to Ask (a pending proposal for
-  // exact human approval) instead of failing; Ask and Read-only stay.
+  // the run's channel ceiling or injection-guard mark. Full falls to Ask (a
+  // pending proposal for exact human approval) instead of failing; Ask and
+  // Read-only stay.
   private effectiveMode(
     binding: PermissionBinding,
-    input: { ceiled: boolean },
+    input: { ceiled: boolean; guarded: boolean },
   ): HomeMode {
-    return binding.mode === "full" && input.ceiled ? "ask" : binding.mode;
+    return binding.mode === "full" && (input.ceiled || input.guarded)
+      ? "ask"
+      : binding.mode;
   }
   private assertFullGrant(owner: string, p: HomePermission) {
     insist(
@@ -605,8 +617,9 @@ export class HomeActions {
     );
   }
   // A trusted owner's proposal may run at any risk level only from their own
-  // direct turn on Full access: no channel ceiling, every input of the run
-  // direct and admitted under this exact Full grant (never upgraded).
+  // direct turn on Full access: no channel ceiling, no injection-guard mark,
+  // every input of the run direct and admitted under this exact Full grant
+  // (never upgraded).
   private trustedRun(
     owner: string,
     p: HomePermission,
@@ -614,10 +627,17 @@ export class HomeActions {
       ids: number[];
       bindings: (PermissionBinding | undefined)[];
       ceiled: boolean;
+      guarded: boolean;
       direct: boolean;
     },
   ) {
-    if (!this.isTrusted(owner) || input.ceiled || !input.direct) return false;
+    if (
+      !this.isTrusted(owner) ||
+      input.ceiled ||
+      input.guarded ||
+      !input.direct
+    )
+      return false;
     try {
       this.assertFull(owner, p, input);
       return true;
@@ -752,6 +772,7 @@ export class HomeActions {
               owner,
               inputIds: input.ids,
               ...(input.channel ? { channel: input.channel } : {}),
+              ...(input.guarded ? { guard: "flagged" as const } : {}),
             },
             ...(scope ? { scope } : {}),
           };
@@ -1199,6 +1220,8 @@ export class HomeActions {
       const input = await this.inputBinding(tx, sessionId);
       // A channel ceiling (voice satellite) never runs without a person.
       insist(!input.ceiled, "input_channel_ceiling", 403);
+      // Flagged tool output in this run never runs without a person.
+      insist(!input.guarded, "input_guard_flagged", 403);
       if (source === "trusted") insist(input.direct, "input_not_direct", 403);
       this.assertFull(owner, p, input);
       insist(

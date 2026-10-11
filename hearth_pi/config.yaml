@@ -60,6 +60,9 @@ options:
   risk_judge_api_key: ""
   risk_judge_timeout_ms: 15000
   risk_judge_session_ttl_ms: 300000
+  injection_guard_url: ""
+  injection_guard_api_key: ""
+  injection_guard_timeout_ms: 3000
   briefing_summary_model: auto
   approval_notifications: false
   member_user_ids: []
@@ -89,6 +92,9 @@ schema:
   risk_judge_api_key: password
   risk_judge_timeout_ms: int(1000,30000)
   risk_judge_session_ttl_ms: int(0,3600000)
+  injection_guard_url: str
+  injection_guard_api_key: password
+  injection_guard_timeout_ms: int(500,30000)
   briefing_summary_model: str
   approval_notifications: bool
   member_user_ids:

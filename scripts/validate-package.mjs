@@ -68,6 +68,11 @@ assert.deepEqual(config.options.guest_user_ids, []);
 assert.deepEqual(config.options.trusted_user_ids, []);
 assert.deepEqual(config.schema.trusted_user_ids, ["str"]);
 assert.equal(config.schema.risk_judge_api_key, "password");
+// Prompt-injection guard for tool output: off (empty URL) by default.
+assert.equal(config.options.injection_guard_url, "");
+assert.equal(config.options.injection_guard_api_key, "");
+assert.equal(config.schema.injection_guard_api_key, "password");
+assert.equal(config.options.injection_guard_timeout_ms, 3000);
 assert.deepEqual(
   Object.keys(config.options).sort(),
   Object.keys(config.schema).sort(),

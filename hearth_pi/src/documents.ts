@@ -52,6 +52,16 @@ export type Input = {
   // (satellites, work Hearth or another system started). Trusted owners'
   // proposals auto-run only when every input of the run has it.
   direct?: true;
+  // Set on every input of a run whose tool output the injection guard
+  // flagged (src/injection-guard.ts): that run's Home proposals never
+  // auto-run. Never content: the tool name and the score only.
+  guard?: GuardMarker;
+};
+export type GuardMarker = {
+  result: "flagged";
+  score: number;
+  tool: string;
+  at: number;
 };
 export type InputChannel = "assist" | "satellite";
 export const Inputs = defineDoc<{ requests: Record<string, Input> }>({
@@ -172,6 +182,9 @@ export type Proposal = {
     // Set when the request came through Hearth Assist; "satellite" means
     // the run's Ask ceiling lowered the owner's mode.
     channel?: InputChannel;
+    // The run read tool output the injection guard flagged: this proposal
+    // asks ("Ask: outside content looked like instructions").
+    guard?: "flagged";
   };
   attemptedAt?: number;
   // Phone approvals: committed before the one send to the owner's phones

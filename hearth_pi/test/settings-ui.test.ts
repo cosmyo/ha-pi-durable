@@ -127,6 +127,20 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
             ],
           });
         if (path.endsWith("/api/apps")) return Response.json({ items: [] });
+        if (path.endsWith("/api/injection-guard"))
+          return Response.json({
+            enabled: true,
+            state: "unavailable",
+            timeoutMs: 3000,
+            lastError: "timeout",
+            lastErrorAt: 1,
+            today: {
+              date: "2099-01-01",
+              scanned: 4,
+              flagged: 1,
+              unavailable: 2,
+            },
+          });
         if (path.endsWith("/api/today"))
           return Response.json({
             cards: [],
@@ -429,6 +443,12 @@ test("app shell: drawer footer has exactly Today/Apps/Settings; Settings routes 
     assert.match(
       document.getElementById("about-provider")!.textContent!,
       /offline/,
+    );
+    // Injection guard status: state, error class and counters, never a key.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      document.getElementById("about-guard")!.textContent,
+      "Injection guard: unavailable (timeout) · today 4 scanned, 1 flagged, 2 unscanned",
     );
     noExecutableMarkup(document.getElementById("about-dialog")!);
     (document.getElementById("about-dialog") as any).close();

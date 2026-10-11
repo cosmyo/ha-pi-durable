@@ -477,6 +477,17 @@ export function appServer(
                   : await suggestions.dismiss(owner, v);
         return json(res, 200, { decision, ...(await todayView(owner)) });
       }
+      // Injection guard status for Settings → About: on/off, the last error
+      // class and today's counters. Never the URL or the key.
+      if (req.method === "GET" && path === "/api/injection-guard")
+        return json(
+          res,
+          200,
+          actions.engine.injectionGuard?.status() ?? {
+            enabled: false,
+            state: "off",
+          },
+        );
       // Hearth Assist: status for everyone, link-secret rotation for owners.
       // The secret itself is never returned.
       if (req.method === "GET" && path === "/api/assist")
