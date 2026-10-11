@@ -4,17 +4,15 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import pytest
 from aiohttp import web
 from fakes import FakeHearth
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
-import pytest
 
 
 @pytest.fixture(autouse=True)
-async def setup_core(
-    hass: HomeAssistant, enable_custom_integrations: None
-) -> None:
+async def setup_core(hass: HomeAssistant, enable_custom_integrations: None) -> None:
     """Load custom_components/hearth_pi next to Home Assistant's core setup."""
     assert await async_setup_component(hass, "homeassistant", {})
 
@@ -30,6 +28,6 @@ async def hearth(socket_enabled: None) -> AsyncIterator[FakeHearth]:
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
-    fake.port = site._server.sockets[0].getsockname()[1]  # noqa: SLF001
+    fake.port = site._server.sockets[0].getsockname()[1]
     yield fake
     await runner.cleanup()

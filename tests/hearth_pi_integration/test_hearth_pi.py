@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from fakes import OTHER_TOKEN, TOKEN, FakeHearth
 from homeassistant.components import conversation
 from homeassistant.config_entries import SOURCE_HASSIO, SOURCE_USER
 from homeassistant.core import Context, HomeAssistant
@@ -25,10 +26,9 @@ from custom_components.hearth_pi.const import (
     DOMAIN,
     SPEECH_INTERRUPTED,
     SPEECH_LINK_REJECTED,
+    SPEECH_TOO_LONG,
     SPEECH_UNREACHABLE,
 )
-
-from fakes import OTHER_TOKEN, TOKEN, FakeHearth
 
 UUID = "0123456789abcdef0123456789abcdef"
 OWNER = "user-owner-a"
@@ -301,6 +301,36 @@ async def test_conversation_errors(hass: HomeAssistant, hearth: FakeHearth) -> N
         hass, "Hi", None, Context(user_id=OWNER), agent_id=agent_id(hass)
     )
     assert result.response.speech["plain"]["speech"] == SPEECH_UNREACHABLE
+
+
+async def test_conversation_inputs_hearth_would_refuse(
+    hass: HomeAssistant, hearth: FakeHearth
+) -> None:
+    """Over-long text is refused locally; odd conversation ids are not sent."""
+    await setup_entry(hass, hearth)
+    result = await conversation.async_converse(
+        hass, "x" * 2001, None, Context(user_id=OWNER), agent_id=agent_id(hass)
+    )
+    assert result.response.speech["plain"]["speech"] == SPEECH_TOO_LONG
+    assert hearth.requests == []
+    hearth.events = [
+        {"type": "start"},
+        {
+            "type": "end",
+            "status": "done",
+            "speech_suffix": "",
+            "continue_conversation": False,
+            "proposals": [],
+        },
+    ]
+    await conversation.async_converse(
+        hass,
+        "Hi",
+        "a custom id with spaces",
+        Context(user_id=OWNER),
+        agent_id=agent_id(hass),
+    )
+    assert hearth.requests[-1]["conversation_id"] is None
 
 
 async def test_diagnostics_redact_the_secret(

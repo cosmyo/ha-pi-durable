@@ -10,14 +10,16 @@ Hearth's controller adds about approvals and results.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 import logging
+import re
+from collections.abc import AsyncGenerator
 from typing import Any, Literal
 
 from homeassistant.components import conversation
 from homeassistant.const import MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, intent
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import intent
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import HearthConfigEntry
@@ -26,6 +28,7 @@ from .const import (
     DOMAIN,
     SPEECH_INTERRUPTED,
     SPEECH_LINK_REJECTED,
+    SPEECH_TOO_LONG,
     SPEECH_UNREACHABLE,
 )
 
@@ -41,6 +44,11 @@ async def async_setup_entry(
     async_add_entities([HearthConversationEntity(entry)])
 
 
+# Hearth's request limits (api 1); anything else is sent as "unknown".
+MAX_TEXT = 2000
+ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 def _payload(
     user_input: conversation.ConversationInput, conversation_id: str
 ) -> dict[str, Any]:
@@ -48,7 +56,10 @@ def _payload(
         "request_id": user_input.context.id,
         "text": user_input.text,
         "user_id": user_input.context.user_id,
-        "conversation_id": conversation_id,
+        # Home Assistant may pass a caller-chosen conversation id through.
+        "conversation_id": conversation_id
+        if ID_PATTERN.match(conversation_id)
+        else None,
         "device_id": user_input.device_id,
         "satellite_id": user_input.satellite_id,
         "language": user_input.language or "*",
@@ -94,6 +105,14 @@ class HearthConversationEntity(
         chat_log: conversation.ChatLog,
     ) -> conversation.ConversationResult:
         """Send one turn to Hearth and stream its reply into the chat log."""
+        if len(user_input.text) > MAX_TEXT:
+            response = intent.IntentResponse(language=user_input.language)
+            response.async_set_error(
+                intent.IntentResponseErrorCode.UNKNOWN, SPEECH_TOO_LONG
+            )
+            return conversation.ConversationResult(
+                response=response, conversation_id=chat_log.conversation_id
+            )
         state: dict[str, Any] = {"text": "", "end": None, "error": None}
         payload = _payload(user_input, chat_log.conversation_id)
 

@@ -8,8 +8,8 @@ The conversation endpoint answers with newline-delimited JSON events:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 import json
+from collections.abc import AsyncIterator
 from typing import Any
 
 import aiohttp

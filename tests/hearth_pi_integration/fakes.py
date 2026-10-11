@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 from aiohttp import web
@@ -37,9 +37,7 @@ class FakeHearth:
         if "Origin" in request.headers or not self.authorized(request):
             return web.json_response({"error": "authentication_required"}, status=401)
         self.requests.append(await request.json())
-        response = web.StreamResponse(
-            headers={"Content-Type": "application/x-ndjson"}
-        )
+        response = web.StreamResponse(headers={"Content-Type": "application/x-ndjson"})
         await response.prepare(request)
         for index, event in enumerate(self.events):
             if self.cut_after is not None and index >= self.cut_after:

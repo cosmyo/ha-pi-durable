@@ -17,3 +17,4 @@ SPEECH_LINK_REJECTED = (
     "Hearth didn't accept Home Assistant's link. Open Hearth to check Assist."
 )
 SPEECH_INTERRUPTED = "Sorry, I lost the connection to Hearth."
+SPEECH_TOO_LONG = "Sorry, that request is too long for Hearth."
