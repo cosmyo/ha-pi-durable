@@ -29,6 +29,7 @@ import {
   RECONCILED_DID_NOT_HAPPEN,
   RECONCILED_SUCCEEDED,
   RECONCILE_GAVE_UP,
+  entityResult,
   reconcilePlan,
   writeScope,
   writesPaused,
@@ -673,6 +674,30 @@ test("reconcile plans and write scopes are allowlists: config, Supervisor, devic
       undefined,
     );
   }
+  // Toggles reconcile from a known reading but never as "did not happen".
+  const before = {
+    kind: "entity" as const,
+    entityId: LAMP,
+    state: "off",
+    attrs: {},
+    lastChangedMs: 1,
+    readAt: 1,
+  };
+  const toggle = [{ entityId: LAMP, toggle: true as const }];
+  assert.equal(
+    entityResult(toggle, [{ ...before, state: "on" }], [before]),
+    "intended",
+  );
+  assert.equal(entityResult(toggle, [before], [before]), "mixed");
+  assert.equal(entityResult(toggle, [{ ...before, state: "on" }]), "mixed");
+  assert.equal(
+    entityResult([{ entityId: LAMP, state: "on" }], [before], [before]),
+    "unchanged",
+  );
+  assert.equal(
+    entityResult([{ entityId: LAMP, state: "on" }], [null], [before]),
+    "unreadable",
+  );
   // A target that could not be read might be a group: pause everything.
   assert.equal(
     writeScope(lampOn, () => null),
@@ -768,4 +793,104 @@ test("UI: a trusted receipt says it ran without asking, reconciliation notes sho
     "utf8",
   );
   assert.match(app, /Trusted: everything runs on Full\./);
+});
+
+test("reconciliation continues after a restart: a dispatch stopped without an answer is read back by the next start, never re-sent", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-reconcile-restart-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const at = "2099-01-01T00:00:00.000Z";
+  const lamp: FakeState = {
+    entity_id: LAMP,
+    state: "off",
+    attributes: {},
+    last_changed: at,
+    last_updated: at,
+  };
+  let posts = 0;
+  const open = async (hangPost: boolean) => {
+    const provider = offline();
+    const ha = new HAClient(
+      "synthetic-token",
+      { enabled: true, entities: [LAMP], services: ["light.turn_on"] },
+      (async (url: string | URL, init?: RequestInit) => {
+        const path = String(url).replace("http://supervisor/core/api/", "");
+        if (init?.method === "POST") {
+          posts++;
+          // The first life never hears back before it stops.
+          if (hangPost)
+            return new Promise<Response>((_resolve, reject) =>
+              init.signal?.addEventListener("abort", () =>
+                reject(new Error("stopped")),
+              ),
+            );
+          return Response.json([]);
+        }
+        if (path === "services")
+          return Response.json([
+            { domain: "light", services: { turn_on: {} } },
+          ]);
+        return Response.json(lamp);
+      }) as typeof fetch,
+    );
+    const clock = fakeClock();
+    ha.actions.sleep = clock.sleep;
+    ha.actions.authorizeOwners(["owner"]);
+    const runtime = await Runtime.open(
+      dir,
+      provider.models,
+      provider.model,
+      [haExtension(ha)],
+      [],
+      undefined,
+      ha.actions,
+    );
+    return { provider, ha, runtime, clock };
+  };
+  const first = await open(true);
+  const id = await first.runtime.create("owner", "Home", "create-restart-1");
+  const p = await first.ha.actions.settings("owner");
+  await first.ha.actions.setMode(
+    "owner",
+    "full",
+    p.revision,
+    p.policy,
+    FULL_ACKNOWLEDGEMENT,
+  );
+  first.provider.faux.setResponses([
+    fauxAssistantMessage(fauxToolCall("ha_propose_service", lampOn as never), {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("See the receipt."),
+  ]);
+  await first.runtime.submit("owner", id, "request-restart-1", "Lamp on");
+  // Wait for the attempt, then stop without an answer from Home Assistant.
+  for (let i = 0; i < 500 && posts === 0; i++)
+    await new Promise((r) => setTimeout(r, 5));
+  assert.equal(posts, 1);
+  await first.ha.actions.close();
+  await first.runtime.close();
+  // Second life: the lamp did switch on meanwhile.
+  lamp.state = "on";
+  lamp.last_changed = lamp.last_updated = "2099-01-01T00:00:02.000Z";
+  const second = await open(false);
+  t.after(async () => {
+    await second.ha.actions.close();
+    await second.runtime.close();
+  });
+  const items = async () =>
+    Object.values(
+      (await second.runtime.harness.snapshot(
+        Proposals,
+        id as ConversationId,
+        ctx,
+      ))!.items,
+    );
+  assert.equal((await items())[0]?.status, "unknown");
+  assert.equal(await second.clock.tick(), 5000);
+  for (let i = 0; i < 500 && (await items())[0]?.status === "unknown"; i++)
+    await new Promise((r) => setTimeout(r, 5));
+  const done = (await items())[0]!;
+  assert.equal(done.status, "resolved");
+  assert.equal(done.reconcile?.outcome, "succeeded");
+  assert.equal(posts, 1, "never re-sent");
 });

@@ -184,10 +184,12 @@ export function entityResult(
   const prior = (id: string) => before?.find((b) => b.entityId === id);
   if (goals.every((g, i) => goalMet(g, now[i]!, prior(g.entityId))))
     return "intended";
+  // A toggle is never confirmed as "did not happen": a command the device
+  // runs late (a sleeping radio device) plus a second request would undo it.
   if (
     goals.every((g, i) => {
       const b = prior(g.entityId);
-      return !!b && unchangedSince(b, now[i]!);
+      return !g.toggle && !!b && unchangedSince(b, now[i]!);
     })
   )
     return "unchanged";
