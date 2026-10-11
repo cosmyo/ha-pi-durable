@@ -64,6 +64,7 @@ options:
   approval_notifications: false
   member_user_ids: []
   guest_user_ids: []
+  trusted_user_ids: []
   assist_enabled: false
   assist_satellites: []
 schema:
@@ -93,6 +94,8 @@ schema:
   member_user_ids:
     - str
   guest_user_ids:
+    - str
+  trusted_user_ids:
     - str
   assist_enabled: bool
   assist_satellites:

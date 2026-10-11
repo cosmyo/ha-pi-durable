@@ -64,6 +64,9 @@ assert.equal(config.schema.approval_notifications, "bool");
 // Household roles: empty by default (everyone authorized is an owner).
 assert.deepEqual(config.options.member_user_ids, []);
 assert.deepEqual(config.options.guest_user_ids, []);
+// Trusted owners: opt-in, nobody by default.
+assert.deepEqual(config.options.trusted_user_ids, []);
+assert.deepEqual(config.schema.trusted_user_ids, ["str"]);
 assert.equal(config.schema.risk_judge_api_key, "password");
 assert.deepEqual(
   Object.keys(config.options).sort(),

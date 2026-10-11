@@ -64,6 +64,10 @@ export type Config = {
   // owner. Absent means everyone is an owner. Never set by the UI.
   memberUsers?: string[];
   guestUsers?: string[];
+  // Trusted owners (trusted_user_ids): on Full access, their own direct
+  // turns auto-run at every risk level (src/home-actions.ts). Each is an
+  // authorized owner, never a member or guest. Absent or empty: nobody.
+  trustedUsers?: string[];
   // Phone approvals (src/approval-push.ts): the approval_notifications
   // option, ingress mode only. Absent means off.
   approvalNotifications?: boolean;
@@ -120,6 +124,9 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "invalid_role_user_ids",
   "role_user_not_authorized",
   "role_conflict",
+  "invalid_trusted_user_ids",
+  "trusted_user_not_authorized",
+  "trusted_user_not_owner_role",
   "household_owner_required",
   "workspace_owner_not_owner_role",
   "provider_key_required",
@@ -189,6 +196,10 @@ export function householdRoles(
   delete roles["local-admin"];
   return roles;
 }
+// Trusted owners in effect: none in local development (no App options).
+export function trustedOwners(config: Pick<Config, "mode" | "trustedUsers">) {
+  return config.mode === "local" ? [] : [...(config.trustedUsers ?? [])];
+}
 // Owners allowed Code (workspace) sessions; empty when the workspace is off.
 // A hand-built Config without workspaceOwners keeps the original rule: the
 // one authorized owner (or the local-development owner).
@@ -227,6 +238,7 @@ export async function loadConfig(
           "approval_notifications",
           "member_user_ids",
           "guest_user_ids",
+          "trusted_user_ids",
           "assist_enabled",
           "assist_satellites",
         ])
@@ -413,6 +425,28 @@ export async function loadConfig(
       ),
     "household_owner_required",
   );
+  // Trusted owners: an opt-in list (empty by default) of authorized owners
+  // whose own direct turns on Full access run at every risk level.
+  const trustedValue = options.trusted_user_ids ?? [];
+  insist(
+    Array.isArray(trustedValue) &&
+      trustedValue.length <= 100 &&
+      trustedValue.every(
+        (id) => typeof id === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(id),
+      ),
+    "invalid_trusted_user_ids",
+  );
+  const trustedUsers = [...new Set(trustedValue as string[])];
+  insist(
+    trustedUsers.every((id) => authorizedUsers.includes(id)),
+    "trusted_user_not_authorized",
+  );
+  insist(
+    !trustedUsers.some(
+      (id) => memberUsers.includes(id) || guestUsers.includes(id),
+    ),
+    "trusted_user_not_owner_role",
+  );
   // Hearth Assist: off by default; the separate Core listener and the
   // Supervisor discovery exist only in ingress mode.
   const assistEnabled = options.assist_enabled ?? false;
@@ -480,6 +514,7 @@ export async function loadConfig(
     approvalNotifications,
     memberUsers,
     guestUsers,
+    trustedUsers,
     assistEnabled,
     assistSatellites: satellites,
     hostname: /^[a-z0-9][a-z0-9-]{0,63}$/.test(process.env.HOSTNAME ?? "")
