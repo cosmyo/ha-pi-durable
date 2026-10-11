@@ -1576,7 +1576,6 @@ dialog .actions {
 .message-copy,
 #permissions-toggle,
 .connection-retry {
-  --pill-border: var(--line);
   position: relative;
   isolation: isolate;
   min-height: var(--touch-target);
@@ -1591,7 +1590,7 @@ dialog .actions {
   position: absolute;
   inset: calc((100% - var(--pill-height)) / 2) 0;
   z-index: -1;
-  border: 1px solid var(--pill-border);
+  border: 1px solid var(--pill-border, var(--line));
   border-radius: 999px;
   background: var(--pill-bg, #253638);
 }
@@ -2203,7 +2202,12 @@ h3.app-text {
 .today-summary-text.muted {
   font-style: italic;
 }
-.today-actions,
+.today-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
 .today-snooze {
   display: flex;
   flex-wrap: wrap;
@@ -2418,7 +2422,7 @@ dialog .pro-field label {
 .feedback-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0 6px;
+  gap: 6px;
   margin-top: 6px;
 }
 .chip[aria-pressed="true"] {
