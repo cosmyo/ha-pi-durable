@@ -186,7 +186,7 @@ Emergency Read-only stays available during work. It invalidates pending actions 
 
 In Scoped mode: no Home shell/config/SSH/Docker, scripts, automation changes, Core or Supervisor-admin operations (see [Admin access mode](#admin-access-mode-unreleased-source-slice) for the owner opt-in); automations can only be inspected read-only (see [Automation troubleshooting](#automation-troubleshooting-unreleased-source-slice)). No generic service/JSON proxy or new Supervisor privilege. Avoid safety-critical devices. This slice is offline/source-tested only; live/mobile/restore/power-loss paths need separate authorization and validation.
 
-## Trusted people (unreleased source slice)
+## Trusted people (0.6.0)
 
 Some households want no approvals for certain people. An owner can list them in `trusted_user_ids` (App configuration only; default empty, so nothing changes for anyone else). For a trusted person:
 
@@ -195,6 +195,8 @@ Some households want no approvals for certain people. An owner can list them in 
 - **Ask** and **Read-only** behave exactly as for anyone else.
 
 Still not run without asking for a trusted person (these become a normal pending proposal or follow the normal Full rules): requests from a **voice satellite** (anyone in the room can speak, so satellites keep their Ask ceiling); work the person did not start themselves (anything Hearth or another system submits on their behalf); and anything outside the configured access policy — trusted widens approval, never the policy: Scoped mode still allows only the configured exact entities and services, Admin mode never reaches the host shell or filesystem, and Code sessions stay separately confined. An input admitted under a weaker permission is never upgraded later, unknown outcomes are never retried, and members and guests cannot be trusted.
+
+What counts as your own turn: a message you send in Hearth, and anything Home Assistant sends to Hearth's Assist agent under your own user — the Assist button, and also scripts or dashboard buttons you run that call Assist with Hearth as the agent. Home Assistant does not tell these apart, so do not let others edit scripts that call Hearth.
 
 What this trades away: the model, or content it reads (entity names, attributes, automation text, images), can now cause high and critical actions — unlocking a door, opening a garage, restarting or updating Home Assistant, rebooting the host, restoring or deleting a backup — for a trusted person without a second look. Keep `trusted_user_ids` to people who accept that, and prefer Ask for everyone else. See [docs/security.md](../docs/security.md).
 

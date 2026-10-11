@@ -78,7 +78,7 @@ export const ASSIST_SPEECH = Object.freeze({
     "I'm still working on that. The result will be in your Voice chat in Hearth.",
   unanswered: "Sorry, I couldn't finish that. Check your Voice chat in Hearth.",
   blocked:
-    "Home changes are paused until an earlier unknown result is checked in Hearth.",
+    "Some Home changes are paused until an earlier unknown result is checked in Hearth.",
 });
 
 export type AssistEnd = {

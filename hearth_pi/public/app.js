@@ -327,7 +327,7 @@ function updatePermissions(value) {
   $("permission-trusted").hidden = !value.trusted;
   $("permission-trusted").textContent = value.trusted
     ? value.effectiveMode === "full"
-      ? "Trusted: everything runs on Full. Your own turns in Hearth and the Assist button run at every risk level without asking, with no risk judge and no typed confirmation. Voice satellites and work you did not start still ask."
+      ? "Trusted: everything runs on Full. Your own turns in Hearth and the Assist button run at every risk level without asking, with no risk judge and no typed confirmation. Voice satellites still ask; work you did not start follows the normal Full rules (low risk may still run). Anything Home Assistant sends under your user, including scripts you run that call Assist, counts as your turn."
       : "Trusted: everything runs on Full. Choose Full access to use it; you confirm once."
     : "";
   for (const option of $("home-mode").options)

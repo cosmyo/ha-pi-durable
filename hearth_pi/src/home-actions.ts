@@ -64,9 +64,9 @@ export const ADMIN_FULL_ACKNOWLEDGEMENT =
 // a typed confirmation. The text says so; acknowledging it is the one
 // confirmation.
 export const TRUSTED_FULL_ACKNOWLEDGEMENT =
-  "Trusted: everything runs on Full. Every supported Home action within this exact configured policy runs without asking, at every risk level, when it comes from your own turn in Hearth or the Assist button; voice satellites and work you did not start still ask. No host or admin access.";
+  "Trusted: everything runs on Full. Every supported Home action within this exact configured policy runs without asking, at every risk level, when it comes from your own turn in Hearth or the Assist button; voice satellites still ask, and work you did not start follows the normal Full rules (low risk may still run). Anything Home Assistant sends under your own user, including scripts you run that call Assist, counts as your turn. No host or admin access.";
 export const TRUSTED_ADMIN_FULL_ACKNOWLEDGEMENT =
-  "Trusted: everything runs on Full. Every Home Assistant admin action from your own turn in Hearth or the Assist button runs without asking at every risk level, including high and critical, with no risk judge and no typed confirmation; voice satellites and work you did not start still ask. No host shell or filesystem.";
+  "Trusted: everything runs on Full. Every Home Assistant admin action from your own turn in Hearth or the Assist button runs without asking at every risk level, including high and critical, with no risk judge and no typed confirmation; voice satellites still ask, and work you did not start follows the normal Full rules (low risk may still run). Anything Home Assistant sends under your own user, including scripts you run that call Assist, counts as your turn. No host shell or filesystem.";
 export function policyFingerprint(ha: HAClient): string {
   if (ha.policy.access === "admin")
     return digest({
