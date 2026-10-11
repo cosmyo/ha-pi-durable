@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased — touch targets
+
+- UI: every tappable control is at least 44x44 px on phones (Copy, composer chips, permission badge, connection Retry, session menu, drawer Close, scroll pill, attachment Remove, summaries, selects); one `--touch-target` CSS variable; the Retry row no longer squeezes the message box. New `scripts/touch-targets.mjs` audit (docs/validation.md).
+
 ## 0.5.0 — Hearth Assist (voice)
 
 - Hearth Assist (opt-in, `assist_enabled: false` by default): Home Assistant's Assist can use Hearth as its conversation agent through the new `hearth_pi` custom integration in this repository (install with HACS as a custom repository; `hacs.json` at the root). Hearth publishes a link (host, port, API version, a 32-byte secret in `/data/core-link.key`) to Core only through Supervisor discovery; Core talks to a separate listener on port 8098 that is not published on the host, with the secret compared in constant time, any Origin refused, 8 KB bodies and per-person rate limits. Owners can replace the secret in Settings → About.

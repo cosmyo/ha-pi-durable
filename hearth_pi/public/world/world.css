@@ -12,18 +12,18 @@
   color: #2d2c23;
   border-color: var(--warm);
   font-weight: 600;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .world-secondary {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .world-danger {
   border-color: #8a4a40;
   color: #ffc6b8;
 }
 .world-icon {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   background: transparent;
   border-color: transparent;
@@ -162,7 +162,7 @@
 }
 .world-edit select,
 .world-edit input[type="text"] {
-  min-height: 44px;
+  min-height: var(--touch-target);
   min-width: 0;
   font: inherit;
   font-size: 16px;
@@ -191,8 +191,8 @@
   font-size: 0.82rem;
 }
 .world-step {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
 }
 .world-step-value {
@@ -214,8 +214,8 @@
   gap: 8px;
 }
 .world-swatch {
-  width: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  min-height: var(--touch-target);
   border-radius: 50%;
   background: var(--swatch);
   border: 3px solid transparent;
@@ -227,7 +227,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   font-size: 0.86rem;
 }
 .world-check input {
@@ -256,7 +256,7 @@
   padding: 0 8px 0 4px;
 }
 .wh-tool {
-  min-width: 44px;
+  min-width: var(--touch-target);
   font-size: 0.84rem;
   padding: 0 12px;
 }
@@ -305,7 +305,7 @@
 }
 .wh-banner-button {
   min-width: 88px;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .wh-banner-button[hidden] {
   display: none;
@@ -371,9 +371,9 @@
 }
 .wh-device {
   position: absolute;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   transform: translate(-50%, -60%);
   background: transparent;
@@ -526,7 +526,7 @@
 .wh-expand {
   align-self: flex-start;
   margin-left: 1ch;
-  min-height: 44px;
+  min-height: var(--touch-target);
   padding: 0 10px;
   background: transparent;
   border-color: transparent;
@@ -579,7 +579,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   max-width: 100%;
   padding: 6px 14px;
   border-radius: 22px;
@@ -627,8 +627,8 @@
   white-space: nowrap;
 }
 .amb-icon {
-  min-width: 44px;
-  min-height: 44px;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0 10px;
 }
 .amb-view {
@@ -653,8 +653,8 @@
   position: absolute;
   top: 0;
   bottom: 14px;
-  width: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   transform: translateX(-50%);
   background: transparent;

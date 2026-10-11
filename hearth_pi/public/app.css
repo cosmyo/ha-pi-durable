@@ -11,6 +11,11 @@
   --muted: #adbdb7;
   --warm: #ffc58e;
   --teal: #88d8be;
+  /* Minimum size of every tappable control (WCAG 2.5.5, Apple HIG). Each
+     control's own box is at least this big; scripts/touch-targets.mjs checks
+     it. Small visuals (pills) are drawn inside a full-size box, see "Pill
+     targets" below. */
+  --touch-target: 44px;
   font-family:
     ui-sans-serif,
     system-ui,
@@ -83,7 +88,7 @@ button {
   border-radius: 10px;
   padding: 10px 14px;
   cursor: pointer;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 button:hover {
   border-color: var(--teal);
@@ -226,8 +231,8 @@ button.primary {
   flex-shrink: 0;
 }
 .session-menu-toggle {
-  min-width: 36px;
-  min-height: 36px;
+  min-width: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 4px 8px;
   background: transparent;
   border-color: transparent;
@@ -248,7 +253,7 @@ button.primary {
 }
 .session-menu button {
   text-align: left;
-  min-height: 44px;
+  min-height: var(--touch-target);
   background: transparent;
   border-color: transparent;
 }
@@ -298,16 +303,20 @@ button.primary {
   font-size: 0.98rem;
 }
 #permissions-toggle {
-  min-height: 24px;
-  padding: 2px 10px;
+  --pill-height: 24px;
+  min-width: var(--touch-target);
+  padding: 0 10px;
   font-size: 0.68rem;
   color: var(--teal);
-  border-radius: 20px;
+  /* The 44px box overlaps the title's line box and the bar's padding, not
+     another control, so the bar keeps its height. */
+  margin-block: -10px;
 }
 #drawer-toggle,
+#drawer-close,
 #new-chat-icon {
   flex-shrink: 0;
-  min-width: 44px;
+  min-width: var(--touch-target);
   font-size: 1.1rem;
 }
 #drawer-toggle {
@@ -325,7 +334,7 @@ button.primary {
 /* A slim status line, shown only while the connection is not "Connected". */
 #connection {
   margin: 0;
-  padding: 4px 16px;
+  padding: 0 16px;
   font-size: 0.74rem;
   color: var(--warm);
   background: #2a2520;
@@ -335,12 +344,13 @@ button.primary {
   gap: 4px;
 }
 .connection-retry {
+  --pill-height: 28px;
+  --pill-bg: transparent;
+  --pill-border: var(--warm);
+  min-width: var(--touch-target);
   font-size: 0.74rem;
-  padding: 2px 8px;
-  min-height: 28px;
+  padding: 0 8px;
   color: var(--warm);
-  border-color: var(--warm);
-  background: transparent;
 }
 
 /* --------------------------- Conversation ----------------------------- */
@@ -434,7 +444,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin: 0 0 6px;
+  margin: 0 0 10px;
 }
 .message-label {
   font-size: 0.73rem;
@@ -443,12 +453,15 @@ pre {
   letter-spacing: 0.02em;
 }
 .message-copy {
+  --pill-height: 24px;
+  --pill-bg: transparent;
+  min-width: var(--touch-target);
   font-size: 0.72rem;
-  padding: 4px 10px;
-  min-height: 0;
-  background: none;
-  border: 1px solid var(--line);
+  padding: 0 10px;
   color: var(--muted);
+  /* The 44px box overlaps the head's 10px bottom margin and the gap above
+     the message, so the head row keeps its height. */
+  margin-block: -10px;
 }
 .live {
   border-style: dashed;
@@ -476,7 +489,7 @@ pre {
   gap: 8px;
   padding: 10px 14px;
   cursor: pointer;
-  min-height: 44px;
+  min-height: var(--touch-target);
   color: var(--muted);
 }
 .activity-summary::-webkit-details-marker {
@@ -602,7 +615,7 @@ pre {
   align-items: center;
   gap: 6px;
   padding: 8px 16px;
-  min-height: 36px;
+  min-height: var(--touch-target);
   border-radius: 999px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -679,7 +692,7 @@ pre {
   color: var(--warm);
 }
 .confirm-input {
-  min-height: 44px;
+  min-height: var(--touch-target);
   font-family: ui-monospace, monospace;
 }
 .settings-info-row {
@@ -702,7 +715,11 @@ details {
 }
 summary {
   cursor: pointer;
-  min-height: 28px;
+  min-height: var(--touch-target);
+  padding-block: 12px;
+}
+select {
+  min-height: var(--touch-target);
 }
 code {
   font-size: 0.72rem;
@@ -731,6 +748,7 @@ code {
 /* ------------------------------ Composer ------------------------------ */
 #composer {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   border: 1px solid #56675c;
   background: #202e2e;
@@ -741,7 +759,7 @@ code {
 textarea {
   resize: none;
   max-height: 160px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   background: transparent;
   border: 0;
   color: var(--text);
@@ -759,9 +777,9 @@ textarea::placeholder {
 #stop {
   flex-shrink: 0;
   border-radius: 50%;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   display: flex;
   align-items: center;
@@ -785,9 +803,9 @@ textarea::placeholder {
 #attach {
   flex-shrink: 0;
   border-radius: 50%;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   display: flex;
   align-items: center;
@@ -802,7 +820,9 @@ textarea::placeholder {
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding: 0 2px 8px;
+  /* The 44px remove button overhangs the thumbnail by 8px; the scroller
+     would clip it without this room. */
+  padding: 8px 8px 8px 2px;
 }
 #attachments[hidden] {
   display: none;
@@ -825,9 +845,9 @@ textarea::placeholder {
   position: absolute;
   top: -8px;
   right: -8px;
-  width: 44px;
-  height: 44px;
-  min-height: 44px;
+  width: var(--touch-target);
+  height: var(--touch-target);
+  min-height: var(--touch-target);
   padding: 0;
   border-radius: 50%;
   background: transparent;
@@ -865,19 +885,18 @@ textarea::placeholder {
 }
 .composer-chips {
   display: flex;
-  gap: 8px;
+  gap: 0 8px;
   flex-wrap: wrap;
-  padding: 8px 2px 0;
+  padding: 3px 2px 0;
 }
 .chip {
-  min-height: 34px;
-  padding: 6px 14px;
-  border-radius: 18px;
+  --pill-height: 34px;
+  --pill-bg: #1c2a2a;
+  padding: 0 14px;
   font-size: 0.76rem;
-  background: #1c2a2a;
 }
 .chip[aria-expanded="true"] {
-  border-color: var(--teal);
+  --pill-border: var(--teal);
   color: var(--teal);
 }
 
@@ -1003,7 +1022,7 @@ dialog .actions {
 }
 .model-picker select {
   font: inherit;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .model-picker p {
   margin: 4px 0;
@@ -1026,7 +1045,7 @@ dialog .actions {
 .you-form input,
 .you-form select {
   font: inherit;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 /* Undo on an accepted receipt: one 44px button and its deadline. */
 .undo-row {
@@ -1034,7 +1053,7 @@ dialog .actions {
   gap: 8px;
 }
 .undo-row button {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 /* Settings → You → Phone approvals: a switch and two short lists. */
 .push-section {
@@ -1048,7 +1067,7 @@ dialog .actions {
   font-size: 1rem;
 }
 #push-enabled {
-  min-height: 44px;
+  min-height: var(--touch-target);
   min-width: 88px;
   align-self: flex-start;
 }
@@ -1071,7 +1090,7 @@ dialog .actions {
   gap: 8px;
 }
 .push-list button {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .segmented {
   display: flex;
@@ -1209,7 +1228,7 @@ dialog .actions {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 44px;
+  min-height: var(--touch-target);
   margin: 12px 0;
   padding: 10px 14px;
   border-radius: 10px;
@@ -1239,7 +1258,7 @@ dialog .actions {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 #home-mode:focus-visible {
   outline: 3px solid var(--warm);
@@ -1268,7 +1287,7 @@ dialog .actions {
     /* 44px minimum touch target on phones (WCAG 2.5.5 / Apple HIG), not 40px:
        this is the baseline every unstyled button inherits, including the
        drawer footer rows, dialog actions and Settings list rows. */
-    min-height: 44px;
+    min-height: var(--touch-target);
     padding: 8px 12px;
   }
   .settings-info-row {
@@ -1397,7 +1416,7 @@ dialog .actions {
     margin: 4px 0 8px;
   }
   .canvas-card .canvas-question {
-    min-height: 34px;
+    min-height: var(--touch-target);
     padding: 4px 10px;
     font-size: 0.72rem;
   }
@@ -1463,7 +1482,7 @@ dialog .actions {
   }
   #login-copy-row button,
   #login-url {
-    min-height: 44px;
+    min-height: var(--touch-target);
   }
 }
 
@@ -1548,31 +1567,39 @@ dialog .actions {
   white-space: pre-wrap;
   margin: 0 0 6px;
 }
-/* Touch targets: keep compact controls visually small but give them a 44px
-   hit area on phones. */
-@media (max-width: 720px), (max-height: 560px) {
-  .session-menu-toggle,
-  .chip,
-  .model-chip,
-  #canvas-toggle,
-  .canvas-question,
-  #permissions-toggle {
-    position: relative;
-  }
-  .session-menu-toggle::after,
-  .chip::after,
-  .model-chip::after,
-  #canvas-toggle::after,
-  .canvas-question::after,
-  #permissions-toggle::after {
-    content: "";
-    position: absolute;
-    inset: -6px -2px;
-    min-height: 44px;
-  }
-  #permissions-toggle::after {
-    inset: -10px -4px;
-  }
+/* ---------------------------- Pill targets ----------------------------
+   A pill keeps its calm, compact look but its button box is a full
+   --touch-target tall: the visible pill is drawn by ::before, centred in the
+   box (--pill-height, --pill-bg, --pill-border). Chip rows use no row gap so
+   wrapped pills do not drift apart. */
+.chip,
+.message-copy,
+#permissions-toggle,
+.connection-retry {
+  --pill-border: var(--line);
+  position: relative;
+  isolation: isolate;
+  min-height: var(--touch-target);
+  border: 0;
+  background: none;
+}
+.chip::before,
+.message-copy::before,
+#permissions-toggle::before,
+.connection-retry::before {
+  content: "";
+  position: absolute;
+  inset: calc((100% - var(--pill-height)) / 2) 0;
+  z-index: -1;
+  border: 1px solid var(--pill-border);
+  border-radius: 999px;
+  background: var(--pill-bg, #253638);
+}
+.chip:hover,
+.message-copy:hover,
+#permissions-toggle:hover,
+.connection-retry:hover {
+  --pill-border: var(--teal);
 }
 
 /* -------------------------------- Apps --------------------------------- */
@@ -1627,11 +1654,11 @@ dialog .actions {
 .app-suggestions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 0 8px;
   margin-top: 10px;
 }
 .app-suggestions .chip {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 #pinned-apps {
   margin-bottom: 16px;
@@ -1848,7 +1875,7 @@ h3.app-text {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   padding: 8px 12px;
   border-radius: 22px;
   border: 1px solid var(--line);
@@ -1921,7 +1948,7 @@ h3.app-text {
   display: flex;
   align-items: center;
   gap: 12px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   padding: 4px 2px;
   border-bottom: 1px solid #2c3c3e;
   cursor: pointer;
@@ -1942,8 +1969,8 @@ h3.app-text {
   font-size: 0.8rem;
 }
 .app-step {
-  width: 44px;
-  height: 44px;
+  width: var(--touch-target);
+  height: var(--touch-target);
   padding: 0;
   border-radius: 50%;
   font-size: 1.2rem;
@@ -1990,7 +2017,7 @@ h3.app-text {
 }
 .app-tab {
   border-radius: 18px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   font-size: 0.84rem;
   flex-shrink: 0;
 }
@@ -2180,7 +2207,7 @@ h3.app-text {
 .today-snooze {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 0 8px;
   margin-top: 10px;
 }
 .today-actions button,
@@ -2192,7 +2219,7 @@ h3.app-text {
 #today-dialog .actions button,
 #proactive-dialog .actions button,
 #insights-dialog .actions button {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .today-empty h3 {
   margin: 0 0 6px;
@@ -2243,7 +2270,7 @@ dialog label.pro-check {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   margin: 6px 0;
   flex-shrink: 0;
 }
@@ -2288,7 +2315,7 @@ dialog .pro-field label {
 }
 .pro-field input,
 .pro-field select {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .pro-watchers {
   list-style: none;
@@ -2326,7 +2353,7 @@ dialog .pro-field label {
   font-size: 0.88rem;
 }
 .pro-add summary {
-  min-height: 44px;
+  min-height: var(--touch-target);
   display: flex;
   align-items: center;
   color: var(--teal);
@@ -2372,7 +2399,7 @@ dialog .pro-field label {
   gap: 6px;
 }
 .feedback-thumb {
-  min-width: 44px;
+  min-width: var(--touch-target);
   padding: 4px 8px;
   background: transparent;
   border-color: transparent;
@@ -2391,11 +2418,11 @@ dialog .pro-field label {
 .feedback-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 0 6px;
   margin-top: 6px;
 }
 .chip[aria-pressed="true"] {
-  border-color: var(--warm);
+  --pill-border: var(--warm);
   color: var(--warm);
 }
 @media (max-width: 720px), (max-height: 560px) {
@@ -2403,7 +2430,7 @@ dialog .pro-field label {
     flex: 1 1 auto;
   }
   .drawer-footer > button {
-    min-height: 44px;
+    min-height: var(--touch-target);
   }
   .today-card {
     padding: 12px;
@@ -2467,7 +2494,7 @@ dialog .pro-field label {
 }
 .list-card button,
 .list-card input {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .list-header {
   display: flex;
@@ -2504,14 +2531,14 @@ dialog .pro-field label {
   min-width: 0;
 }
 .list-check {
-  width: 44px;
-  min-width: 44px;
+  width: var(--touch-target);
+  min-width: var(--touch-target);
   border-radius: 50%;
   border: 2px solid var(--teal);
   background: transparent;
 }
 .list-more {
-  min-width: 44px;
+  min-width: var(--touch-target);
 }
 .list-menu,
 .list-rename,
@@ -2533,7 +2560,7 @@ dialog .pro-field label {
   margin-top: 8px;
 }
 .list-done summary {
-  min-height: 44px;
+  min-height: var(--touch-target);
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2579,7 +2606,7 @@ dialog .pro-field label {
   font-size: 0.8rem;
 }
 .suggestion-patch summary {
-  min-height: 44px;
+  min-height: var(--touch-target);
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2604,7 +2631,7 @@ dialog .pro-field label {
   font-size: 0.86rem;
 }
 .code-confirm summary {
-  min-height: 44px;
+  min-height: var(--touch-target);
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -2624,7 +2651,7 @@ dialog .pro-field label {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px;
-  min-height: 44px;
+  min-height: var(--touch-target);
   background: var(--bg);
   color: var(--text);
 }
@@ -2706,7 +2733,7 @@ dialog .pro-field label {
   font-size: 0.95rem;
 }
 #memory-dialog button {
-  min-height: 44px;
+  min-height: var(--touch-target);
 }
 .memory-section {
   margin: 14px 0 0;
@@ -2736,8 +2763,8 @@ dialog .pro-field label {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  min-height: 44px;
-  min-width: 44px;
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 12px;

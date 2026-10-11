@@ -177,11 +177,15 @@ test("Today Lists render untrusted text as text, collapsed by default, with 44px
     new URL("../public/app.css", import.meta.url),
     "utf8",
   );
+  assert.match(css, /--touch-target: 44px;/);
   assert.match(
     css,
-    /\.list-card button,\n\.list-card input \{\n {2}min-height: 44px;/,
+    /\.list-card button,\n\.list-card input \{\n {2}min-height: var\(--touch-target\);/,
   );
-  assert.match(css, /\.list-check \{\n {2}width: 44px;\n {2}min-width: 44px;/);
+  assert.match(
+    css,
+    /\.list-check \{\n {2}width: var\(--touch-target\);\n {2}min-width: var\(--touch-target\);/,
+  );
 
   // The approval card names the exact change, with the controller-read text.
   assert.equal(

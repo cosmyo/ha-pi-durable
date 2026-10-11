@@ -14,6 +14,19 @@ npm run check
 
 The root check runs pinned formatting checks, TypeScript checking, Node test suites, production compilation, App-manifest/build-context assertions, browser syntax checks and a local secret-pattern scan. Tests use synthetic identities/credentials, an offline provider or fake HTTP. They do not connect to a real home or paid model account.
 
+### Touch-target audit (UI changes)
+
+`node scripts/touch-targets.mjs` opens every view of the web UI at 390x844 and 360x740 with touch emulation and lists each interactive element (button, link, input, select, textarea, summary, `[role=button]`, `[tabindex]`) that is smaller than 44x44 CSS px. It exits non-zero while any remain, so run it after changing `hearth_pi/public/*.css` or any control. It uses the real, unmodified UI files behind a throw-away loopback server with synthetic data (chat with tool rows, receipts and every proposal state, composer chips and attachments, model and permission sheets, the drawer, every Settings sheet, Today with suggestions and Lists, Apps, Memory, Home World map, list, editor and preview). It never contacts a real home, model or network.
+
+```sh
+# needs playwright-core (not a dependency of the App) and a Chrome or Chromium
+npm i --no-save --prefix /tmp/hearth-audit playwright-core
+PLAYWRIGHT_CORE=/tmp/hearth-audit/node_modules/playwright-core node scripts/touch-targets.mjs
+# optional: --width 360 --layout embedded --scene chat --shots DIR --verbose --all --list
+```
+
+Set `CHROME_PATH` when Chrome is not in a standard location. Each scene runs standalone, and the core scenes also run embedded in an iframe (the Home Assistant panel; the CSS ignores safe-area insets there) and with emulated iPhone safe-area insets. For every element the audit measures the element's own box (it must be 44x44) and the real hit area probed with `elementFromPoint` (a neighbour that overlaps and wins a point does not count). The only exceptions are the entries of `HIT_AREA_EXTENSION` in the script, each of which must still reach 44x44 through a measured hit-area extension. The audit also fails when a control in `index.html` was never shown by any scene, and on any Content Security Policy violation. It is a documented script rather than part of `npm test` because it needs a browser binary that CI does not install. The size lives in one CSS variable, `--touch-target` in `app.css`; small visuals such as the chips and the Copy button stay compact because the visible pill is drawn inside a full-size button box (see "Pill targets" in `app.css`). It checks sizes only: it is not a check of iOS Safari behavior inside the Home Assistant companion app, which was not run here.
+
 ### Flagged Anthropic source slice (unreleased)
 
 The local Node **24.21.0** full check passes **64/64** tests, formatting, types, production build, package/default/pin validation and secret-pattern scanning. Production npm audit reports zero known advisories.
