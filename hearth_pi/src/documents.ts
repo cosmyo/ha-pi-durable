@@ -1,5 +1,6 @@
 import { defineDoc } from "@earendil-works/pi-durable";
 import type { CheckpointInfo } from "@earendil-works/pi-durable";
+import type { UndoRecord } from "./undo.js";
 
 const checkpointWhen = (_value: unknown, _ops: unknown, info: CheckpointInfo) =>
   info.deltasSinceBase >= 31;
@@ -162,12 +163,16 @@ export type Proposal = {
   notified?: { at: number; tag: string; count: number };
   // Set when the decision was a tap on a phone notification.
   decidedVia?: "push";
+  // Undo: the state read right before the change (committed with the
+  // dispatch intent) and, once accepted, until when Undo is offered.
+  undo?: UndoRecord;
   // Set when a person pressed an app ToggleAction or a Home World device
   // instead of a model tool call.
   origin?:
     | { kind: "app"; appId: string; version: number; elementId: string }
     | { kind: "world"; entityId: string }
-    | { kind: "list"; entityId: string };
+    | { kind: "list"; entityId: string }
+    | { kind: "undo"; proposalId: string; hash: string };
 };
 export const Proposals = defineDoc<{ items: Record<string, Proposal> }>({
   kind: "hearth.proposals",

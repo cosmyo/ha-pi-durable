@@ -871,6 +871,8 @@ export function renderProposals(
           `Requested by you from Today → Lists (${proposal.origin.entityId})`,
         ),
       );
+    if (proposal.origin?.kind === "undo")
+      card.append(node("p", "Undo of an earlier change, requested by you"));
     if (proposal.origin?.kind === "app")
       card.append(
         node(
@@ -979,12 +981,41 @@ export function renderProposals(
       button.addEventListener("click", () => decide(proposal, "resolve"));
       card.append(button);
     }
+    if (undoOffered(proposal, proposals)) {
+      const until = new Date(proposal.undo.until).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const row = node("div", "", "actions undo-row");
+      const button = node("button", "Undo", "undo");
+      button.type = "button";
+      button.addEventListener("click", () => decide(proposal, "undo"));
+      row.append(button, node("span", `Undo until ${until}`, "muted"));
+      card.append(row);
+    }
     if (proposal.resolution) card.append(node("p", proposal.resolution));
     fragment.append(card);
   }
   container.replaceChildren(fragment);
 }
 
+// Undo is offered on an accepted receipt within its window, unless a
+// reverse proposal is already pending, running or done. The server decides.
+export function undoOffered(proposal, proposals = {}) {
+  if (
+    proposal.status !== "accepted" ||
+    !proposal.undo?.until ||
+    proposal.undo.until <= Date.now() ||
+    proposal.origin?.kind === "undo"
+  )
+    return false;
+  const reverse = proposal.undo.reverse && proposals[proposal.undo.reverse];
+  return (
+    !reverse ||
+    reverse.status === "rejected" ||
+    (reverse.status === "pending" && reverse.expires <= Date.now())
+  );
+}
 const RISK_LABEL = {
   low: "Low risk",
   medium: "Medium risk",

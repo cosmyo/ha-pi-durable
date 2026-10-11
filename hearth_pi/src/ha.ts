@@ -57,6 +57,14 @@ import {
   type RegistryProjection,
 } from "./world-layout.js";
 import {
+  entitySnapshot,
+  reverseEntityAction,
+  reverseTodoAction,
+  undoSubject,
+  type EntitySnapshot,
+  type UndoSnapshot,
+} from "./undo.js";
+import {
   HAEventSubscriber,
   type HAEventOptions,
   type NotificationActionEvent,
@@ -768,6 +776,48 @@ export class HAClient {
       signal,
       call,
     );
+  }
+  // Undo: one bounded (2 s) controller read of the entity an allowlisted
+  // action changes, kept only when the reverse is itself an allowed action
+  // here. Any failure is simply "no Undo".
+  async undoSnapshot(
+    action: Action,
+    signal?: AbortSignal,
+  ): Promise<UndoSnapshot | null> {
+    try {
+      const subject = undoSubject(action, this.admin);
+      if (!subject) return null;
+      const readAt = Date.now();
+      if (subject.kind === "todo") {
+        const todo = action as TodoAction;
+        const reverse = reverseTodoAction(todo, ["undo-check"]);
+        if (!reverse) return null;
+        this.action(reverse);
+        return { kind: "todo", entityId: todo.entityId, readAt };
+      }
+      const snapshot = await this.undoState(subject.entityId, signal, 2000);
+      if (!snapshot) return null;
+      const reverse = reverseEntityAction(action, snapshot);
+      if (!reverse) return null;
+      this.action(reverse);
+      return snapshot;
+    } catch {
+      return null;
+    }
+  }
+  // The current bounded snapshot of one entity in reach (Undo).
+  async undoState(
+    entityId: string,
+    signal?: AbortSignal,
+    timeoutMs = 10000,
+  ): Promise<EntitySnapshot | null> {
+    this.entity(entityId);
+    const timeout = AbortSignal.timeout(timeoutMs);
+    const raw = await this.request(
+      `states/${encodeURIComponent(entityId)}`,
+      signal ? AbortSignal.any([signal, timeout]) : timeout,
+    );
+    return entitySnapshot(entityId, raw, Date.now());
   }
   // Facts the deterministic classifier needs, read by the controller (never
   // by a model): this add-on's slug and targeted covers' device classes.

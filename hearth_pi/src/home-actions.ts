@@ -22,7 +22,19 @@ import type { Runtime } from "./runtime.js";
 import { Serial, digest, insist, text } from "./safety.js";
 import { classifyAction, confirmationWord, maxRisk } from "./risk.js";
 import { offJudge, type RiskJudge } from "./judge.js";
-import type { Action, JudgeRecord, RiskAssessment } from "./documents.js";
+import type {
+  Action,
+  JudgeRecord,
+  RiskAssessment,
+  TodoAction,
+} from "./documents.js";
+import {
+  UNDO_STALE_MS,
+  UNDO_WINDOW_MS,
+  reverseEntityAction,
+  reverseTodoAction,
+  sameAsBefore,
+} from "./undo.js";
 
 export const ACTION_SCHEMA = 1;
 export const FULL_ACKNOWLEDGEMENT =
@@ -569,6 +581,21 @@ export class HomeActions {
     value: unknown,
     origin: NonNullable<Proposal["origin"]>,
   ): Promise<Proposal> {
+    return this.admitHuman(owner, sessionId, value, origin);
+  }
+  // A person's own request (a press, or Undo's reverse action): the exact
+  // same admission. `forceAsk` makes it ask even in Full access; `link` runs
+  // inside the commit that creates the proposal (and may refuse it).
+  private async admitHuman(
+    owner: string,
+    sessionId: number,
+    value: unknown,
+    origin: NonNullable<Proposal["origin"]>,
+    options: {
+      forceAsk?: boolean;
+      link?: (items: Record<string, Proposal>, id: string) => void;
+    } = {},
+  ): Promise<Proposal> {
     const runtime = this.host();
     const conversationId = sessionId as ConversationId;
     await this.gate.run(() =>
@@ -610,6 +637,7 @@ export class HomeActions {
           let n = 1_000_000_000_000 + Object.keys(doc.items).length;
           while (doc.items[String(n)]) n++;
           const id = String(n);
+          options.link?.(doc.items, id);
           const now = Date.now();
           const item: Proposal = {
             id,
@@ -642,6 +670,7 @@ export class HomeActions {
       // A direct press in Full access runs only when low risk; otherwise the
       // owner reviews the exact action like any other proposal.
       if (
+        options.forceAsk ||
         proposal.authorization?.mode !== "full" ||
         !autoRunAllowed(risk, NO_JUDGE, action, this.ha.admin)
       )
@@ -652,6 +681,76 @@ export class HomeActions {
     } finally {
       this.controllers.delete(controller);
     }
+  }
+  // Undo: a NEW exact proposal for the reverse of an accepted low/medium
+  // change, built from the state Hearth read before sending it. Same
+  // admission as a press (Read-only, Ask, Full, barriers, risk); it asks
+  // whenever the entity changed again well after the attempt. Single use:
+  // offered again only if the reverse was rejected or expired unsent.
+  async undo(
+    owner: string,
+    sessionId: number,
+    id: string,
+    hash: string,
+  ): Promise<Proposal> {
+    const runtime = this.host();
+    const conversation = await runtime.session(owner, sessionId);
+    const items =
+      (await runtime.harness.snapshot(Proposals, conversation.id, ctx))
+        ?.items ?? {};
+    const original = items[id];
+    insist(
+      original &&
+        original.hash === hash &&
+        digest({ session: conversation.id, id, action: original.action }) ===
+          hash,
+      "proposal_not_found",
+      404,
+    );
+    undoAllowed(original, items, Date.now());
+    const before = original.undo!.before;
+    const signal = AbortSignal.timeout(10000);
+    let reverse: unknown = null;
+    let forceAsk = false;
+    if (before.kind === "entity") {
+      const current = await this.ha.undoState(before.entityId, signal);
+      insist(current, "ha_read_failed", 502);
+      insist(!sameAsBefore(before, current), "nothing_to_undo", 409);
+      reverse = reverseEntityAction(original.action, before);
+      forceAsk =
+        current.lastChangedMs > (original.attemptedAt ?? 0) + UNDO_STALE_MS;
+    } else {
+      const action = original.action as TodoAction;
+      let matches: string[] = [];
+      if (action.op === "add")
+        matches = (await this.ha.readTodo(action.entityId, signal)).items
+          .filter(
+            (i) => i.status === "needs_action" && i.summary === action.summary,
+          )
+          .map((i) => i.uid);
+      reverse = reverseTodoAction(action, matches);
+      insist(
+        reverse || action.op !== "add",
+        matches.length ? "undo_item_ambiguous" : "nothing_to_undo",
+        409,
+      );
+    }
+    insist(reverse, "undo_unavailable", 409);
+    return this.admitHuman(
+      owner,
+      sessionId,
+      reverse,
+      { kind: "undo", proposalId: id, hash },
+      {
+        forceAsk,
+        link: (doc, reverseId) => {
+          const item = doc[id];
+          insist(item && item.hash === hash, "proposal_changed", 409);
+          undoAllowed(item, doc, Date.now());
+          item.undo!.reverse = reverseId;
+        },
+      },
+    );
   }
   async decide(
     owner: string,
@@ -864,6 +963,13 @@ export class HomeActions {
   ) {
     const runtime = this.host();
     if (validate) await this.ha.validateLive(proposal.action, signal);
+    // Undo: read the entity right before the change (bounded; a failure
+    // only means no Undo, never a blocked or delayed dispatch decision).
+    const before =
+      proposal.origin?.kind !== "undo" &&
+      (proposal.risk?.level === "low" || proposal.risk?.level === "medium")
+        ? await this.ha.undoSnapshot(proposal.action, signal)
+        : null;
     await this.gate.run(() =>
       runtime.harness.commit(async (tx) => {
         insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
@@ -899,6 +1005,7 @@ export class HomeActions {
         item.decidedBy = owner;
         item.decidedAt = Date.now();
         if (via === "push") item.decidedVia = "push";
+        if (before) item.undo = { before };
       }, ctx),
     );
     let send: Promise<void> | undefined;
@@ -936,6 +1043,8 @@ export class HomeActions {
           const item = (await tx.doc(Proposals, sessionId)).items[proposal.id]!;
           if (item.status === "dispatching") {
             item.status = status;
+            if (status === "accepted" && item.undo)
+              item.undo.until = Date.now() + UNDO_WINDOW_MS;
             if (status === "failed")
               item.resolution = runtime.redact(failure.slice(0, 300));
             (await tx.doc(HomePermissions)).actionRevision++;
@@ -955,6 +1064,32 @@ export class HomeActions {
     for (const controller of this.controllers.keys()) controller.abort();
     await Promise.allSettled(this.inFlight);
   }
+}
+// Whether Undo may (still) be used on an accepted receipt; throws why not.
+function undoAllowed(
+  original: Proposal,
+  items: Record<string, Proposal>,
+  now: number,
+) {
+  insist(
+    original.status === "accepted" &&
+      original.undo &&
+      original.origin?.kind !== "undo" &&
+      (original.risk?.level === "low" || original.risk?.level === "medium"),
+    "undo_unavailable",
+    409,
+  );
+  insist((original.undo.until ?? 0) > now, "undo_expired", 409);
+  const reverse = original.undo.reverse
+    ? items[original.undo.reverse]
+    : undefined;
+  insist(
+    !reverse ||
+      reverse.status === "rejected" ||
+      (reverse.status === "pending" && reverse.expires <= now),
+    "undo_already_used",
+    409,
+  );
 }
 // Compatibility facade: HTTP and existing human-review clients share HA's engine.
 export class Actions {

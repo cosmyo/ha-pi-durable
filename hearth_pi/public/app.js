@@ -1213,7 +1213,36 @@ async function deleteSession(id, title) {
     );
   }
 }
+const UNDO_ERRORS = {
+  nothing_to_undo: "It is already back as it was; nothing to undo.",
+  undo_expired: "The undo window has passed.",
+  undo_already_used: "This change was already undone or an undo is pending.",
+  undo_item_ambiguous:
+    "The list has more than one matching item; undo it there.",
+  undo_unavailable: "This change cannot be undone.",
+};
+async function undo(proposal) {
+  const id = selected;
+  try {
+    feedback("Requesting undo\u2026");
+    const result = await api(`sessions/${id}/undo`, {
+      id: proposal.id,
+      hash: proposal.hash,
+    });
+    if (selected === id) {
+      snapshot(await api(`sessions/${id}/snapshot`));
+      feedback(
+        result.status === "pending"
+          ? "Undo is a new exact action: review it below."
+          : "Undo sent. See the new receipt.",
+      );
+    }
+  } catch (error) {
+    feedback(UNDO_ERRORS[error.message] ?? error.message);
+  }
+}
 async function decide(proposal, decision, confirm = "") {
+  if (decision === "undo") return undo(proposal);
   let note = "";
   if (decision === "resolve") {
     note =
@@ -1787,7 +1816,7 @@ function showActionApproval(sessionId, proposal, after) {
     $("app-approval-card"),
     { [proposal.id]: proposal },
     async (p, decision, confirm) => {
-      if (decision === "resolve") return;
+      if (decision === "resolve" || decision === "undo") return;
       try {
         await api(`sessions/${sessionId}/actions`, {
           id: p.id,

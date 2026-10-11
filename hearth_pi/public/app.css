@@ -1028,6 +1028,14 @@ dialog .actions {
   font: inherit;
   min-height: 44px;
 }
+/* Undo on an accepted receipt: one 44px button and its deadline. */
+.undo-row {
+  align-items: center;
+  gap: 8px;
+}
+.undo-row button {
+  min-height: 44px;
+}
 /* Settings → You → Phone approvals: a switch and two short lists. */
 .push-section {
   margin-top: 16px;

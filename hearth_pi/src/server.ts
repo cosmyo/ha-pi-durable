@@ -594,7 +594,7 @@ export function appServer(
         throw new Fault(404, "not_found");
       }
       const route =
-        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|model|delete|feedback|images\/([1-9][0-9]{0,12})\/([0-9])))?$/.exec(
+        /^\/api\/sessions\/([1-9][0-9]{0,12})(?:\/(snapshot|events|inputs|abort|actions|undo|model|delete|feedback|images\/([1-9][0-9]{0,12})\/([0-9])))?$/.exec(
           path,
         );
       if (route) {
@@ -857,6 +857,20 @@ export function appServer(
           object(await body(req), []);
           await conversation.abort(ctx);
           return json(res, 200, { stopped: true });
+        }
+        // Undo an accepted receipt: files the exact reverse as a new
+        // proposal through the same Home permissions as a press.
+        if (req.method === "POST" && operation === "undo") {
+          const v = object(await body(req), ["id", "hash"]);
+          const actionId = text(v.id, 20);
+          insist(/^[1-9][0-9]*$/.test(actionId));
+          const hash = text(v.hash, 64);
+          insist(/^[a-f0-9]{64}$/.test(hash));
+          return json(
+            res,
+            200,
+            await actions.engine.undo(owner, id, actionId, hash),
+          );
         }
         if (req.method === "POST" && operation === "actions") {
           const v = object(await body(req), [
