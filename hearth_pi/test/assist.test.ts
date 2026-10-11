@@ -33,6 +33,7 @@ import {
   closingSentence,
   type AssistEnd,
   type AssistEvent,
+  speechTracker,
 } from "../src/assist.js";
 import { CoreLink, CORE_LINK_SERVICE } from "../src/core-link.js";
 import { appServer, coreServer } from "../src/server.js";
@@ -1107,4 +1108,81 @@ test("HTTP: Settings shows Assist status without the secret; only owners rotate 
     (await off.post("/api/assist/rotate", { confirm: true })).status,
     409,
   );
+});
+
+test("assist: speech follows text from message_start, blocks and whole messages, never dropping the first words", () => {
+  const said: string[] = [];
+  let desynced = 0;
+  const feed = speechTracker(
+    (t) => said.push(t),
+    () => desynced++,
+  );
+  const ev = (e: unknown) => feed(e as Parameters<typeof feed>[0]);
+  // A user message never speaks.
+  ev({
+    type: "message_start",
+    message: {
+      role: "user",
+      content: [{ type: "text", text: "Which lights?" }],
+    },
+  });
+  // The first word already sits in the partial of message_start (live failure).
+  ev({
+    type: "message_start",
+    message: { role: "assistant", content: [{ type: "text", text: "The" }] },
+  });
+  ev({
+    type: "message_update",
+    changes: [{ type: "text_delta", contentIndex: 0, delta: " bathroom" }],
+  });
+  ev({
+    type: "message_update",
+    changes: [
+      {
+        type: "block",
+        contentIndex: 0,
+        block: { type: "text", text: "The bathroom light" },
+      },
+    ],
+  });
+  ev({
+    type: "message_update",
+    changes: [
+      {
+        type: "message",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The bathroom light is on." }],
+        },
+      },
+    ],
+  });
+  assert.equal(said.join(""), "The bathroom light is on.");
+  assert.equal(desynced, 0);
+  // A new assistant message starts fresh; text_start carries its first words.
+  ev({ type: "message_start", message: { role: "assistant", content: [] } });
+  ev({
+    type: "message_update",
+    changes: [
+      {
+        type: "text_start",
+        contentIndex: 1,
+        block: { type: "text", text: "Also" },
+      },
+      { type: "text_delta", contentIndex: 1, delta: " done." },
+    ],
+  });
+  assert.deepEqual(said.slice(-1), ["Also done."]);
+  // A rewrite that no longer extends what was spoken stops streaming.
+  ev({
+    type: "message_update",
+    changes: [
+      {
+        type: "block",
+        contentIndex: 1,
+        block: { type: "text", text: "Never mind." },
+      },
+    ],
+  });
+  assert.equal(desynced, 1);
 });

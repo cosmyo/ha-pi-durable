@@ -188,6 +188,67 @@ export function resolveSpeaker(
   return { kind: "refused", speech: ASSIST_SPEECH.noSpeaker };
 }
 
+// Follows the live assistant text of a run from durable agent events and
+// passes on only text that was not spoken yet. Text can arrive in the
+// message_start partial, as text_start/text_delta changes, or as a whole
+// block or message; each assistant message is tracked per content block and
+// only the new suffix is emitted. A rewrite (text that no longer extends what
+// was spoken) or a replayed snapshot stops streaming; the controller then
+// sends the committed answer's continuation, if any, at the end.
+export function speechTracker(
+  emit: (text: string) => void,
+  desync: () => void,
+): (event: AgentEvent) => void {
+  let blocks = new Map<number, string>();
+  let spoken = "";
+  let assistant = false;
+  const load = (content: readonly unknown[]) => {
+    blocks = new Map();
+    content.forEach((block, index) => {
+      const b = block as { type?: string; text?: unknown };
+      if (b.type === "text" && typeof b.text === "string")
+        blocks.set(index, b.text);
+    });
+  };
+  const flush = () => {
+    const now = [...blocks.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map((entry) => entry[1])
+      .join("");
+    if (!now.startsWith(spoken)) return desync();
+    const added = now.slice(spoken.length);
+    if (!added) return;
+    spoken = now;
+    emit(added);
+  };
+  return (event) => {
+    if (event.type === "snapshot") return desync();
+    if (event.type === "message_start") {
+      const message = event.message as { role?: string; content?: unknown };
+      assistant = message.role === "assistant";
+      spoken = "";
+      blocks = new Map();
+      if (assistant && Array.isArray(message.content)) load(message.content);
+      if (assistant) flush();
+      return;
+    }
+    if (event.type !== "message_update" || !assistant) return;
+    for (const change of event.changes) {
+      if (change.type === "text_start" || change.type === "block") {
+        if (change.block.type === "text")
+          blocks.set(change.contentIndex, change.block.text ?? "");
+      } else if (change.type === "text_delta")
+        blocks.set(
+          change.contentIndex,
+          (blocks.get(change.contentIndex) ?? "") + change.delta,
+        );
+      else if (change.type === "message")
+        load(change.message.content as readonly unknown[]);
+    }
+    flush();
+  };
+}
+
 // The words the controller adds after a voice turn, from the real proposals
 // and receipts of that turn. `pushed` holds the proposals whose phone
 // notification Home Assistant actually accepted; nothing else may be called
@@ -405,21 +466,13 @@ export class Assist {
       streamed += piece;
       if (!signal?.aborted) write({ type: "delta", text: piece });
     };
+    const speech = speechTracker(emit, () => {
+      desynced = true;
+    });
     const onEvents = async (events: readonly AgentEvent[]) => {
       for (const event of events) {
-        if (event.type === "snapshot") desynced = true;
-        else if (event.type === "message_start") separate = true;
-        else if (event.type === "message_update")
-          for (const change of event.changes) {
-            if (change.type === "text_delta") emit(change.delta);
-            else if (
-              change.type === "text_start" &&
-              change.block.type === "text" &&
-              change.block.text
-            )
-              emit(change.block.text);
-            else if (change.type === "message") desynced = true;
-          }
+        if (event.type === "message_start") separate = true;
+        speech(event);
       }
     };
     // Attach before submitting so no early text of this run is missed;
