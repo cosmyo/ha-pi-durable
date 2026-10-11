@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT as ctx } from "@earendil-works/chord/context";
 import { HomePermissions, Proposals } from "./documents.js";
 import { HomeCanvas } from "./canvas.js";
-import { Boundary } from "./auth.js";
+import { Boundary, oneHeader } from "./auth.js";
 import { workspaceOwners, type Config } from "./config.js";
 import type { Runtime } from "./runtime.js";
 import type { Actions } from "./ha.js";
@@ -29,6 +29,9 @@ import { SuggestionStore } from "./suggestions.js";
 import { WorldStore } from "./world.js";
 import { ApprovalPush } from "./approval-push.js";
 import { roleCapabilities } from "./roles.js";
+import type { Assist, AssistEvent } from "./assist.js";
+import { ASSIST_API, ASSIST_SPEECH } from "./assist.js";
+import type { CoreLink } from "./core-link.js";
 
 // Cached once per process: the package version shown read-only in the
 // Settings \u2192 About sheet. Never written to, never user-controlled.
@@ -50,7 +53,7 @@ function appVersion(): Promise<string> {
   return appVersionPromise;
 }
 
-async function body(
+export async function body(
   req: IncomingMessage,
   limit = 8192,
   timeoutMs = 5000,
@@ -107,6 +110,8 @@ export function appServer(
     proactive?: Proactive;
     // Phone approvals; built from the App configuration when absent.
     approvalPush?: ApprovalPush;
+    // Hearth Assist's Core link (assist_enabled): status and rotation.
+    coreLink?: CoreLink;
   } = {},
 ) {
   const boundary = new Boundary(config),
@@ -151,6 +156,20 @@ export function appServer(
   if (config.workspaceEnabled) runtime.workspaceOwners = workspaceOwnerSet;
   const workspaceAllowed = (owner: string) =>
     config.workspaceEnabled === true && workspaceOwnerSet.has(owner);
+  // Whether a new input to this session can be answered: the session's
+  // committed provider decides; a session on a non-OAuth model (e.g. not yet
+  // switched) uses the configured provider. Shared with Hearth Assist.
+  const inputReady = async (owner: string, id: number) => {
+    const committed = await runtime.sessionProvider(owner, id);
+    const provider = isSubscriptionProvider(committed)
+      ? committed
+      : config.provider;
+    if (isSubscriptionProvider(provider) && !signedIn(provider))
+      return "subscription_login_required";
+    if (provider === "local" && !options.local?.configured)
+      return "local_endpoint_required";
+    return "";
+  };
   const apps = new AppStore(runtime, actions.engine.ha);
   const proactive =
     options.proactive ??
@@ -272,6 +291,8 @@ export function appServer(
           entityScopeCount: new Set(config.policy.entities).size,
           homePermissions: await actions.engine.settings(owner),
           experimental: true,
+          // Hearth Assist is on (assist_enabled); details at /api/assist.
+          assist: !!options.coreLink,
           // Per owner: other owners get no Code affordances at all.
           workspaceEnabled: workspaceAllowed(owner),
           role: roleOf(owner),
@@ -455,6 +476,28 @@ export function appServer(
                   ? await suggestions.draft(owner, v)
                   : await suggestions.dismiss(owner, v);
         return json(res, 200, { decision, ...(await todayView(owner)) });
+      }
+      // Hearth Assist: status for everyone, link-secret rotation for owners.
+      // The secret itself is never returned.
+      if (req.method === "GET" && path === "/api/assist")
+        return json(res, 200, {
+          enabled: !!options.coreLink,
+          satellites: (config.assistSatellites ?? []).filter(
+            (s) => s.userId === owner,
+          ).length,
+          ...(options.coreLink && roleOf(owner) === "owner"
+            ? { link: options.coreLink.status() }
+            : {}),
+        });
+      if (req.method === "POST" && path === "/api/assist/rotate") {
+        ownerOnly(owner);
+        const v = object(await body(req), ["confirm"]);
+        insist(v.confirm === true, "confirmation_required");
+        insist(options.coreLink, "assist_not_enabled", 409);
+        return json(res, 200, {
+          enabled: true,
+          link: await options.coreLink.rotate(),
+        });
       }
       if (path === "/api/profile") {
         if (req.method === "GET")
@@ -855,22 +898,8 @@ export function appServer(
               auth: await subscriptionFor(command[1]).start(owner),
             });
           }
-          // The session's committed provider decides readiness; a session on a
-          // non-OAuth model (e.g. not yet switched) uses the configured provider.
-          const committed = await runtime.sessionProvider(owner, id);
-          const provider = isSubscriptionProvider(committed)
-            ? committed
-            : config.provider;
-          insist(
-            !isSubscriptionProvider(provider) || signedIn(provider),
-            "subscription_login_required",
-            403,
-          );
-          insist(
-            provider !== "local" || options.local?.configured,
-            "local_endpoint_required",
-            403,
-          );
+          const blocked = await inputReady(owner, id);
+          insist(!blocked, blocked, 403);
           return json(res, 202, {
             submissionId: await runtime.submit(
               owner,
@@ -972,6 +1001,8 @@ export function appServer(
   }
   return {
     server,
+    approvalPush,
+    inputReady,
     async close() {
       runtime.closing = true;
       for (const res of streams) res.end();
@@ -985,6 +1016,110 @@ export function appServer(
       await approvalPush.stop();
       await actions.close();
       await runtime.close();
+      server.closeAllConnections();
+      await closed;
+    },
+  };
+}
+
+// Hearth Assist's separate listener for Home Assistant Core (port 8098 in the
+// container, never published to the host). Core authenticates with the link
+// secret (core-link.ts); a request carrying any Origin header is refused, so
+// a browser can never use it; no cookies or CSRF tokens exist here. Bodies
+// are capped at 8 KB. Replies are newline-delimited JSON events.
+export function coreServer(link: CoreLink, assist: Assist) {
+  const open = new Set<ServerResponse>();
+  const server = createServer({ maxHeaderSize: 8192 }, (req, res) => {
+    void handle(req, res);
+  });
+  server.maxConnections = 20;
+  server.headersTimeout = 10000;
+  server.requestTimeout = 60000;
+  server.keepAliveTimeout = 5000;
+  const json = (res: ServerResponse, status: number, value: unknown) => {
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(value));
+  };
+  async function handle(req: IncomingMessage, res: ServerResponse) {
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    try {
+      insist(
+        !req.rawHeaders.some(
+          (value, i) => i % 2 === 0 && value.toLowerCase() === "origin",
+        ),
+        "origin_rejected",
+        403,
+      );
+      insist(
+        link.verify(oneHeader(req, "authorization")),
+        "authentication_required",
+        401,
+      );
+      const url = new URL(req.url ?? "/", "http://core.invalid");
+      insist(
+        url.origin === "http://core.invalid" && !url.search && !url.hash,
+        "invalid_url",
+      );
+      if (req.method === "GET" && url.pathname === "/core/v1/info")
+        return json(res, 200, {
+          api: ASSIST_API,
+          ready: assist.ready,
+          authenticated: true,
+        });
+      if (req.method === "POST" && url.pathname === "/core/v1/conversation") {
+        const value = await body(req, 8192);
+        const abort = new AbortController();
+        res.on("close", () => {
+          if (!res.writableEnded) abort.abort();
+        });
+        open.add(res);
+        const write = (event: AssistEvent) => {
+          if (res.destroyed || res.writableEnded) return;
+          if (!res.headersSent)
+            res.writeHead(200, {
+              "Content-Type": "application/x-ndjson",
+              "X-Accel-Buffering": "no",
+            });
+          res.write(`${JSON.stringify(event)}\n`);
+        };
+        try {
+          await assist.converse(value, write, abort.signal);
+        } catch (error) {
+          if (!res.headersSent) throw error;
+          write({
+            type: "end",
+            status: "refused",
+            speech_suffix: ASSIST_SPEECH.failed,
+            continue_conversation: false,
+            proposals: [],
+          });
+        } finally {
+          open.delete(res);
+        }
+        return res.end();
+      }
+      throw new Fault(
+        url.pathname.startsWith("/core/v1/") ? 405 : 404,
+        url.pathname.startsWith("/core/v1/")
+          ? "method_not_allowed"
+          : "not_found",
+      );
+    } catch (error) {
+      if (res.headersSent) return res.end();
+      const fault =
+        error instanceof Fault ? error : new Fault(500, "request_failed");
+      json(res, fault.status, { error: fault.code });
+    }
+  }
+  return {
+    server,
+    async close() {
+      for (const res of open) res.end();
+      server.closeIdleConnections();
+      const closed = new Promise<void>((resolve) =>
+        server.close(() => resolve()),
+      );
       server.closeAllConnections();
       await closed;
     },

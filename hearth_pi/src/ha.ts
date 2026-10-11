@@ -43,6 +43,7 @@ import {
   type Skill,
 } from "./skills.js";
 import { worldSetupTools } from "./world-setup.js";
+import { voiceSection } from "./assist.js";
 import {
   ROLE_EXTENSION,
   toolAllowed,
@@ -1025,6 +1026,8 @@ export function haExtension(
       feedbackSection(),
       codeSignalSection(),
       skillsSection(skills),
+      // Hearth Assist: short spoken replies while a voice turn is newest.
+      voiceSection(),
     ],
   });
 }

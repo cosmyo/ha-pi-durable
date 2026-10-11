@@ -8,7 +8,9 @@ import { dropAppPrivileges } from "./bootstrap.js";
 import { configuredModels } from "./models.js";
 import { Runtime } from "./runtime.js";
 import { HAClient, haExtension, Actions } from "./ha.js";
-import { appServer } from "./server.js";
+import { appServer, coreServer } from "./server.js";
+import { Assist } from "./assist.js";
+import { CoreLink, CORE_LINK_PORT } from "./core-link.js";
 import { readFile } from "node:fs/promises";
 import { Subscription } from "./subscription.js";
 import { LocalEndpoints, LOCAL_PROVIDER } from "./local.js";
@@ -149,16 +151,43 @@ try {
       }),
     ),
   });
+  // Hearth Assist (assist_enabled, ingress only): the link secret joins the
+  // live redaction list before anything can use it.
+  const coreLink = config.assistEnabled
+    ? await CoreLink.open(config.dataDir, {
+        supervisorToken: config.haToken,
+        host: config.hostname ?? "",
+        secrets,
+      })
+    : undefined;
   const app = appServer(config, runtime, new Actions(runtime, ha), {
     subscriptions,
     local,
     secrets,
     proactive,
+    ...(coreLink ? { coreLink } : {}),
   });
   await new Promise<void>((resolve, reject) => {
     app.server.once("error", reject);
     app.server.listen(config.port, config.host, resolve);
   });
+  const core = coreLink
+    ? coreServer(
+        coreLink,
+        new Assist(runtime, ha.actions, {
+          satellites: config.assistSatellites ?? [],
+          ready: async (owner, chat) => !(await app.inputReady(owner, chat)),
+          push: app.approvalPush,
+        }),
+      )
+    : undefined;
+  if (core && coreLink) {
+    await new Promise<void>((resolve, reject) => {
+      core.server.once("error", reject);
+      core.server.listen(CORE_LINK_PORT, "0.0.0.0", resolve);
+    });
+    coreLink.start();
+  }
   proactive.start();
   console.info(
     "Hearth Pi ready. Experimental; server-side authorization enforced.",
@@ -170,13 +199,16 @@ try {
       stopping = true;
       const deadline = setTimeout(() => process.exit(1), 25000);
       deadline.unref();
-      void app.close().then(
-        () => {
-          clearTimeout(deadline);
-          process.exit(0);
-        },
-        () => process.exit(1),
-      );
+      coreLink?.stop();
+      void (core?.close() ?? Promise.resolve())
+        .then(() => app.close())
+        .then(
+          () => {
+            clearTimeout(deadline);
+            process.exit(0);
+          },
+          () => process.exit(1),
+        );
     });
 } catch (error) {
   // Raw upstream/config/network errors can contain secrets. Never log them;

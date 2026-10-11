@@ -1,5 +1,5 @@
 name: Hearth Pi
-version: "0.4.0"
+version: "0.5.0"
 slug: hearth_pi
 url: https://github.com/cosmyo/ha-pi-durable
 description: Independent experimental durable AI assistant with read-only tools by default
@@ -30,6 +30,11 @@ homeassistant_api: true
 hassio_api: true
 hassio_role: manager
 backup: cold
+# Hearth Assist (assist_enabled): Hearth publishes its Core link (host, port,
+# API version and a link secret) to Home Assistant Core only, through
+# Supervisor discovery. The listener port is never published to the host.
+discovery:
+  - hearth_pi
 breaking_versions:
   - "0.2.0"
 # Only this App's own bridge directory, never HA Core configuration.
@@ -59,6 +64,8 @@ options:
   approval_notifications: false
   member_user_ids: []
   guest_user_ids: []
+  assist_enabled: false
+  assist_satellites: []
 schema:
   authorized_user_ids:
     - str
@@ -87,3 +94,7 @@ schema:
     - str
   guest_user_ids:
     - str
+  assist_enabled: bool
+  assist_satellites:
+    - device_id: str
+      user_id: str

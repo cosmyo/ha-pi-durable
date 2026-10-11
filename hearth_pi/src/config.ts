@@ -70,6 +70,15 @@ export type Config = {
   // This add-on's Supervisor slug in either access mode (for the "Open
   // Hearth" notification link); empty when unknown.
   selfSlug?: string;
+  // Hearth Assist (src/assist.ts): the assist_enabled option, ingress mode
+  // only. Absent means off.
+  assistEnabled?: boolean;
+  // Admin-set voice satellites (assist_satellites): a Home Assistant device
+  // id and the authorized person it speaks for (with an Ask ceiling).
+  assistSatellites?: AssistSatellite[];
+  // This container's hostname, published to Home Assistant Core through
+  // Supervisor discovery so Core can reach the Assist listener.
+  hostname?: string;
   policy: Policy;
   judge?: JudgeConfig;
   // "off", "auto" or "<provider>/<modelId>": the optional briefing summary's
@@ -114,6 +123,9 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "household_owner_required",
   "workspace_owner_not_owner_role",
   "provider_key_required",
+  "assist_requires_ingress",
+  "invalid_assist_satellites",
+  "assist_satellite_user_not_authorized",
 ]);
 // The startup log line for a loadConfig failure: the known Fault code only.
 export function configurationDiagnostic(error: unknown): string | undefined {
@@ -122,6 +134,50 @@ export function configurationDiagnostic(error: unknown): string | undefined {
     : undefined;
 }
 export type HouseholdRole = "owner" | "member" | "guest";
+export type AssistSatellite = { deviceId: string; userId: string };
+export const MAX_ASSIST_SATELLITES = 50;
+export const ASSIST_DEVICE_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+// assist_satellites: unique device ids, each mapped to an authorized user.
+export function assistSatellites(
+  value: unknown,
+  authorizedUsers: readonly string[],
+): AssistSatellite[] {
+  insist(
+    Array.isArray(value) && value.length <= MAX_ASSIST_SATELLITES,
+    "invalid_assist_satellites",
+  );
+  const out: AssistSatellite[] = [];
+  for (const raw of value as unknown[]) {
+    insist(
+      raw !== null &&
+        typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        Object.keys(raw).every((k) => k === "device_id" || k === "user_id"),
+      "invalid_assist_satellites",
+    );
+    const { device_id: deviceId, user_id: userId } = raw as Record<
+      string,
+      unknown
+    >;
+    insist(
+      typeof deviceId === "string" &&
+        ASSIST_DEVICE_PATTERN.test(deviceId) &&
+        typeof userId === "string" &&
+        /^[a-zA-Z0-9_-]{1,100}$/.test(userId),
+      "invalid_assist_satellites",
+    );
+    insist(
+      !out.some((s) => s.deviceId === deviceId),
+      "invalid_assist_satellites",
+    );
+    insist(
+      authorizedUsers.includes(userId),
+      "assist_satellite_user_not_authorized",
+    );
+    out.push({ deviceId, userId });
+  }
+  return out;
+}
 // Each configured member's and guest's household role; everyone else
 // (and local-admin) is an owner.
 export function householdRoles(
@@ -171,6 +227,8 @@ export async function loadConfig(
           "approval_notifications",
           "member_user_ids",
           "guest_user_ids",
+          "assist_enabled",
+          "assist_satellites",
         ])
       : {};
   const port =
@@ -355,6 +413,15 @@ export async function loadConfig(
       ),
     "household_owner_required",
   );
+  // Hearth Assist: off by default; the separate Core listener and the
+  // Supervisor discovery exist only in ingress mode.
+  const assistEnabled = options.assist_enabled ?? false;
+  insist(typeof assistEnabled === "boolean");
+  insist(!assistEnabled || mode === "ingress", "assist_requires_ingress");
+  const satellites = assistSatellites(
+    options.assist_satellites ?? [],
+    authorizedUsers,
+  );
   // Code sessions belong to owners only.
   const effectiveWorkspaceOwners = workspaceEnabled
     ? configuredWorkspaceOwners.length
@@ -413,6 +480,11 @@ export async function loadConfig(
     approvalNotifications,
     memberUsers,
     guestUsers,
+    assistEnabled,
+    assistSatellites: satellites,
+    hostname: /^[a-z0-9][a-z0-9-]{0,63}$/.test(process.env.HOSTNAME ?? "")
+      ? process.env.HOSTNAME
+      : "",
     selfSlug: selfSlug(process.env.HOSTNAME, mode === "ingress"),
     policy:
       access === "admin"

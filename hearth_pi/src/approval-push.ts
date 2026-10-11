@@ -186,6 +186,8 @@ type Sent = {
   services: string[];
   expires: number;
   cleared: boolean;
+  // How many phones Home Assistant accepted the notification for.
+  delivered: number;
 };
 type Subscriber = { start(): void; stop(): void; readonly active: boolean };
 
@@ -193,6 +195,9 @@ export class ApprovalPush implements ApprovalHooks {
   private tokens = new Map<string, Token>();
   private timers = new Map<string, ReturnType<typeof setTimeout>>();
   private sent = new Map<string, Sent>();
+  // The one send attempt per proposal, once started: whether at least one
+  // phone accepted it (Hearth Assist speaks only a push that succeeded).
+  private deliveries = new Map<string, Promise<boolean>>();
   private sendLog = new Map<string, number[]>();
   private proofLog = new Map<string, number[]>();
   // Per tapping HA user, so one user's spam cannot block another's taps.
@@ -280,7 +285,7 @@ export class ApprovalPush implements ApprovalHooks {
     if (this.timers.has(key) || this.sent.has(key)) return;
     const timer = setTimeout(() => {
       this.timers.delete(key);
-      void this.track(this.send(owner, sessionId, proposal.id, proposal.hash));
+      void this.deliver(key, owner, sessionId, proposal.id, proposal.hash);
     }, this.graceMs);
     timer.unref?.();
     this.timers.set(key, timer);
@@ -289,20 +294,57 @@ export class ApprovalPush implements ApprovalHooks {
     if (!this.available || this.stopped) return;
     void this.track(this.sweep());
   }
+  private deliver(
+    key: string,
+    owner: string,
+    sessionId: number,
+    id: string,
+    hash: string,
+  ): Promise<boolean> {
+    const existing = this.deliveries.get(key);
+    if (existing) return existing;
+    const work = this.track(this.send(owner, sessionId, id, hash)).then(
+      (delivered) => (delivered ?? 0) > 0,
+    );
+    this.deliveries.set(key, work);
+    // Only a real send stays recorded (until its notification is cleared).
+    void work.then(() => {
+      if (!this.sent.has(key)) this.deliveries.delete(key);
+    });
+    return work;
+  }
+  // Hearth Assist: a person who just asked by voice is not watching the
+  // chat, so a pending proposal from that turn is sent now instead of after
+  // the grace period. Same checks and single send as the timer; resolves to
+  // whether at least one phone accepted the notification.
+  expedite(owner: string, sessionId: number, proposal: Proposal) {
+    if (!this.available || this.stopped) return Promise.resolve(false);
+    const key = `${sessionId}:${proposal.id}`;
+    const timer = this.timers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.timers.delete(key);
+    }
+    const sent = this.sent.get(key);
+    if (sent && !this.deliveries.has(key))
+      return Promise.resolve(sent.delivered > 0);
+    return this.deliver(key, owner, sessionId, proposal.id, proposal.hash);
+  }
+  // Returns how many phones accepted the notification (0 when not sent).
   private async send(
     owner: string,
     sessionId: number,
     id: string,
     hash: string,
-  ) {
-    if (this.stopped || !this.engine.isAuthorized(owner)) return;
+  ): Promise<number> {
+    if (this.stopped || !this.engine.isAuthorized(owner)) return 0;
     const state = (await this.doc())[owner];
     if (!state?.enabled || !state.targets.some((t) => t.status === "active"))
-      return;
+      return 0;
     const now = this.now();
     const log = recent(this.sendLog.get(owner) ?? [], now, 3600000);
     this.sendLog.set(owner, log);
-    if (log.length >= APPROVAL_PUSH_LIMITS.sendsPerHour) return;
+    if (log.length >= APPROVAL_PUSH_LIMITS.sendsPerHour) return 0;
     const current = (
       await this.runtime.harness.snapshot(
         Proposals,
@@ -316,16 +358,16 @@ export class ApprovalPush implements ApprovalHooks {
       current.notified ||
       current.expires - now < APPROVAL_PUSH_LIMITS.minRemainingMs
     )
-      return;
+      return 0;
     // Re-verify at send time that each phone is still this owner's.
     let candidates: PhoneCandidate[];
     try {
       candidates = await this.ha.ownerPhoneCandidates(owner);
     } catch {
-      return;
+      return 0;
     }
     const targets = await this.verifyTargets(owner, candidates);
-    if (!targets.length) return;
+    if (!targets.length) return 0;
     const tag = newTag();
     const marked = await this.engine.markNotified(
       owner,
@@ -335,7 +377,7 @@ export class ApprovalPush implements ApprovalHooks {
       { at: this.now(), tag, count: targets.length },
       APPROVAL_PUSH_LIMITS.minRemainingMs,
     );
-    if (!marked) return;
+    if (!marked) return 0;
     log.push(now);
     const level = marked.risk?.level;
     const base = {
@@ -367,6 +409,7 @@ export class ApprovalPush implements ApprovalHooks {
       services: targets.map((t) => t.service),
       expires: marked.expires,
       cleared: false,
+      delivered: 0,
     });
     const expiry = setTimeout(
       () => this.settled(),
@@ -374,8 +417,15 @@ export class ApprovalPush implements ApprovalHooks {
     );
     expiry.unref?.();
     // One attempt per phone; a failed send is never resent.
+    let delivered = 0;
     for (const target of targets)
-      await this.ha.notifyDevice(target.service, payload).catch(() => {});
+      await this.ha.notifyDevice(target.service, payload).then(
+        () => delivered++,
+        () => {},
+      );
+    const entry = this.sent.get(key);
+    if (entry) entry.delivered = delivered;
+    return delivered;
   }
   private issue(token: Token) {
     const id = `HEARTH_${VERB_LETTER[token.verb]}_${nonce()}`;
@@ -418,6 +468,7 @@ export class ApprovalPush implements ApprovalHooks {
       if (item && item.status === "pending" && item.expires > now) continue;
       entry.cleared = true;
       this.sent.delete(key);
+      this.deliveries.delete(key);
       for (const [tokenId, token] of this.tokens)
         if (
           token.sessionId === entry.sessionId &&

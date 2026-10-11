@@ -49,6 +49,8 @@ const THINKING_LABEL = {
   xhigh: "Extra high",
   max: "Max",
 };
+// Hearth Assist is on (bootstrap); its status loads when About opens.
+let assistEnabled = false;
 let csrf = "",
   messageSignature = "",
   selected = null,
@@ -243,6 +245,7 @@ async function bootstrap() {
     ? `Hearth Pi v${status.version}`
     : "Hearth Pi";
   $("about-provider").textContent = `Inference provider: ${status.provider}`;
+  assistEnabled = status.assist === true;
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
@@ -2092,9 +2095,54 @@ $("settings-close").addEventListener("click", () =>
 $("settings-dialog").addEventListener("close", () => {
   $("settings-row").setAttribute("aria-expanded", "false");
 });
+// Hearth Assist: status only; the link secret is never sent to the browser.
+// Owners can replace it (Home Assistant receives the new one through
+// Supervisor discovery).
+let assistData = null;
+function paintAssist() {
+  const on = !!assistData?.enabled;
+  $("assist-section").hidden = !on;
+  if (!on) return;
+  const count = assistData.satellites ?? 0;
+  $("assist-summary").textContent =
+    `On. ${count === 1 ? "1 voice satellite speaks" : `${count} voice satellites speak`} for you; they always ask before changing your home.`;
+  const link = assistData.link;
+  $("assist-link").hidden = !link;
+  $("assist-rotate").hidden = !link;
+  if (link)
+    $("assist-link").textContent = link.published
+      ? "Linked to Home Assistant through Supervisor discovery."
+      : "Not yet published to Home Assistant; Hearth keeps trying.";
+}
+async function loadAssist() {
+  try {
+    assistData = await api("assist");
+  } catch {
+    assistData = null;
+  }
+  paintAssist();
+}
+$("assist-rotate").addEventListener("click", async () => {
+  if (
+    !window.confirm(
+      "Replace the link secret? Home Assistant gets the new one automatically; voice requests fail until it does.",
+    )
+  )
+    return;
+  $("assist-status").textContent = "Replacing\u2026";
+  try {
+    assistData = await api("assist/rotate", { confirm: true });
+    $("assist-status").textContent = "Replaced.";
+    await loadAssist();
+  } catch (error) {
+    $("assist-status").textContent = `Not replaced: ${error.message}.`;
+  }
+});
 function openAbout() {
   closeSettingsSheet();
+  $("assist-status").textContent = "";
   $("about-dialog").showModal();
+  if (assistEnabled) void loadAssist();
 }
 $("settings-about-row").addEventListener("click", openAbout);
 $("about-close").addEventListener("click", () => $("about-dialog").close());

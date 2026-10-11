@@ -187,6 +187,7 @@ async function fixture(
     phones?: () => boolean;
     now?: () => number;
     available?: boolean;
+    graceMs?: number;
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "hearth-push-"));
@@ -212,7 +213,7 @@ async function fixture(
   const push = new ApprovalPush(runtime, ha.actions, {
     available: options.available ?? true,
     selfSlug: "abc123_hearth_pi",
-    graceMs: 1,
+    graceMs: options.graceMs ?? 1,
     ...(options.now ? { now: options.now } : {}),
     subscriber: { minBackoffMs: 5, maxBackoffMs: 20, pingMs: 60000 },
   });
@@ -907,4 +908,33 @@ test("the tap rate limit is per tapping user: one user's spam does not block the
   f.fake.tap(approve!.action, OWNER_A);
   await f.push.idle();
   assert.equal((await f.refresh()).at(-1)!.status, "accepted");
+});
+
+test("Hearth Assist: expedite sends a voice turn's pending proposal at once, once, and reports only a real delivery", async (t) => {
+  let failing = false;
+  const f = await fixture(t, { graceMs: 60000, notifyFails: () => failing });
+  // Not enrolled: nothing is sent and nothing is claimed.
+  const unsent = await f.propose();
+  assert.equal(await f.push.expedite(OWNER_A, f.session, unsent), false);
+  assert.equal(f.notifies().length, 0);
+  await f.enroll();
+  const before = f.notifies().length;
+  const proposal = await f.propose();
+  assert.equal(await f.push.expedite(OWNER_A, f.session, proposal), true);
+  assert.equal(f.notifies().length - before, 1);
+  assert.equal((await f.refresh()).at(-1)!.notified?.count, 1);
+  // Asking again never sends a second notification.
+  assert.equal(await f.push.expedite(OWNER_A, f.session, proposal), true);
+  assert.equal(f.notifies().length - before, 1);
+  // Home Assistant refusing the send is not a delivery.
+  failing = true;
+  const refused = await f.propose();
+  assert.equal(await f.push.expedite(OWNER_A, f.session, refused), false);
+  assert.equal((await f.refresh()).at(-1)!.notified?.count, 1);
+  // Unavailable phone approvals never send.
+  const off = await fixture(t, { available: false });
+  assert.equal(
+    await off.push.expedite(OWNER_A, off.session, await off.propose()),
+    false,
+  );
 });
