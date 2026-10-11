@@ -215,12 +215,15 @@ export function memorySection() {
 }
 // Home prompt section: the household's shared memory, re-read before each
 // model request. Code (workspace) sessions never receive it.
-export function sharedMemorySection() {
+export function sharedMemorySection(
+  include: (owner: string) => boolean = () => true,
+) {
   return section("household_shared_memory", async (input, context) => {
     const session = (await input.read.snapshot(Catalog, context))?.items.find(
       (s) => s.id === input.conversationId,
     );
-    if (!session || session.kind === "workspace") return undefined;
+    if (!session || session.kind === "workspace" || !include(session.owner))
+      return undefined;
     const shared = await input.read.snapshot(SharedMemory, context);
     return sharedMemoryPrompt(shared?.items ?? []);
   });

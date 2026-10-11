@@ -50,6 +50,13 @@ import {
   type ImageAttachment,
 } from "./images.js";
 
+export type ExtensionGroups = {
+  home: Extension[];
+  workspace: Extension[];
+  // Household roles' Home groups (src/roles.ts); absent: the home group.
+  homeMember?: Extension[];
+  homeGuest?: Extension[];
+};
 export class Runtime {
   readonly admission = new Serial();
   closing = false;
@@ -60,15 +67,29 @@ export class Runtime {
     readonly models: Models,
     readonly defaultThinkingLevel: ModelThinkingLevel,
     readonly redact: (value: string) => string,
-    readonly groups: { home: Extension[]; workspace: Extension[] },
+    readonly groups: ExtensionGroups,
   ) {}
+  // A Home session's tools follow its owner's household role (src/roles.ts);
+  // a role without its own group falls back to the owner group, whose tools
+  // still re-check the role when they run.
+  extensionsFor(owner: string, kind: "home" | "workspace" = "home") {
+    if (kind === "workspace") return this.groups.workspace;
+    const role = this.homeActions?.role(owner) ?? "owner";
+    return (
+      (role === "member"
+        ? this.groups.homeMember
+        : role === "guest"
+          ? this.groups.homeGuest
+          : undefined) ?? this.groups.home
+    );
+  }
   static async open(
     dataDir: string,
     models: Models,
     model: { provider: string; modelId: string },
     extensions: Extension[] = [],
     secrets: readonly string[] = [],
-    groups: { home: Extension[]; workspace: Extension[] } = {
+    groups: ExtensionGroups = {
       home: extensions,
       workspace: [],
     },
@@ -140,7 +161,10 @@ export class Runtime {
         for (const session of catalog.items) {
           // Adding the coding registry must never silently widen an older Home session.
           await configure(tx, session.id as ConversationId, {
-            extensions: groups[session.kind ?? "home"],
+            extensions: runtime.extensionsFor(
+              session.owner,
+              session.kind ?? "home",
+            ),
           });
           if (
             session.kind === "workspace" &&
@@ -313,7 +337,7 @@ export class Runtime {
         await configure(tx, conversation.id, {
           model,
           thinkingLevel,
-          extensions: this.groups[kind],
+          extensions: this.extensionsFor(owner, kind),
         });
         catalog.items.push({
           id: conversation.id,

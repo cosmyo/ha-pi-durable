@@ -526,8 +526,12 @@ export class ApprovalPush implements ApprovalHooks {
   async get(owner: string) {
     const now = this.now();
     const state = (await this.doc())[owner];
-    if (!this.available)
-      return { ...this.view(owner, undefined, now), candidates: [] };
+    if (!this.available || this.engine.role(owner) === "guest")
+      return {
+        ...this.view(owner, undefined, now),
+        available: false,
+        candidates: [],
+      };
     let candidates: { id: string; label: string }[] = [];
     let candidatesUnavailable = false;
     try {
@@ -551,6 +555,8 @@ export class ApprovalPush implements ApprovalHooks {
   private allowed(owner: string) {
     insist(this.available, "approval_notifications_unavailable", 403);
     insist(this.engine.isAuthorized(owner), "user_not_authorized", 403);
+    // Owners and members; guests have no Home changes to approve.
+    insist(this.engine.role(owner) !== "guest", "role_guest_read_only", 403);
   }
   private revision(value: unknown) {
     insist(Number.isSafeInteger(value) && Number(value) >= 0);

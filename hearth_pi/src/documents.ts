@@ -205,6 +205,8 @@ export type HomePermission = {
     at: number;
   };
   invalidation: string;
+  // Household role the permission was last evaluated for; absent = owner.
+  role?: "member" | "guest";
 };
 // Owner settings live in the same single-writer durable store as the action ledger.
 export const HomePermissions = defineDoc<{

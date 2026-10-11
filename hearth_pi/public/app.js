@@ -249,9 +249,21 @@ async function bootstrap() {
   installModelLabel = `${status.model} \u00b7 ${THINKING_LABEL[defaultThinkingLevel] ?? defaultThinkingLevel}`;
   workspaceEnabled = !!status.workspaceEnabled;
   $("new-workspace").hidden = !status.workspaceEnabled;
+  paintRole(status.role);
   if (!activeAuthProvider) activeAuthProvider = defaultAuthProvider();
   await refreshAccountSummary();
   controls();
+}
+// Household role (App configuration; the server enforces it): a line in
+// Settings \u2192 You. Cosmetic only.
+const ROLE_LINE = {
+  member: "Your role: Member \u2014 owners approve high-risk changes",
+  guest: "Your role: Guest \u00b7 Read-only",
+};
+function paintRole(role) {
+  const line = ROLE_LINE[role] ?? "";
+  $("you-role").textContent = line;
+  $("you-role").hidden = !line;
 }
 function updatePermissions(value) {
   if (!value) return;
@@ -259,11 +271,13 @@ function updatePermissions(value) {
   $("home-mode").value = value.effectiveMode;
   const modeLabel = value.blocked
     ? "Paused"
-    : value.effectiveMode === "full"
-      ? "Full access"
-      : value.effectiveMode === "ask"
-        ? "Ask"
-        : "Read-only";
+    : value.role === "guest"
+      ? "Guest \u00b7 Read-only"
+      : value.effectiveMode === "full"
+        ? "Full access"
+        : value.effectiveMode === "ask"
+          ? "Ask"
+          : "Read-only";
   $("permissions-mode").textContent = modeLabel;
   $("permissions-mode-row").textContent = modeLabel;
   permissionModeLabel = modeLabel;
@@ -288,7 +302,16 @@ function updatePermissions(value) {
   $("permission-summary").textContent =
     `${homeSafety}. Services: ${value.services.join(", ") || "none"}. ${value.invalidation || ""}${value.blocked ? ` Writes paused installation-wide for an unresolved outcome. Your receipts: ${value.unresolved.map((b) => `session ${b.sessionId}, action ${b.id} (${b.status})`).join("; ") || "another owner's receipt"}. Human reconciliation only; no retry.` : ""}`;
   for (const option of $("home-mode").options)
-    option.disabled = !value.enabled && option.value !== "read-only";
+    option.disabled =
+      (!value.enabled && option.value !== "read-only") ||
+      (value.role === "guest" && option.value !== "read-only") ||
+      (value.role === "member" && option.value === "full");
+  if (value.role === "member")
+    $("permission-scope-note").textContent +=
+      " Full access is for owners: as a member you choose Ask or Read-only, and high or critical changes need an owner.";
+  if (value.role === "guest")
+    $("permission-scope-note").textContent =
+      "Guest role: Home is read-only. You can ask about the home, but not change it.";
 }
 async function setHomeMode(mode) {
   if (!permissions) return;

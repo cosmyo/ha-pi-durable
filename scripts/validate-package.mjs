@@ -12,7 +12,9 @@ assert.deepEqual(config.arch, ["aarch64", "amd64"]);
 assert.equal(config.ingress, true);
 assert.equal(config.ingress_port, 8099);
 assert.equal(config.homeassistant_api, true);
-assert.equal(config.panel_admin, true);
+// Household roles: members and guests are usually not HA admins, so the
+// panel is shown to every HA user; the server still authorizes each request.
+assert.equal(config.panel_admin, false);
 assert.equal(config.panel_title, "Hearth Pi");
 assert.equal(config.panel_icon, "mdi:fire");
 const repository = parse(await read("repository.yaml"));
@@ -59,6 +61,9 @@ assert.equal(config.options.risk_judge_model, "auto");
 // Phone approvals are owner opt-in and off by default.
 assert.equal(config.options.approval_notifications, false);
 assert.equal(config.schema.approval_notifications, "bool");
+// Household roles: empty by default (everyone authorized is an owner).
+assert.deepEqual(config.options.member_user_ids, []);
+assert.deepEqual(config.options.guest_user_ids, []);
 assert.equal(config.schema.risk_judge_api_key, "password");
 assert.deepEqual(
   Object.keys(config.options).sort(),

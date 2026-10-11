@@ -59,6 +59,11 @@ export type Config = {
   // workspace_owner_ids option, else the one authorized owner. loadConfig
   // always sets it when the workspace is enabled; see workspaceOwners().
   workspaceOwners?: string[];
+  // Household roles (member_user_ids / guest_user_ids): authorized users
+  // listed here are members or guests; every other authorized user is an
+  // owner. Absent means everyone is an owner. Never set by the UI.
+  memberUsers?: string[];
+  guestUsers?: string[];
   // Phone approvals (src/approval-push.ts): the approval_notifications
   // option, ingress mode only. Absent means off.
   approvalNotifications?: boolean;
@@ -103,6 +108,11 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "invalid_workspace_owner_ids",
   "workspace_owner_not_authorized",
   "approval_notifications_requires_ingress",
+  "invalid_role_user_ids",
+  "role_user_not_authorized",
+  "role_conflict",
+  "household_owner_required",
+  "workspace_owner_not_owner_role",
   "provider_key_required",
 ]);
 // The startup log line for a loadConfig failure: the known Fault code only.
@@ -110,6 +120,18 @@ export function configurationDiagnostic(error: unknown): string | undefined {
   return error instanceof Fault && CONFIG_FAULT_CODES.has(error.code)
     ? `invalid configuration: ${error.code}`
     : undefined;
+}
+export type HouseholdRole = "owner" | "member" | "guest";
+// Each configured member's and guest's household role; everyone else
+// (and local-admin) is an owner.
+export function householdRoles(
+  config: Pick<Config, "memberUsers" | "guestUsers">,
+): Record<string, Exclude<HouseholdRole, "owner">> {
+  const roles: Record<string, Exclude<HouseholdRole, "owner">> = {};
+  for (const id of config.memberUsers ?? []) roles[id] = "member";
+  for (const id of config.guestUsers ?? []) roles[id] = "guest";
+  delete roles["local-admin"];
+  return roles;
 }
 // Owners allowed Code (workspace) sessions; empty when the workspace is off.
 // A hand-built Config without workspaceOwners keeps the original rule: the
@@ -147,6 +169,8 @@ export async function loadConfig(
           "risk_judge_session_ttl_ms",
           "briefing_summary_model",
           "approval_notifications",
+          "member_user_ids",
+          "guest_user_ids",
         ])
       : {};
   const port =
@@ -304,6 +328,45 @@ export async function loadConfig(
     !approvalNotifications || mode === "ingress",
     "approval_notifications_requires_ingress",
   );
+  // Household roles: optional lists of authorized users who are members or
+  // guests; everyone else stays an owner.
+  const roleIds = (value: unknown) => {
+    insist(
+      Array.isArray(value) &&
+        value.length <= 100 &&
+        value.every(
+          (id) => typeof id === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(id),
+        ),
+      "invalid_role_user_ids",
+    );
+    return [...new Set(value as string[])];
+  };
+  const memberUsers = roleIds(options.member_user_ids ?? []);
+  const guestUsers = roleIds(options.guest_user_ids ?? []);
+  insist(
+    [...memberUsers, ...guestUsers].every((id) => authorizedUsers.includes(id)),
+    "role_user_not_authorized",
+  );
+  insist(!memberUsers.some((id) => guestUsers.includes(id)), "role_conflict");
+  insist(
+    !authorizedUsers.length ||
+      authorizedUsers.some(
+        (id) => !memberUsers.includes(id) && !guestUsers.includes(id),
+      ),
+    "household_owner_required",
+  );
+  // Code sessions belong to owners only.
+  const effectiveWorkspaceOwners = workspaceEnabled
+    ? configuredWorkspaceOwners.length
+      ? configuredWorkspaceOwners
+      : authorizedUsers
+    : [];
+  insist(
+    !effectiveWorkspaceOwners.some(
+      (id) => memberUsers.includes(id) || guestUsers.includes(id),
+    ),
+    "workspace_owner_not_owner_role",
+  );
   const apiKey = text(
     options.openai_api_key ?? process.env.OPENAI_API_KEY ?? "",
     500,
@@ -346,12 +409,10 @@ export async function loadConfig(
     thinkingLevel,
     anthropicAuthEnabled: anthropicEnabled,
     workspaceEnabled,
-    workspaceOwners: workspaceEnabled
-      ? configuredWorkspaceOwners.length
-        ? configuredWorkspaceOwners
-        : authorizedUsers
-      : [],
+    workspaceOwners: effectiveWorkspaceOwners,
     approvalNotifications,
+    memberUsers,
+    guestUsers,
     selfSlug: selfSlug(process.env.HOSTNAME, mode === "ingress"),
     policy:
       access === "admin"

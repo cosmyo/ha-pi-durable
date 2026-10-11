@@ -20,7 +20,8 @@ import type { HAClient } from "./ha.js";
 import { DispatchFailed } from "./ha.js";
 import type { Runtime } from "./runtime.js";
 import { Serial, digest, insist, text } from "./safety.js";
-import { classifyAction, confirmationWord, maxRisk } from "./risk.js";
+import { classifyAction, confirmationWord, maxRisk, riskRank } from "./risk.js";
+import type { HouseholdRole } from "./config.js";
 import { offJudge, type RiskJudge } from "./judge.js";
 import type {
   Action,
@@ -130,6 +131,7 @@ export class HomeActions {
   private controllers = new Map<AbortController, string>();
   private inFlight = new Set<Promise<unknown>>();
   private authorizedOwners = new Set<string>();
+  private roles: Readonly<Record<string, Exclude<HouseholdRole, "owner">>> = {};
   judge: RiskJudge = offJudge;
   private hooks?: ApprovalHooks;
   constructor(readonly ha: HAClient) {}
@@ -175,9 +177,30 @@ export class HomeActions {
   }
   // Supply the server-boundary's current configured owners before opening the
   // durable harness. An unconfigured engine grants no Home write authority.
-  authorizeOwners(owners: readonly string[]) {
+  // Household roles come from the same configuration: members and guests;
+  // everyone else authorized is an owner.
+  authorizeOwners(
+    owners: readonly string[],
+    roles: Readonly<Record<string, Exclude<HouseholdRole, "owner">>> = {},
+  ) {
     insist(!this.runtime, "owners_already_attached", 503);
     this.authorizedOwners = new Set(owners);
+    this.roles = { ...roles };
+  }
+  role(owner: string): HouseholdRole {
+    return Object.hasOwn(this.roles, owner) ? this.roles[owner]! : "owner";
+  }
+  // Guests never write; members never get high or critical (checked after
+  // judge escalation, at admission and again at dispatch).
+  private assertRoleAllows(owner: string, level?: RiskAssessment["level"]) {
+    const role = this.role(owner);
+    insist(role !== "guest", "role_guest_read_only", 403);
+    if (role === "member")
+      insist(
+        !!level && riskRank(level) < riskRank("high"),
+        "role_requires_owner",
+        403,
+      );
   }
   attach(runtime: Runtime) {
     insist(
@@ -200,19 +223,50 @@ export class HomeActions {
   async permission(tx: Tx, owner: string): Promise<HomePermission> {
     const doc = await tx.doc(HomePermissions);
     const policy = policyFingerprint(this.ha);
+    const role = this.role(owner);
     if (!doc.owners[owner]) {
       insist(Object.keys(doc.owners).length < 100, "owner_limit", 429);
       doc.owners[owner] = {
         explicit: false,
-        mode: this.ha.policy.enabled ? "ask" : "read-only",
+        mode: this.ha.policy.enabled && role !== "guest" ? "ask" : "read-only",
         revision: 0,
         policy,
         schema: ACTION_SCHEMA,
         grant: null,
         invalidation: "",
+        ...(role === "owner" ? {} : { role }),
       };
     }
     const item = doc.owners[owner]!;
+    // A household role change bumps the revision (pending proposals go
+    // stale) and never keeps a Full grant.
+    if ((item.role ?? "owner") !== role) {
+      item.revision++;
+      item.grant = null;
+      if (role === "owner") delete item.role;
+      else item.role = role;
+      if (item.mode === "full" || !item.explicit)
+        item.mode = this.ha.policy.enabled ? "ask" : "read-only";
+      item.invalidation =
+        role === "owner"
+          ? "Household role changed to owner; review Home permissions."
+          : role === "member"
+            ? "Member role: Full access is not available; owners approve high-risk changes."
+            : "Guest role: Home is read-only.";
+    }
+    if (role === "guest" && (item.mode !== "read-only" || item.grant)) {
+      item.revision++;
+      item.mode = "read-only";
+      item.grant = null;
+      item.invalidation = "Guest role: Home is read-only.";
+    }
+    if (role === "member" && (item.mode === "full" || item.grant)) {
+      item.revision++;
+      item.mode = this.ha.policy.enabled ? "ask" : "read-only";
+      item.grant = null;
+      item.invalidation =
+        "Member role: Full access is not available; owners approve high-risk changes.";
+    }
     if (!this.authorizedOwners.has(owner)) {
       if (item.mode !== "read-only" || item.grant || !item.explicit) {
         item.revision++;
@@ -312,6 +366,7 @@ export class HomeActions {
           access: this.ha.admin ? "admin" : "scoped",
           judge: this.judge.describe(),
           enabled: this.ha.policy.enabled,
+          role: this.role(owner),
           entityScopeCount: new Set(this.ha.policy.entities).size,
           services: [...new Set(this.ha.policy.services)].sort(),
           blocked: barriers.length > 0,
@@ -331,6 +386,13 @@ export class HomeActions {
   ) {
     insist(this.authorizedOwners.has(owner), "user_not_authorized", 403);
     insist(mode === "read-only" || mode === "ask" || mode === "full");
+    const role = this.role(owner);
+    insist(
+      role !== "guest" || mode === "read-only",
+      "role_guest_read_only",
+      403,
+    );
+    insist(role !== "member" || mode !== "full", "role_forbids_full", 403);
     insist(Number.isSafeInteger(revision) && Number(revision) >= 0);
     insist(
       typeof fingerprint === "string" && /^[a-f0-9]{64}$/.test(fingerprint),
@@ -458,6 +520,11 @@ export class HomeActions {
     const { owner, latest } = await this.gate.run(() =>
       api.commit(async (tx) => {
         const session = await this.home(tx, api.conversationId);
+        insist(
+          this.role(session.owner) !== "guest",
+          "role_guest_read_only",
+          403,
+        );
         const p = await this.permission(tx, session.owner);
         insist(this.binding(p).mode !== "read-only", "home_read_only", 403);
         return {
@@ -499,10 +566,12 @@ export class HomeActions {
         signal,
       );
       const risk = this.assess(action, base, judge);
+      this.assertRoleAllows(owner, risk.level);
       const proposal = await this.gate.run(() =>
         api.commit(async (tx) => {
           insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
           const session = await this.home(tx, api.conversationId, owner);
+          this.assertRoleAllows(owner, risk.level);
           const p = await this.permission(tx, session.owner);
           const binding = this.binding(p);
           insist(binding.mode !== "read-only", "home_read_only", 403);
@@ -598,6 +667,7 @@ export class HomeActions {
   ): Promise<Proposal> {
     const runtime = this.host();
     const conversationId = sessionId as ConversationId;
+    insist(this.role(owner) !== "guest", "role_guest_read_only", 403);
     await this.gate.run(() =>
       runtime.harness.commit(async (tx) => {
         await this.home(tx, conversationId, owner);
@@ -617,10 +687,12 @@ export class HomeActions {
         action,
         await this.ha.riskContext(action, signal),
       );
+      this.assertRoleAllows(owner, risk.level);
       const proposal = await this.gate.run(() =>
         runtime.harness.commit(async (tx) => {
           insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
           await this.home(tx, conversationId, owner);
+          this.assertRoleAllows(owner, risk.level);
           const p = await this.permission(tx, owner);
           const binding = this.binding(p);
           insist(binding.mode !== "read-only", "home_read_only", 403);
@@ -693,6 +765,7 @@ export class HomeActions {
     id: string,
     hash: string,
   ): Promise<Proposal> {
+    insist(this.role(owner) !== "guest", "role_guest_read_only", 403);
     const runtime = this.host();
     const conversation = await runtime.session(owner, sessionId);
     const items =
@@ -907,6 +980,7 @@ export class HomeActions {
     automatic: boolean,
   ) {
     await this.home(tx, sessionId, owner);
+    this.assertRoleAllows(owner, proposal.risk?.level);
     const p = await this.permission(tx, owner);
     const binding = this.binding(p);
     insist(binding.mode !== "read-only", "home_read_only", 403);

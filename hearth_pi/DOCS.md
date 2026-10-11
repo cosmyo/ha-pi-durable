@@ -42,11 +42,13 @@ risk_judge_timeout_ms: 15000
 risk_judge_session_ttl_ms: 300000
 briefing_summary_model: auto
 approval_notifications: false
+member_user_ids: []
+guest_user_ids: []
 ```
 
 Select `provider: offline` instead to test startup without AI credentials; its replies are synthetic, not model inference. Do **not** create or paste an HA long-lived access token: the App gets its server-side HA API credential from Supervisor. Never put provider credentials or login redirect URLs in chat or issue reports.
 
-4. Save, open the **Info** tab and select **Start**. Enable **Start on boot** and **Show in sidebar** if desired, then select **Open Web UI**. Refresh the HA browser if the sidebar entry has not appeared. The sidebar is admin-only; it does not replace the App's explicit user authorization.
+4. Save, open the **Info** tab and select **Start**. Enable **Start on boot** and **Show in sidebar** if desired, then select **Open Web UI**. Refresh the HA browser if the sidebar entry has not appeared. The sidebar entry is visible to every Home Assistant user; only users in `authorized_user_ids` can use Hearth (everyone else gets an authorization error).
 5. For subscription mode, open **Settings → Account** from the sidebar drawer (or the ☰ menu on phones) and complete sign-in below. Create a **Home** session and ask about an entity you allowed. **Code** sessions intentionally have no HA tools. Changing App options requires restarting **only Hearth Pi**, not HA Core.
 
 ## Optional Code mode
@@ -84,7 +86,7 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 
 ## Required options and trust
 
-- `authorized_user_ids`: explicit trusted HA operator IDs. `[]` denies everyone. Server identity requires the documented Ingress socket peer and one `X-Remote-User-Id`; sidebar admin visibility is not authentication or proof of current role. Authorized operators may use/setup/remove the installation's shared provider credential. Do not add untrusted/guest users.
+- `authorized_user_ids`: explicit HA user IDs allowed to use Hearth. `[]` denies everyone. Server identity requires the documented Ingress socket peer and one `X-Remote-User-Id`; sidebar visibility is not authentication. Everyone listed is an **owner** unless also listed in `member_user_ids` or `guest_user_ids` (see [What is shared in a household](#what-is-shared-in-a-household)). Owners may use/setup/remove the installation's shared provider credential. A guest still sees whatever the installation's read scope exposes (entity states, lists), so guest suits semi-trusted people in the household, not strangers; never add untrusted users.
 - `public_origin`: exact external HTTPS origin, no path/trailing slash, e.g. `https://home.example`. Needed for Origin/CSRF and iframe policy. Alternative origins are not implicitly accepted.
 - `allowed_entities`: up to 10,000 exact entity IDs for Home reads and optional supported actions; no wildcards/all-future scope. Search pages contain twenty items. Empty denies all. Scope filters output, not the broad underlying HA token or states response processed in memory.
 - `anthropic_auth_enabled`: **false by default**. Typed HA option fallback for the `HEARTH_ANTHROPIC_AUTH_ENABLED` environment flag; an explicitly set env value takes precedence and only exact `true` enables it. This gates Anthropic login/inference/compatibility only, not ChatGPT. Enabling it does not change provider/model, scope, Home permissions or the Code worker.
@@ -96,6 +98,7 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 - `briefing_summary_model`: `auto` by default (same resolution as `risk_judge_model`'s `auto`: `gpt-5.6-luna`, then `claude-haiku-4-5`, else off). `off` disables the optional per-briefing model-written summary entirely; `<provider>/<modelId>` names a different signed-in Pi runtime model. See [Today, briefings and watchers](#today-briefings-and-watchers-unreleased-source-slice). The summary is also off unless an owner turns on **Add a short summary** for that specific briefing.
 - `workspace_enabled`: false by default. True requires workspace owners (below) and a **separate confined worker** installed by the trusted host operator; it does not create a container or expose Docker. [Workspace guide](../docs/workspace.md).
 - `workspace_owner_ids`: empty by default, meaning "the one authorized owner" (then `authorized_user_ids` must have exactly one entry). Otherwise up to 5 HA user IDs, each also in `authorized_user_ids`, who alone may create and use Code sessions; see [Optional Code mode](#optional-code-mode).
+- `member_user_ids`, `guest_user_ids`: empty by default (everyone authorized is an owner, exactly as before). Each ID must also be in `authorized_user_ids` (`role_user_not_authorized`), may be in only one list (`role_conflict`), at least one owner must remain (`household_owner_required`) and Code workspace owners must be owners (`workspace_owner_not_owner_role`). Roles are set only here, never in the UI.
 - `approval_notifications`: false by default. True lets each owner confirm their own phones for [Phone approvals](#phone-approvals-unreleased-source-slice). Ingress mode only (local development refuses to start with `approval_notifications_requires_ingress`).
 
 ## Session model and thinking
@@ -335,6 +338,16 @@ Each authorized Home Assistant user (`authorized_user_ids`) is an owner with the
 | Household memory                                                         | Home permissions                                    |
 | The unknown-outcome write pause (others see only that writes are paused) | Today cards, watchers, briefings and suggestions    |
 |                                                                          | Apps, Home World layout, profile and private memory |
+
+Household roles (`member_user_ids`, `guest_user_ids`; App configuration only) decide what each authorized user may do. The server enforces them on every route, tool and action; the UI only hides what a role cannot use.
+
+| Role            | Home changes                                                                                                 | Also                                                                                                                                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner (default) | Read-only, Ask or Full access; approves any risk level                                                       | Sets up and removes the shared provider sign-in and local endpoint; admin and automation reads; Code sessions when listed as a workspace owner                                                           |
+| Member          | Read-only or Ask only; may request and approve low and medium changes; high and critical are refused for now | Chats, lists, private and household memory, apps, watchers, suggestions and Phone approvals; no provider setup, admin/automation reads or Code                                                           |
+| Guest           | Read-only, always                                                                                            | Chats and reads what the installation's read scope exposes; no proposals, memory writes, app edits, watchers, suggestions or Phone approvals, and household memory is never shown to them or their chats |
+
+A role change takes effect at the next start: it bumps the user's Home permissions revision (pending proposals go stale), turns a member's Full access into Ask and a guest's permissions into Read-only. Settings → You shows "Your role: Member — owners approve high-risk changes" or "Guest · Read-only". Members' high-risk requests are refused with `role_requires_owner`; routing them to an owner for approval is not implemented yet.
 
 ## Your profile (unreleased source slice)
 

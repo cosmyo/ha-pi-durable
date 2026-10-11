@@ -1,5 +1,6 @@
 import {
   configurationDiagnostic,
+  householdRoles,
   loadConfig,
   workspaceOwners,
 } from "./config.js";
@@ -65,6 +66,7 @@ try {
   const ha = new HAClient(config.haToken, config.policy, fetch, secrets);
   ha.actions.authorizeOwners(
     config.mode === "local" ? ["local-admin"] : config.authorizedUsers,
+    config.mode === "local" ? {} : householdRoles(config),
   );
   // Admin access mode: the read scope is every entity Home Assistant reports.
   if (ha.admin) {
@@ -97,6 +99,9 @@ try {
     ),
   );
   const home = [haExtension(ha)];
+  // Household roles' Home groups: fewer tools, same run-time role checks.
+  const homeMember = [haExtension(ha, { role: "member" })];
+  const homeGuest = [haExtension(ha, { role: "guest" })];
   const workspace = [];
   if (config.workspaceEnabled) {
     const key = (await readFile("/workspace_link/bridge/key", "utf8")).trim();
@@ -113,9 +118,9 @@ try {
     config.dataDir,
     models,
     model,
-    [...home, ...workspace],
+    [...home, ...homeMember, ...homeGuest, ...workspace],
     secrets,
-    { home, workspace },
+    { home, workspace, homeMember, homeGuest },
     ha.actions,
     config.thinkingLevel,
   );

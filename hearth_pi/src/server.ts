@@ -28,6 +28,7 @@ import { ProfileStore } from "./profile.js";
 import { SuggestionStore } from "./suggestions.js";
 import { WorldStore } from "./world.js";
 import { ApprovalPush } from "./approval-push.js";
+import { roleCapabilities } from "./roles.js";
 
 // Cached once per process: the package version shown read-only in the
 // Settings \u2192 About sheet. Never written to, never user-controlled.
@@ -177,6 +178,12 @@ export function appServer(
     return { ...today, unread: today.unread + unseen, suggestions: open };
   };
   const world = new WorldStore(runtime, actions.engine.ha);
+  // Household roles (App configuration): routes re-check them on the server.
+  const roleOf = (owner: string) => actions.engine.role(owner);
+  const ownerOnly = (owner: string) =>
+    insist(roleOf(owner) === "owner", "role_requires_owner", 403);
+  const notGuest = (owner: string) =>
+    insist(roleOf(owner) !== "guest", "role_guest_read_only", 403);
   // Phone approvals: available only with approval_notifications in ingress
   // mode (local mode has no HA user to bind a tap to).
   const approvalPush =
@@ -267,6 +274,8 @@ export function appServer(
           experimental: true,
           // Per owner: other owners get no Code affordances at all.
           workspaceEnabled: workspaceAllowed(owner),
+          role: roleOf(owner),
+          capabilities: roleCapabilities(roleOf(owner)),
           authProviders: authProviders().map((s) => s.provider),
           inferenceReady: ready(),
         });
@@ -291,6 +300,12 @@ export function appServer(
           ),
         );
       }
+      // The shared provider credential is the owners' to set up or remove.
+      if (
+        req.method === "POST" &&
+        (path.startsWith("/api/auth/") || path.startsWith("/api/local/"))
+      )
+        ownerOnly(owner);
       if (path.startsWith("/api/auth/")) {
         if (req.method === "GET" && path === "/api/auth/status")
           return json(res, 200, subscriptionFor(undefined).status(owner));
@@ -401,6 +416,11 @@ export function appServer(
       const todayRoute = /^\/api\/today\/(seen|dismiss|snooze|asked)$/.exec(
         path,
       );
+      if (
+        req.method === "POST" &&
+        /^\/api\/(suggestions|memory|proactive|apps)\//.test(path)
+      )
+        notGuest(owner);
       if (todayRoute && req.method === "POST") {
         const v = await body(req);
         const operation = todayRoute[1];
@@ -459,8 +479,15 @@ export function appServer(
               : await approvalPush.removeTarget(owner, v),
         );
       }
-      if (req.method === "GET" && path === "/api/memory")
-        return json(res, 200, await memory.list(owner));
+      if (req.method === "GET" && path === "/api/memory") {
+        const list = await memory.list(owner);
+        // Guests never receive household memory.
+        if (roleOf(owner) === "guest") {
+          const { household: _household, ...own } = list;
+          return json(res, 200, own);
+        }
+        return json(res, 200, list);
+      }
       const memoryRoute = /^\/api\/memory\/(add|edit|forget|share)$/.exec(path);
       if (memoryRoute && req.method === "POST") {
         const v = await body(req);
@@ -823,6 +850,7 @@ export function appServer(
               content.trim(),
             );
             insist(command, "invalid_login_command");
+            ownerOnly(owner);
             return json(res, 202, {
               auth: await subscriptionFor(command[1]).start(owner),
             });

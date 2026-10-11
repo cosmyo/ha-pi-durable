@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Phone approvals (opt-in): with `approval_notifications: true`, each owner can confirm their own phones in Settings → You. Pending Home actions then send a short notification (risk level and one line); low/medium can be approved or rejected there, high/critical only rejected or opened in Hearth. Bound to your HA user, single-use, expires with the proposal, never retried. New App option: needs a version bump on release.
+- Household roles: optional `member_user_ids` / `guest_user_ids`. Members chat, use lists and memory and may request low/medium changes (Ask only); high/critical need an owner. Guests are read-only. Owners stay unchanged by default. The manifest now sets `panel_admin: false` so non-admin HA users can open Hearth (authorization is unchanged). New App options: needs a version bump on release.
 - Undo (source slice): for 10 minutes after a low/medium change Hearth read before sending (lights, switches, fans, covers, climate setpoints, volume, helpers, list items), the receipt offers Undo. It creates a new exact proposal through the same permissions and risk checks; never for unknown outcomes, high/critical or irreversible actions.
 
 ## 0.3.4 — Code workspace owners for multi-owner households
