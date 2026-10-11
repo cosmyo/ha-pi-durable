@@ -195,7 +195,8 @@ export class ApprovalPush implements ApprovalHooks {
   private sent = new Map<string, Sent>();
   private sendLog = new Map<string, number[]>();
   private proofLog = new Map<string, number[]>();
-  private eventLog: number[] = [];
+  // Per tapping HA user, so one user's spam cannot block another's taps.
+  private eventLogs = new Map<string, number[]>();
   private inflight = new Set<Promise<unknown>>();
   private writes = new Serial();
   private subscriber: Subscriber | null = null;
@@ -442,10 +443,15 @@ export class ApprovalPush implements ApprovalHooks {
     if (typeof event.action !== "string") return;
     const match = ACTION_PATTERN.exec(event.action);
     if (!match) return;
+    if (typeof event.userId !== "string" || !event.userId) return;
     const now = this.now();
-    recent(this.eventLog, now, 60000);
-    if (this.eventLog.length >= APPROVAL_PUSH_LIMITS.eventsPerMinute) return;
-    this.eventLog.push(now);
+    if (!this.eventLogs.has(event.userId) && this.eventLogs.size >= 64)
+      this.eventLogs.clear();
+    const log = this.eventLogs.get(event.userId) ?? [];
+    recent(log, now, 60000);
+    if (log.length >= APPROVAL_PUSH_LIMITS.eventsPerMinute) return;
+    log.push(now);
+    this.eventLogs.set(event.userId, log);
     const token = this.tokens.get(tokenKey(event.action));
     if (!token || token.used || token.expires <= now) return;
     if (VERB_LETTER[token.verb] !== match[1]) return;

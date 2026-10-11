@@ -891,3 +891,20 @@ test("approval_notifications: off by default, ingress only", async (t) => {
     /approval_notifications_requires_ingress/,
   );
 });
+
+test("the tap rate limit is per tapping user: one user's spam does not block the owner", async (t) => {
+  const f = await fixture(t);
+  await f.enroll();
+  const before = f.notifies().length;
+  await f.propose();
+  await f.sent();
+  const [approve] = f.buttons(f.notifies().slice(before)[0]!);
+  // Another household user floods well-formed but foreign taps...
+  for (let i = 0; i < 40; i++)
+    f.fake.tap(`HEARTH_A_${"B".repeat(26)}`, OWNER_B);
+  await f.push.idle();
+  // ...and the owner's own tap still decides.
+  f.fake.tap(approve!.action, OWNER_A);
+  await f.push.idle();
+  assert.equal((await f.refresh()).at(-1)!.status, "accepted");
+});
