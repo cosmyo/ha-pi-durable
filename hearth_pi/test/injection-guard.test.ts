@@ -15,7 +15,13 @@ import {
   guardTexts,
 } from "../src/injection-guard.js";
 import { Inputs } from "../src/documents.js";
-import { configurationDiagnostic, loadConfig } from "../src/config.js";
+import {
+  configurationDiagnostic,
+  loadConfig,
+  type Config,
+} from "../src/config.js";
+import { appServer } from "../src/server.js";
+import type { AddressInfo } from "node:net";
 
 const KEY = "synthetic-guard-key-0001";
 const URL_BASE = "http://10.0.0.5:8090";
@@ -457,6 +463,61 @@ test("injection_guard options: off by default; URL, key and timeout validated wi
     apiKey: KEY,
     timeoutMs: 2500,
   });
+});
+
+test("HTTP: /api/injection-guard needs authentication and returns state and counters, never the URL or the key", async (t: TestContext) => {
+  const f = await adminHarness();
+  t.after(() => f.close());
+  const g = fakeGuard("down");
+  f.ha.actions.useInjectionGuard(g.guard);
+  await g.guard.scan("tool", ["anything"]);
+  const config: Config = {
+    mode: "local",
+    host: "127.0.0.1",
+    port: 8099,
+    origin: "http://127.0.0.1:8099",
+    password: "synthetic-local-password-0001",
+    authorizedUsers: ["local-admin"],
+    dataDir: f.dir,
+    provider: "offline",
+    model: "test",
+    policy: { enabled: true, entities: [], services: [] },
+    haToken: "",
+    apiKey: "",
+  };
+  const app = appServer(
+    config,
+    f.runtime,
+    {
+      engine: f.ha.actions,
+      decide: () => Promise.resolve(),
+      close: () => Promise.resolve(),
+    } as never,
+    { secrets: [KEY] },
+  );
+  await new Promise<void>((resolve) =>
+    app.server.listen(0, "127.0.0.1", resolve),
+  );
+  t.after(
+    () => new Promise<void>((resolve) => app.server.close(() => resolve())),
+  );
+  t.after(() => app.server.closeAllConnections());
+  const base = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
+  config.origin = base;
+  assert.equal((await fetch(`${base}/api/injection-guard`)).status, 401);
+  const response = await fetch(`${base}/api/injection-guard`, {
+    headers: {
+      authorization: `Basic ${Buffer.from(`hearth:${config.password}`).toString("base64")}`,
+    },
+  });
+  assert.equal(response.status, 200);
+  const text = await response.text();
+  assert.ok(!text.includes(KEY) && !text.includes("10.0.0.5"));
+  const status = JSON.parse(text);
+  assert.deepEqual(
+    [status.enabled, status.state, status.lastError, status.today.unavailable],
+    [true, "unavailable", "unreachable", 1],
+  );
 });
 
 test("UI: a receipt from a flagged turn says why it asked", async () => {
