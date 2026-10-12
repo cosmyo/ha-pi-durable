@@ -207,26 +207,31 @@ test("a clean tool result reaches the model unchanged", async () => {
     assert.equal(b?.status, "accepted");
     assert.equal(b?.authorization?.guard, undefined);
     assert.ok(g.calls.some((c) => c.body.texts.join("").includes("Kitchen")));
+    // The tool results the model saw: name and content blocks.
     const results = async (f: typeof plain) =>
       (
-        (await (await f.runtime.harness.conversation(
+        await (await f.runtime.harness.conversation(
           f.id as ConversationId,
           ctx,
-        ))!.context(ctx)) as unknown as {
-          entries: { type: string; model?: unknown }[];
-        }
+        ))!.context(ctx)
       ).entries
-        .filter((e) => e.type === "pi.tool-result")
-        .map((e) => JSON.stringify(e.model));
+        .flatMap((e) =>
+          ((e as { model?: unknown[] }).model ?? []).filter(
+            (m) => (m as { role?: string }).role === "toolResult",
+          ),
+        )
+        .map((m) => {
+          const r = m as { toolName: string; content: unknown };
+          return JSON.stringify([r.toolName, r.content]);
+        });
     const plainResults = await results(plain);
     const guardedResults = await results(guarded);
     assert.ok(plainResults.length >= 2);
-    // Same text the model saw, block for block (call ids differ only).
-    const text = (r: string[]) =>
-      r.map((s) =>
-        JSON.stringify((JSON.parse(s) as { content?: unknown }).content),
-      );
-    assert.deepEqual(text(guardedResults), text(plainResults));
+    // The read the guard scanned: same text the model saw, block for block
+    // (the receipts differ only in timestamps and grant digests).
+    assert.equal(guardedResults[0], plainResults[0]);
+    assert.match(guardedResults[0]!, /^\["ha_search_states",/);
+    assert.equal(guardedResults.length, plainResults.length);
     assert.ok(!(await guarded.toolResults()).includes(GUARD_WARNING_PREFIX));
     assert.ok((await inputs(guarded)).every((i) => !i.guard));
   } finally {
