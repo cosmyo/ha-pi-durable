@@ -19,7 +19,7 @@ import type { ToolRegistration } from "@earendil-works/pi-durable";
 import type { InjectionGuardConfig } from "./config.js";
 import { Inputs, type GuardMarker } from "./documents.js";
 import { checkEndpointUrl } from "./local.js";
-import { Fault } from "./safety.js";
+import { Fault, insist } from "./safety.js";
 
 export type GuardSource = "tool" | "web" | "document";
 // One request: at most 32 texts and 400 000 characters in total. Longer
@@ -274,8 +274,14 @@ export async function markRunFlagged(
 ) {
   const ids = new Set((await tx.doc(LiveDoc, conversationId)).run?.inputs);
   const inputs = await tx.doc(Inputs, conversationId);
+  let marked = 0;
   for (const input of Object.values(inputs.requests))
-    if (ids.has(input.submissionId as never)) input.guard = { ...marker };
+    if (ids.has(input.submissionId as never)) {
+      input.guard = { ...marker };
+      marked += 1;
+    }
+  // Nothing to mark means the flagged text would reach an unmarked run.
+  insist(marked > 0, "guard_mark_failed", 500);
 }
 
 // Wraps one Home tool: its text output is scanned before the model sees it.
@@ -294,6 +300,9 @@ export function withInjectionGuard<T extends ToolRegistration>(
     execute: async (args, api, context) => {
       const result = await tool.execute(args, api, context);
       const scanner = guard();
+      // Contract: every Home tool returns explicit text content (a test
+      // asserts none streams through api.output), so this early return only
+      // skips results with nothing for the model to read.
       if (!scanner?.enabled || !result.content) return result;
       const texts = result.content.flatMap((block) =>
         block.type === "text" ? [block.text] : [],

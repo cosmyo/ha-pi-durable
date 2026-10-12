@@ -1094,9 +1094,11 @@ export class HomeActions {
     insist(proposal.status === "pending", "proposal_already_decided", 409);
     // A phone notification may approve only low and medium; high and
     // critical need the exact card in Hearth (and critical its typed word).
+    // A proposal from a turn the injection guard flagged needs the card too.
     if (via === "push")
       insist(
-        proposal.risk?.level === "low" || proposal.risk?.level === "medium",
+        (proposal.risk?.level === "low" || proposal.risk?.level === "medium") &&
+          proposal.authorization?.guard !== "flagged",
         "push_approval_not_allowed",
         403,
       );

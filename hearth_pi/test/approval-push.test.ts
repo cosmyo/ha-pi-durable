@@ -549,6 +549,50 @@ test("phone approvals: high/critical never get Approve and decide() refuses a ph
   assert.equal(f.lights().length, 0);
 });
 
+test("phone approvals: a proposal from a guard-flagged turn gets no Approve and decide() refuses a phone approval", async (t) => {
+  const f = await fixture(t);
+  await f.enroll();
+  const proposal = await f.propose();
+  const flagged = {
+    ...proposal,
+    authorization: { ...proposal.authorization!, guard: "flagged" as const },
+  };
+  const payload = approvalNotification(
+    flagged,
+    "hearth_0123456789abcdef",
+    {
+      approve: "HEARTH_A_" + "B".repeat(26),
+      reject: "HEARTH_R_" + "C".repeat(26),
+    },
+    "abc123_hearth_pi",
+  );
+  assert.deepEqual(
+    (payload.data as { actions: { title: string }[] }).actions.map(
+      (a) => a.title,
+    ),
+    ["Reject", "Open Hearth"],
+  );
+  await f.runtime.harness.commit(async (tx) => {
+    (await tx.doc(Proposals, f.session as ConversationId)).items[
+      proposal.id
+    ]!.authorization = flagged.authorization;
+  }, ctx);
+  await assert.rejects(
+    f.ha.actions.decide(
+      OWNER_A,
+      f.session,
+      proposal.id,
+      proposal.hash,
+      "approve",
+      "",
+      "",
+      "push",
+    ),
+    /push_approval_not_allowed/,
+  );
+  assert.equal(f.lights().length, 0);
+});
+
 test("phone approvals: a failed send is never resent; disabled owners and app presses get nothing", async (t) => {
   let fail = true;
   const f = await fixture(t, { notifyFails: () => fail });

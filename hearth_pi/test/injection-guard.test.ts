@@ -22,6 +22,7 @@ import {
 } from "../src/config.js";
 import { appServer } from "../src/server.js";
 import type { AddressInfo } from "node:net";
+import { readdirSync, readFileSync } from "node:fs";
 
 const KEY = "synthetic-guard-key-0001";
 const URL_BASE = "http://10.0.0.5:8090";
@@ -595,4 +596,14 @@ test("UI: a receipt from a flagged turn says why it asked", async () => {
       configurable: true,
     });
   }
+});
+
+test("injection guard: no Home tool streams through api.output (the guard reads explicit content)", () => {
+  const dir = new URL("../src/", import.meta.url);
+  for (const name of readdirSync(dir))
+    if (name.endsWith(".ts"))
+      assert.ok(
+        !readFileSync(new URL(name, dir), "utf8").includes("api.output("),
+        name,
+      );
 });

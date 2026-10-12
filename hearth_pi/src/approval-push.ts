@@ -152,7 +152,10 @@ export function approvalNotification(
 ): DeviceNotification {
   const level = proposal.risk?.level ?? "high";
   const actions: NotificationButton[] = [];
-  if (ids.approve && (level === "low" || level === "medium"))
+  // A turn whose tool output looked like instructions never gets a one-tap
+  // phone approval: the person must see the card and why it asked.
+  const flagged = proposal.authorization?.guard === "flagged";
+  if (ids.approve && !flagged && (level === "low" || level === "medium"))
     actions.push({
       action: ids.approve,
       title: "Approve",
