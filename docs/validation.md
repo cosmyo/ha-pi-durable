@@ -122,6 +122,10 @@ Offline pinned Harness/faux-model/fake-HA tests cover Read-only/Ask defaults, ex
 
 Actual SIGKILL fixtures interrupt automatic execution before intent, after committed intent but before attempted POST, and during attempted POST. Unsafe tools do not replay; intent/attempt recover to unknown and block fresh autonomous reissue. Existing Code/canvas/OAuth/auth/single-writer suites remain regression gates. No real HA/provider/device operation or deployment was performed for this slice. No mobile/backup-restore/power-loss/all-HA-capability/host-admin-autonomy or external-audit claim is made.
 
+## Injection guard (0.7.0)
+
+`test/injection-guard.test.ts` uses a fake guard service (synthetic key, private test address) with the pinned Harness, faux model and fake Home Assistant: request shape and bearer key, splitting into at most 32 pieces / 400,000 characters, a clean result reaching the model byte-for-byte as without the guard, a flagged result getting the warning in front with its content kept and a marker of tool and score only, that turn's proposal pending for a trusted owner on Full (and for an untrusted owner's low-risk Full auto-run) with the receipt's guard mark, the next clean turn auto-running again at high risk for the trusted owner, every failure class (down, timeout, `scanned: false`, malformed, 401, public address) passing results through unmarked without blocking the turn, option validation with value-free fault codes, the key never in transcripts, snapshots, status or logs, and the About status line. No real guard service or live installation was used.
+
 ## Hearth Assist — first live run (0.5.0)
 
 - Supervisor accepted `discovery: [hearth_pi]` (its manifest schema takes any service name) and returned a discovery uuid; Core read the message after the HACS install.

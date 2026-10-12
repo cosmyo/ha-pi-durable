@@ -158,6 +158,8 @@ export class InjectionGuard {
         error instanceof Fault
           ? (error.code as GuardErrorClass)
           : "unreachable";
+      // The tool call itself was cancelled: not the guard's failure.
+      if (signal?.aborted) return { kind: "unavailable", error: kind };
       const counts = this.today();
       counts.unavailable++;
       this.state = "unavailable";
