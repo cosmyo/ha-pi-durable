@@ -58,7 +58,12 @@ test("signed-in OAuth provider models are selectable per session, durable across
   try {
     const id = await runtime.create("owner", "Switch", "oauth-model-create");
     assert.deepEqual(runtime.modelChoices(), [
-      { id: "first", name: "First", provider: "primary" },
+      {
+        id: "first",
+        name: "First",
+        provider: "primary",
+        thinkingLevels: ["off"],
+      },
     ]);
     await assert.rejects(
       runtime.selectModel(
