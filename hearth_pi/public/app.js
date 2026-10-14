@@ -40,8 +40,11 @@ const COMPACT_QUERY = "(max-width: 720px), (max-height: 560px)";
 const compact = () => !!window.matchMedia?.(COMPACT_QUERY).matches;
 // Short, human labels for OAuth auth providers. Unknown ids fall back to
 // their raw provider string so a new provider never renders as blank.
-const AUTH_PROVIDER_LABEL = { "openai-codex": "ChatGPT", anthropic: "Claude" };
-const THINKING_LABEL = {
+const AUTH_PROVIDER_LABEL = Object.assign(Object.create(null), {
+  "openai-codex": "ChatGPT",
+  anthropic: "Claude",
+});
+const THINKING_LABEL = Object.assign(Object.create(null), {
   off: "Off",
   minimal: "Minimal",
   low: "Low",
@@ -49,7 +52,7 @@ const THINKING_LABEL = {
   high: "High",
   xhigh: "Extra high",
   max: "Max",
-};
+});
 // Refusals of a saved message that the server makes before admitting
 // anything (4xx with one of these codes): the message was certainly not
 // accepted, so besides Retry it may be discarded. Every other failure keeps
@@ -1406,7 +1409,7 @@ $("stop").addEventListener("click", async () => {
 });
 // Human-readable text for each distinct 409 reason the server refuses a
 // delete with, so an open safety concern is never mistaken for a generic error.
-const DELETE_REFUSALS = {
+const DELETE_REFUSALS = Object.assign(Object.create(null), {
   delete_proposal_unresolved:
     "This session has an action awaiting approval or an unresolved outcome. Reject or resolve it first, then delete.",
   delete_task_running:
@@ -1415,7 +1418,7 @@ const DELETE_REFUSALS = {
     "This session has an input that has not been answered yet. Wait for it to settle, then delete.",
   delete_workspace_blocked:
     "This workspace is paused after an uncertain operation and cannot be deleted until a human resolves it.",
-};
+});
 function showWelcome() {
   selected = null;
   selectedKind = "home";
@@ -1469,14 +1472,14 @@ async function deleteSession(id, title) {
     );
   }
 }
-const UNDO_ERRORS = {
+const UNDO_ERRORS = Object.assign(Object.create(null), {
   nothing_to_undo: "It is already back as it was; nothing to undo.",
   undo_expired: "The undo window has passed.",
   undo_already_used: "This change was already undone or an undo is pending.",
   undo_item_ambiguous:
     "The list has more than one matching item; undo it there.",
   undo_unavailable: "This change cannot be undone.",
-};
+});
 async function undo(proposal) {
   const id = selected;
   try {
@@ -1919,7 +1922,7 @@ renderCanvas($("home-canvas"), null, draftQuestion);
 // --- Apps: household mini-apps rendered by trusted code from the API ---
 const APP_TOOL = /^app_(create|update)$/;
 const SUGGEST_TOOL = /^suggest_(memory|app_change)$/;
-const APP_ERRORS = {
+const APP_ERRORS = Object.assign(Object.create(null), {
   home_read_only:
     "Home permissions are Read-only, so this control is disabled. Change it in Home permissions.",
   home_outcome_unresolved:
@@ -1934,7 +1937,7 @@ const APP_ERRORS = {
   version_outside_current_scope:
     "That version uses entities or services outside Hearth's current scope.",
   action_capacity: "Too many actions in flight. Try again shortly.",
-};
+});
 const appMessage = (error, prefix) =>
   APP_ERRORS[error.message] ?? `${prefix}: ${error.message}`;
 const appHandlers = {
@@ -2678,14 +2681,14 @@ const PUSH_STATUS = {
   expired: "Not confirmed in time \u2014 use this phone again",
   disabled: "Confirm this phone again",
 };
-const PUSH_ERRORS = {
+const PUSH_ERRORS = Object.assign(Object.create(null), {
   approval_push_stale: "Changed elsewhere; reloaded \u2014 try again.",
   push_target_limit: "You already have 4 phones. Remove one first.",
   push_proof_limit: "Too many confirmations this hour. Try later.",
   push_send_failed: "The notification could not be sent. Try again later.",
   push_candidate_not_found: "That phone is no longer yours in Home Assistant.",
   push_target_exists: "That phone is already confirmed.",
-};
+});
 function pushStatus(value) {
   $("push-status").textContent = value;
 }
@@ -3001,7 +3004,7 @@ async function listSession() {
     .sort((a, b) => b.created - a.created || b.id - a.id)[0];
   return existing ? existing.id : newListSession();
 }
-const LIST_ERRORS = {
+const LIST_ERRORS = Object.assign(Object.create(null), {
   home_read_only:
     "Home permissions are Read-only. Choose Ask or Full access to change lists.",
   home_outcome_unresolved:
@@ -3017,7 +3020,7 @@ const LIST_ERRORS = {
   invalid_list_text: "Use one line of text, up to 200 characters.",
   rate_limit: "Too many list reads in a minute. Wait a moment.",
   action_capacity: "Too many actions in flight. Try again shortly.",
-};
+});
 async function pressList(list, op, item, summary) {
   todayUi.listMenu = null;
   todayUi.listRename = null;
@@ -3217,7 +3220,7 @@ async function proactiveAction(path, payload, message) {
     );
   }
 }
-const WATCHER_ERRORS = {
+const WATCHER_ERRORS = Object.assign(Object.create(null), {
   entity_not_in_scope: "That entity is not in Hearth's read scope.",
   entity_binding_required:
     "Enter an exact entity ID, like sensor.washer_state.",
@@ -3226,7 +3229,7 @@ const WATCHER_ERRORS = {
   threshold_number: "Enter a number.",
   integer_range: "Minutes must be 1–1440.",
   watcher_time: "Choose a time.",
-};
+});
 const proactiveHandlers = {
   saveBriefing: (slot, value) =>
     void proactiveAction(
