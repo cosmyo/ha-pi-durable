@@ -1,6 +1,42 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, supportedServices } from "../src/config.js";
+import { loadConfig, publicOrigins, supportedServices } from "../src/config.js";
+
+test("public origins are exact, bounded HTTP(S) origins without duplicates", () => {
+  assert.deepEqual(
+    publicOrigins(
+      "https://home.example",
+      ["https://remote.example", "http://lan.example:8123"],
+      false,
+    ),
+    [
+      "https://home.example",
+      "https://remote.example",
+      "http://lan.example:8123",
+    ],
+  );
+  for (const bad of [
+    "*",
+    "https://*.example",
+    "null",
+    "ftp://home.example",
+    "https://user@home.example",
+    "https://home.example/path",
+    "https://home.example/?query=1",
+    "https://home.example/#fragment",
+  ])
+    assert.throws(() => publicOrigins("https://home.example", [bad], false));
+  assert.throws(() =>
+    publicOrigins("https://home.example", ["https://home.example"], false),
+  );
+  assert.throws(() =>
+    publicOrigins(
+      "https://home.example",
+      Array.from({ length: 11 }, (_, i) => `https://alt-${i}.example`),
+      false,
+    ),
+  );
+});
 
 test("large exact entity allowlists are bounded and remain deny-all by default", async (t) => {
   const values = {
@@ -8,6 +44,7 @@ test("large exact entity allowlists are bounded and remain deny-all by default",
     HEARTH_PROVIDER: "offline",
     HEARTH_LOCAL_PASSWORD: "synthetic-local-password-0001",
     HEARTH_ORIGIN: "http://127.0.0.1:8099",
+    HEARTH_PUBLIC_ORIGINS: "https://remote.example,http://lan.example:8123",
     HEARTH_PORT: "8099",
     HEARTH_ACTIONS: "false",
     HEARTH_ALLOWED_SERVICES: "",
@@ -23,7 +60,13 @@ test("large exact entity allowlists are bounded and remain deny-all by default",
     }
   });
   Object.assign(process.env, values);
-  assert.deepEqual((await loadConfig()).policy.entities, []);
+  const initial = await loadConfig();
+  assert.deepEqual(initial.policy.entities, []);
+  assert.deepEqual(initial.origins, [
+    "http://127.0.0.1:8099",
+    "https://remote.example",
+    "http://lan.example:8123",
+  ]);
 
   const entities = Array.from(
     { length: 10000 },

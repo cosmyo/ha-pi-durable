@@ -54,6 +54,9 @@ export type Config = {
   host: string;
   port: number;
   origin: string;
+  // Exact browser origins allowed to make mutations and embed the App.
+  // `origin` remains the primary/backward-compatible public_origin.
+  origins?: string[];
   password: string;
   authorizedUsers: string[];
   dataDir: string;
@@ -116,6 +119,8 @@ export const MAX_WORKSPACE_OWNERS = 5;
 // failure keeps the generic message because raw errors can contain secrets.
 export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "explicit_mode_required",
+  "invalid_public_origin",
+  "invalid_public_origins",
   "invalid_access_mode",
   "invalid_risk_judge_model",
   "invalid_risk_judge_url",
@@ -145,6 +150,45 @@ export const CONFIG_FAULT_CODES: ReadonlySet<string> = new Set([
   "invalid_assist_satellites",
   "assist_satellite_user_not_authorized",
 ]);
+export const MAX_PUBLIC_ORIGINS = 10;
+function publicOrigin(value: unknown, local: boolean): string {
+  let origin: string;
+  try {
+    origin = text(value, 300);
+    const url = new URL(origin);
+    insist(
+      url.origin === origin &&
+        !origin.includes("*") &&
+        !url.username &&
+        !url.password &&
+        !url.pathname.slice(1) &&
+        !url.search &&
+        !url.hash &&
+        origin !== "null" &&
+        (local
+          ? url.protocol === "http:" &&
+            ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+          : url.protocol === "http:" || url.protocol === "https:"),
+    );
+  } catch {
+    throw new Fault(400, "invalid_public_origin");
+  }
+  return origin;
+}
+export function publicOrigins(
+  primary: unknown,
+  alternatives: unknown,
+  local: boolean,
+): string[] {
+  insist(Array.isArray(alternatives), "invalid_public_origins");
+  insist(alternatives.length <= MAX_PUBLIC_ORIGINS, "invalid_public_origins");
+  const values = [
+    publicOrigin(primary, local),
+    ...(alternatives as unknown[]).map((value) => publicOrigin(value, false)),
+  ];
+  insist(new Set(values).size === values.length, "invalid_public_origins");
+  return values;
+}
 // The startup log line for a loadConfig failure: the known Fault code only.
 export function configurationDiagnostic(error: unknown): string | undefined {
   return error instanceof Fault && CONFIG_FAULT_CODES.has(error.code)
@@ -233,6 +277,7 @@ export async function loadConfig(
           "allowed_services",
           "allowed_entities",
           "public_origin",
+          "public_origins",
           "provider",
           "model",
           "openai_api_key",
@@ -260,22 +305,15 @@ export async function loadConfig(
   const port =
     mode === "ingress" ? 8099 : Number(process.env.HEARTH_PORT ?? 8099);
   insist(Number.isInteger(port) && port >= 1024 && port <= 65535);
-  const origin = text(
+  const origin =
     options.public_origin ??
-      process.env.HEARTH_ORIGIN ??
-      `http://127.0.0.1:${port}`,
-    300,
-  );
-  const url = new URL(origin);
-  insist(
-    url.origin === origin &&
-      !url.username &&
-      !url.password &&
-      (mode === "local"
-        ? url.protocol === "http:" &&
-          ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-        : url.protocol === "https:"),
-  );
+    process.env.HEARTH_ORIGIN ??
+    `http://127.0.0.1:${port}`;
+  const alternativeOrigins =
+    mode === "ingress"
+      ? (options.public_origins ?? [])
+      : (process.env.HEARTH_PUBLIC_ORIGINS ?? "").split(",").filter(Boolean);
+  const origins = publicOrigins(origin, alternativeOrigins, mode === "local");
   const password =
     mode === "local" ? text(process.env.HEARTH_LOCAL_PASSWORD, 200, 24) : "";
   const authorizedUsers = strings(options.authorized_user_ids ?? [], 100);
@@ -507,7 +545,8 @@ export async function loadConfig(
     mode,
     host: mode === "local" ? "127.0.0.1" : "0.0.0.0",
     port,
-    origin,
+    origin: origins[0]!,
+    origins,
     password,
     authorizedUsers,
     dataDir:

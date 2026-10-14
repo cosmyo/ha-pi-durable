@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { parseHTML } from "linkedom";
 import { readFile } from "node:fs/promises";
 
-type Reply = Response | Error;
+type Reply = Response | Error | Promise<Response>;
 type Fake = {
   models?: unknown[];
   kind?: "home" | "workspace";
@@ -188,6 +188,11 @@ test("model sheet: only the chosen model's thinking levels are offered, so an un
       app.el<HTMLSelectElement>("model-choice").value,
       `faux${SEP}alpha`,
     );
+    assert.match(app.el("model-chip").textContent!, /faux \/ alpha/);
+    assert.match(
+      app.el("about-provider").textContent!,
+      /Configured default: faux \/ alpha/,
+    );
     assert.deepEqual(app.options("thinking-choice"), [
       "minimal",
       "low",
@@ -345,6 +350,10 @@ test("saved message: Discard only after a definite refusal; an unknown outcome k
       app.el("feedback").textContent!,
       /Retry when Hearth finishes, or discard/,
     );
+    reply = () => Response.json({ error: "origin_rejected" }, { status: 403 });
+    await app.click("retry");
+    assert.equal(hidden("discard-saved"), false);
+    assert.match(app.el("feedback").textContent!, /address is not allowed/);
     // Retrying again clears it first: a following unknown outcome hides Discard.
     reply = () => new TypeError("Failed to fetch");
     await app.click("retry");
@@ -352,7 +361,7 @@ test("saved message: Discard only after a definite refusal; an unknown outcome k
     assert.equal(JSON.parse(app.storage.get(saved()[0]!)!).refused, undefined);
     // Every attempt reused the same request ID.
     assert.ok(app.posts.every((p) => p.body.requestId === requestId));
-    assert.equal(app.posts.length, 4);
+    assert.equal(app.posts.length, 5);
     // A full chat: Discard and Start a new chat.
     reply = () =>
       Response.json(
@@ -376,7 +385,43 @@ test("saved message: Discard only after a definite refusal; an unknown outcome k
     );
     assert.equal(app.el<HTMLTextAreaElement>("message").disabled, false);
     assert.equal(hidden("saved-actions"), true);
-    assert.equal(app.posts.length, 5, "discarding sends nothing");
+    assert.equal(app.posts.length, 6, "discarding sends nothing");
+  } finally {
+    app.restore();
+  }
+});
+
+test("message delivery says Sending before admission and Acknowledged only after the server accepts it", async () => {
+  let accept!: (response: Response) => void;
+  const admitted = new Promise<Response>((resolve) => (accept = resolve));
+  const app = await loadApp({
+    models: MODELS.slice(0, 1),
+    snapshot: () => baseSnapshot(),
+    post: (path) =>
+      path.endsWith("/inputs") ? admitted : new Error("unexpected"),
+  });
+  try {
+    app.type("Synthetic message");
+    app
+      .el("composer")
+      .dispatchEvent(new app.window.Event("submit", { cancelable: true }));
+    assert.match(app.el("feedback").textContent!, /Sending.*not acknowledged/);
+    assert.doesNotMatch(app.el("feedback").textContent!, /AI|model|reached/);
+    accept(Response.json({}, { status: 202 }));
+    await tick();
+    assert.match(app.el("feedback").textContent!, /Acknowledged.*Queued/);
+    app.emit(
+      baseSnapshot({
+        view: {
+          entries: [],
+          docs: {
+            "pi.live": { run: { inputs: [1] } },
+            "pi.usage": { models: {} },
+          },
+        },
+      }),
+    );
+    assert.equal(app.el("feedback").textContent, "Working…");
   } finally {
     app.restore();
   }
@@ -455,7 +500,7 @@ test("while Hearth answers a Home chat the composer stays open: a follow-up is s
     );
     assert.equal(
       app.el("feedback").textContent,
-      "Queued — sends when Hearth finishes.",
+      "Acknowledged · Queued — Hearth will start it after the active turn.",
     );
     assert.equal(message.value, "");
     // The queued message shows in the transcript, as text.
@@ -471,7 +516,10 @@ test("while Hearth answers a Home chat the composer stays open: a follow-up is s
     assert.ok(queued);
     assert.match(queued!.textContent!, /Also check the <b>hallway<\/b>/);
     assert.equal(queued!.querySelector("b"), null);
-    assert.match(queued!.textContent!, /Queued — sends when Hearth finishes/);
+    assert.match(
+      queued!.textContent!,
+      /Acknowledged · Queued — Hearth will start it after the active turn/,
+    );
   } finally {
     app.restore();
   }

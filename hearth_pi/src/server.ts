@@ -246,7 +246,7 @@ export function appServer(
     res.setHeader("Referrer-Policy", "no-referrer");
     res.setHeader(
       "Content-Security-Policy",
-      `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; object-src 'none'; frame-ancestors 'self' ${config.origin}; form-action 'self'`,
+      `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; object-src 'none'; frame-ancestors ${(config.origins ?? [config.origin]).join(" ")}; form-action 'self'`,
     );
     try {
       insist(!runtime.closing, "closing", 503);

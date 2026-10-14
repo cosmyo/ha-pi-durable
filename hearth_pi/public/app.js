@@ -58,6 +58,8 @@ const THINKING_LABEL = Object.assign(Object.create(null), {
 // accepted, so besides Retry it may be discarded. Every other failure keeps
 // Retry only.
 const INPUT_REFUSALS = Object.assign(Object.create(null), {
+  origin_rejected:
+    "Message not sent: this Home Assistant address is not allowed by Hearth. Add its exact origin to public_origins in the App configuration, restart Hearth, then retry or discard this message.",
   session_busy:
     "This chat can't take another message right now (a few are already waiting). Retry when Hearth finishes, or discard this one.",
   capacity:
@@ -311,12 +313,13 @@ async function bootstrap() {
   $("about-version").textContent = status.version
     ? `Hearth Pi v${status.version}`
     : "Hearth Pi";
-  $("about-provider").textContent = `Inference provider: ${status.provider}`;
   assistEnabled = status.assist === true;
   updatePermissions(status.homePermissions);
   inferenceReady = status.inferenceReady;
   defaultThinkingLevel = status.defaultThinkingLevel ?? "off";
   installModelLabel = `${status.model} \u00b7 ${THINKING_LABEL[defaultThinkingLevel] ?? defaultThinkingLevel}`;
+  $("about-provider").textContent =
+    `Configured default: ${status.provider} / ${status.model} · ${THINKING_LABEL[defaultThinkingLevel] ?? defaultThinkingLevel} thinking`;
   workspaceEnabled = !!status.workspaceEnabled;
   $("new-workspace").hidden = !status.workspaceEnabled;
   paintRole(status.role);
@@ -706,7 +709,7 @@ function snapshot(value) {
       ? `Active: ${active.provider} / ${active.modelId} · thinking ${modelSelection.thinkingLevel}`
       : "Active model unavailable; ask the administrator";
     $("model-chip").textContent = active
-      ? `${active.modelId} · ${THINKING_LABEL[modelSelection.thinkingLevel] ?? modelSelection.thinkingLevel}`
+      ? `${active.provider} / ${active.modelId} · ${THINKING_LABEL[modelSelection.thinkingLevel] ?? modelSelection.thinkingLevel}`
       : "Model unavailable";
     if (!modelDraftDirty || !choiceFor($("model-choice").value)) {
       $("model-choice").value = modelValue(active);
@@ -781,7 +784,9 @@ function snapshot(value) {
         !writesPausedAll(permissions),
     );
   }
+  const wasBusy = busy;
   busy = !!value.view.docs["pi.live"]?.run;
+  if (busy && !wasBusy) feedback("Working…");
   imageInput = value.imageInput === true;
   worldSnapshot = value;
   $("task-status").textContent = busy
@@ -1079,6 +1084,7 @@ async function sendSaved() {
   }
   sending = true;
   controls();
+  feedback("Sending… not acknowledged yet.");
   try {
     await api(`sessions/${id}/inputs`, body);
     sessionStorage.removeItem(`hearth:pending:${id}`);
@@ -1089,8 +1095,8 @@ async function sendSaved() {
       fitComposer();
       feedback(
         queued
-          ? "Queued \u2014 sends when Hearth finishes."
-          : "Input durably admitted.",
+          ? "Acknowledged · Queued — Hearth will start it after the active turn."
+          : "Acknowledged · Queued for Hearth to start.",
       );
     }
   } catch (error) {

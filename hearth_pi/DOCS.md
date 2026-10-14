@@ -16,7 +16,7 @@ A developer/local build is also possible by copying the complete `hearth_pi/` di
 ## Configure before starting
 
 1. Enable **Advanced mode** in your HA profile if needed. Go to **Settings → People → Users**, open your trusted administrator user and copy its **ID**. This is the HA user ID, not a person entity or a token.
-2. Set `public_origin` to the **exact HTTPS origin used to open HA**, e.g. `https://home.example`: no path or trailing slash. This preview requires HTTPS Ingress (such as an existing HA Cloud or HTTPS reverse-proxy URL); plain HTTP LAN access is not a supported alternative. The My Home Assistant instance URL should use this same origin.
+2. Set `public_origin` to the exact HTTP or HTTPS origin normally used to open HA, e.g. `https://home.example`: no path or trailing slash. If the same installation is intentionally opened at other addresses, list each exact origin in optional `public_origins` (for example `https://remote.example` and `http://lan.example:8123`). Hearth never derives trust from request Host or forwarded headers. The My Home Assistant instance URL should normally use the primary origin.
 3. Choose the provider and list the exact entities Hearth may read. Copy IDs from **Settings → Devices & services → Entities**. The example `sun.sun` is optional and only works if that entity exists on your instance. Remove it or replace it with your intended scope. Empty means deny all; there is no wildcard/domain-wide grant.
 
 Example for subscription login; replace both placeholders:
@@ -29,6 +29,9 @@ allowed_services: []
 allowed_entities:
   - sun.sun
 public_origin: "https://home.example"
+public_origins:
+  - "https://remote.example"
+  - "http://lan.example:8123"
 provider: openai-codex
 model: ""
 openai_api_key: ""
@@ -93,7 +96,8 @@ Official HA references: [adding a third-party App repository](https://www.home-a
 ## Required options and trust
 
 - `authorized_user_ids`: explicit HA user IDs allowed to use Hearth. `[]` denies everyone. Server identity requires the documented Ingress socket peer and one `X-Remote-User-Id`; sidebar visibility is not authentication. Everyone listed is an **owner** unless also listed in `member_user_ids` or `guest_user_ids` (see [What is shared in a household](#what-is-shared-in-a-household)). Owners may use/setup/remove the installation's shared provider credential. A guest still sees whatever the installation's read scope exposes (entity states, lists), so guest suits semi-trusted people in the household, not strangers; never add untrusted users.
-- `public_origin`: exact external HTTPS origin, no path/trailing slash, e.g. `https://home.example`. Needed for Origin/CSRF and iframe policy. Alternative origins are not implicitly accepted.
+- `public_origin`: primary exact external HTTP/HTTPS origin, no path/trailing slash, e.g. `https://home.example`. Needed for Origin/CSRF and iframe policy.
+- `public_origins`: optional additional exact HTTP/HTTPS origins (default `[]`, at most 10), e.g. `https://remote.example` and `http://lan.example:8123`. Values must be origin-only: no wildcard, `null`, credentials, path, query or fragment; duplicates are rejected. This is additive to `public_origin`, never discovered from request headers. Local development uses comma-separated `HEARTH_PUBLIC_ORIGINS`; the primary remains `HEARTH_ORIGIN`.
 - `allowed_entities`: up to 10,000 exact entity IDs for Home reads and optional supported actions; no wildcards/all-future scope. Search pages contain twenty items. Empty denies all. Scope filters output, not the broad underlying HA token or states response processed in memory.
 - `anthropic_auth_enabled`: **false by default**. Typed HA option fallback for the `HEARTH_ANTHROPIC_AUTH_ENABLED` environment flag; an explicitly set env value takes precedence and only exact `true` enables it. This gates Anthropic login/inference/compatibility only, not ChatGPT. Enabling it does not change provider/model, scope, Home permissions or the Code worker.
 - `provider`: `offline`, `openai`, `openai-codex`, flagged `anthropic` or `local`. Offline is a faux response, not local inference. `local` uses an OpenAI-compatible server on your network that you connect from the UI; see [Local model endpoint](#local-model-endpoint-unreleased-source-slice). Online conversations and selected HA/coding output go to the provider.

@@ -1,5 +1,5 @@
 name: Hearth Pi
-version: "0.8.0"
+version: "0.8.1"
 slug: hearth_pi
 url: https://github.com/cosmyo/ha-pi-durable
 description: Independent experimental durable AI assistant with read-only tools by default
@@ -48,6 +48,7 @@ options:
   allowed_services: []
   allowed_entities: []
   public_origin: "https://home.example"
+  public_origins: []
   provider: offline
   anthropic_auth_enabled: false
   model: ""
@@ -79,6 +80,8 @@ schema:
   allowed_entities:
     - str
   public_origin: str
+  public_origins:
+    - str
   provider: list(offline|openai|openai-codex|anthropic|local)
   anthropic_auth_enabled: bool
   model: str

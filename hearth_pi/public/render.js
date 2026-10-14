@@ -807,7 +807,7 @@ export function renderMessages(
       node(
         "p",
         running
-          ? "Queued \u2014 sends when Hearth finishes"
+          ? "Acknowledged · Queued — Hearth will start it after the active turn"
           : "Waiting \u2014 Stop to withdraw, or send a message to continue",
         "queued-note",
       ),

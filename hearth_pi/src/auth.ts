@@ -72,7 +72,9 @@ export class Boundary {
   }
   mutation(req: IncomingMessage, owner: string) {
     insist(
-      oneHeader(req, "origin") === this.config.origin,
+      (this.config.origins ?? [this.config.origin]).includes(
+        oneHeader(req, "origin"),
+      ),
       "origin_rejected",
       403,
     );

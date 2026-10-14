@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { IncomingMessage } from "node:http";
+import { request as httpRequest, type IncomingMessage } from "node:http";
 import type { Config } from "../src/config.js";
 import { Boundary } from "../src/auth.js";
 import { Runtime } from "../src/runtime.js";
@@ -220,6 +220,185 @@ test("Ingress boundary rejects forged, forwarded, missing, duplicate and unautho
       ),
     /authentication_required/,
   );
+});
+test("HTTP mutations accept only explicitly configured origins with the same browser-bound CSRF and principal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "hearth-origin-http-"));
+  const { faux, models, model } = offline();
+  const runtime = await Runtime.open(dir, models, model);
+  const cfg: Config = { ...config, dataDir: dir };
+  const app = appServer(
+    cfg,
+    runtime,
+    new Actions(runtime, new HAClient(cfg.haToken, cfg.policy)),
+  );
+  await new Promise<void>((resolve) =>
+    app.server.listen(0, "127.0.0.1", resolve),
+  );
+  const address = app.server.address();
+  assert(address && typeof address !== "string");
+  const base = `http://127.0.0.1:${address.port}`;
+  const alternative = "https://remote.example";
+  cfg.origin = base;
+  cfg.origins = [base, alternative, "http://lan.example:8123"];
+  const authorization = `Basic ${Buffer.from(`hearth:${cfg.password}`).toString("base64")}`;
+  try {
+    const boot = await fetch(`${base}/api/bootstrap`, {
+      headers: { authorization },
+    });
+    const csrf = (await boot.json()).csrf;
+    const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
+    const ancestors = `frame-ancestors ${cfg.origins.join(" ")}`;
+    assert.ok(boot.headers.get("content-security-policy")!.includes(ancestors));
+    const forgedHost = await fetch(`${base}/api/bootstrap`, {
+      headers: { authorization, host: "attacker.example" },
+    });
+    const framing = forgedHost.headers
+      .get("content-security-policy")!
+      .split(";")
+      .find((directive) => directive.trim().startsWith("frame-ancestors"))!
+      .trim();
+    assert.equal(
+      framing,
+      ancestors,
+      "Host cannot add a framing origin or 'self'",
+    );
+    const post = (
+      path: string,
+      value: unknown,
+      origin = alternative,
+      extra: Record<string, string> = {},
+    ) =>
+      fetch(`${base}${path}`, {
+        method: "POST",
+        headers: {
+          authorization,
+          cookie,
+          origin,
+          "x-hearth-csrf": csrf,
+          "content-type": "application/json",
+          ...extra,
+        },
+        body: JSON.stringify(value),
+      });
+    assert.equal(
+      (await post("/api/sessions/9999999999999/model", {})).status,
+      404,
+      "configured alternative reaches routing instead of origin rejection",
+    );
+    for (const origin of ["https://unknown.example", "", "null"])
+      assert.equal((await post("/api/sessions", {}, origin)).status, 403);
+    const duplicateStatus = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(
+        `${base}/api/sessions`,
+        {
+          method: "POST",
+          headers: [
+            "Authorization",
+            authorization,
+            "Cookie",
+            cookie,
+            "Origin",
+            alternative,
+            "Origin",
+            alternative,
+            "X-Hearth-CSRF",
+            csrf,
+            "Content-Type",
+            "application/json",
+            "Content-Length",
+            "2",
+          ],
+        },
+        (response) => {
+          response.resume();
+          response.on("end", () => resolve(response.statusCode ?? 0));
+        },
+      );
+      req.on("error", reject);
+      req.end("{}");
+    });
+    assert.equal(duplicateStatus, 400);
+    assert.equal(
+      (
+        await post("/api/sessions", {}, alternative, {
+          "x-forwarded-host": "remote.example",
+          "x-forwarded-proto": "https",
+          forwarded: "host=remote.example;proto=https",
+        })
+      ).status,
+      400,
+      "forwarded headers neither add nor replace an allowed Origin",
+    );
+    assert.equal(
+      (
+        await post("/api/sessions", {}, "https://unknown.example", {
+          host: "remote.example",
+          "x-forwarded-host": "remote.example",
+          "x-forwarded-proto": "https",
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await post("/api/sessions", {}, alternative, {
+          "x-hearth-csrf": "forged",
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(`${base}/api/sessions`, {
+          method: "POST",
+          headers: {
+            cookie,
+            origin: alternative,
+            "x-hearth-csrf": csrf,
+            "content-type": "application/json",
+            "x-remote-user-id": "synthetic-admin",
+          },
+          body: "{}",
+        })
+      ).status,
+      401,
+      "an ingress identity header cannot replace local authentication",
+    );
+    const created = await post("/api/sessions", {
+      title: "Origin fixture",
+      requestId: "origin-create-1",
+    });
+    assert.equal(created.status, 201);
+    const id = (await created.json()).id;
+    faux.setResponses([fauxAssistantMessage("Synthetic answer")]);
+    assert.equal(
+      (
+        await post(`/api/sessions/${id}/inputs`, {
+          requestId: "origin-input-1",
+          content: "Synthetic question",
+        })
+      ).status,
+      202,
+    );
+    await runtime.harness.waitForIdle(ctx);
+    assert.equal(
+      (
+        await post(`/api/sessions/${id}/model`, {
+          modelId: model.modelId,
+          thinkingLevel: "off",
+          revision: 0,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(
+      (await post(`/api/sessions/${id}/delete`, { confirm: true })).status,
+      200,
+    );
+  } finally {
+    await app.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 test("HTTP API: Basic auth, browser-bound CSRF/Origin, strict validation, protected SSE hydration and redaction", async () => {
   const dir = await mkdtemp(join(tmpdir(), "hearth-http-"));

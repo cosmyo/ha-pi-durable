@@ -101,7 +101,7 @@ Follow [App installation/options](../hearth_pi/DOCS.md) only on an authorized te
 
 1. Build/install from a clean source tree on amd64 and aarch64. Verify App metadata and no unrequested mounts/ports/admin privileges.
 2. With action control disabled, verify exact configured user IDs, real Ingress peer/header behavior, unauthorized users and direct-access rejection.
-3. Test external HTTPS and mobile/embedded browser Origin, cookie path, CSP and SSE reconnect behavior. The exact configured origin is intentional; alternate origins are not automatically accepted.
+3. Test every explicit `public_origin` / `public_origins` address in external, LAN and mobile/embedded browsers: Origin, cookie path, CSP and SSE reconnect behavior. Unlisted addresses and forwarded-header forgeries must remain rejected.
 4. Verify empty scope denies reads, configured entity scope is enforced, and broad HA token permissions do not become generic tools.
 5. Test provider setup with an approved test account and known tool-capable model. Check billing and data-sharing warnings; keep tokens out of recordings.
 6. Test harmless explicit light targets with approved exact policies, proposal review/rejection/expiry, one-use decisions and readable action receipts. Observe device state independently; HTTP acceptance alone is not verification.
