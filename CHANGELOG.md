@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 — follow-ups while Hearth answers, clearer model changes, device setup
+
+- Chat: type and send while Hearth answers; the message is queued as its own turn (own input record and permission binding, injection-guard mark carried, never rides on an earlier approval); Stop withdraws waiting messages, also after a failed run.
+- Chat: Discard for a saved message only after a definite refusal (unknown outcomes keep Retry); plain-language refusals; thinking levels follow the chosen model so an unsupported pair cannot be sent.
+- Admin access mode: add devices and integrations through Home Assistant's own config flows (`ha_integrations_read`, `ha_flow_propose`, skill add-a-device); every step high, remote-access integrations and Hearth itself critical; secret fields never handled in chat; reauth/reconfigure/import/system flows refused; stale or racing steps refused with `flow_changed`.
+
 ## 0.7.0 — injection guard for tool output
 
 - Injection guard (opt-in, new App options `injection_guard_url`, `injection_guard_api_key` (password) and `injection_guard_timeout_ms` (default 3000); off while the URL is empty, so nothing changes by default): every Home tool result is sent to a classifier service you run, before the model sees it, through a small generic HTTP contract (`POST <url>/v1/guard/injection` with `{source, texts[]}` → `{scanned, results:[{score, flagged}]}`, Bearer key, at most 32 texts and 400,000 characters per request; documented in DOCS). Flagged output keeps its content behind a short untrusted-data warning, Hearth records only the tool name and score, and every Home change proposed in that same turn waits for exact approval — also on Full access and for trusted people — with the receipt **Ask: outside content looked like instructions**. The next clean turn runs as usual. A guard that is unreachable, slow or broken never blocks chat: output passes unscanned and Settings → About shows **Injection guard: unavailable** with the error class and today's counters. The URL must be a private address; the key is never logged, returned or shown.
