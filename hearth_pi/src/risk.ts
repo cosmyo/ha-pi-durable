@@ -501,7 +501,59 @@ function classifyAdmin(
     }
     case "supervisor":
       return classifySupervisor(action.method, action.path, context);
+    case "flow":
+      return classifyFlow(action, context);
   }
+}
+
+// Integrations whose setup lets something outside the home reach or control
+// it: Home Assistant Cloud (remote UI and voice assistant bridges), HomeKit
+// Bridge (exposes entities, locks included, to an Apple Home), the Model
+// Context Protocol server (lets an external AI client control Home
+// Assistant) and Remote Home-Assistant (another instance controls this
+// one). Setting one up is critical. Every other integration is high.
+export const REMOTE_ACCESS_HANDLERS: ReadonlySet<string> = new Set([
+  "cloud",
+  "homekit",
+  "mcp_server",
+  "remote_homeassistant",
+]);
+function classifyFlow(
+  action: Extract<AdminAction, { kind: "flow" }>,
+  context: RiskContext,
+): RiskAssessment {
+  if (
+    isSelfText(action.handler, context) ||
+    (action.op === "step" && mentionsSelf(action.userInput, context))
+  )
+    return assess(
+      "critical",
+      "self_protection",
+      "Sets up or changes Hearth's own integration.",
+    );
+  if (REMOTE_ACCESS_HANDLERS.has(action.handler))
+    return assess(
+      "critical",
+      "remote_access_integration",
+      `${action.handler} lets something outside the home reach or control Home Assistant.`,
+    );
+  if (action.op === "init")
+    return assess(
+      "high",
+      "integration_setup",
+      `Starts setting up the ${action.handler} integration, which can add devices and entities and connect to them or to a service.`,
+    );
+  if (action.op === "step")
+    return assess(
+      "high",
+      "integration_setup_step",
+      `Sends ${Object.keys(action.userInput).length} value(s) to step ${action.stepId ?? "(current)"} of the ${action.handler} setup; it may create the integration.`,
+    );
+  return assess(
+    "high",
+    "integration_setup_abort",
+    `Cancels a ${action.handler} setup${action.source === "discovered" ? " that Home Assistant discovered; Home Assistant may offer it again when it finds the device again" : ""}.`,
+  );
 }
 
 function classifySupervisor(
@@ -636,6 +688,7 @@ export function confirmationWord(action: Action): string {
     if (/\/update$/.test(action.path)) return "UPDATE";
   }
   if ("kind" in action && action.kind === "config") return action.id;
+  if ("kind" in action && action.kind === "flow") return action.handler;
   if (
     "kind" in action &&
     action.kind === "service" &&

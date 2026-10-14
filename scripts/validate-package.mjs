@@ -98,7 +98,7 @@ assert.match(docker, /CMD \["node", "dist\/main.js"\]/);
 assert.match(docker, /io.hass.type="app"/);
 // Bundled skills ship in the image and each has its frontmatter.
 assert.match(docker, /^COPY skills \.\/skills$/m);
-for (const name of ["home-world-setup"]) {
+for (const name of ["add-a-device", "home-world-setup"]) {
   const skill = await read(`hearth_pi/skills/${name}/SKILL.md`);
   assert.match(
     skill,

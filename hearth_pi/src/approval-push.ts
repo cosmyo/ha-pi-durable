@@ -136,6 +136,8 @@ export function actionHeadline(
   } else if (action.kind === "config")
     line = `${action.op === "delete" ? "Delete" : "Write"} ${action.resource} ${action.id}`;
   else if (action.kind === "ws") line = action.type;
+  else if (action.kind === "flow")
+    line = `${action.handler} setup ${action.op === "init" ? "start" : action.op === "step" ? `step ${action.stepId ?? ""}` : "cancel"}`;
   else line = `Supervisor ${action.method} ${action.path}`;
   const clean = redact(line.replace(/\s+/g, " ").trim());
   return clean.length > APPROVAL_PUSH_LIMITS.headline

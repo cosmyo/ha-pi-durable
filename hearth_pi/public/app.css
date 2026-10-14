@@ -658,6 +658,13 @@ pre {
   overflow: auto;
   white-space: pre-wrap;
 }
+/* Config flow receipts: a link into Home Assistant's own UI. */
+.action-card .ha-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--touch-target);
+  color: var(--teal);
+}
 /* Risk is shown as text and colour, never colour alone. */
 .risk-row {
   display: flex;

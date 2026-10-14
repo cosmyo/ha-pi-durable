@@ -52,6 +52,8 @@ import {
   writeScope,
 } from "./reconcile.js";
 import type { RiskContext } from "./risk.js";
+import { assertFlowCurrent, knownFlows } from "./flow-setup.js";
+import type { FlowResultSummary } from "./documents.js";
 
 export const ACTION_SCHEMA = 1;
 export const FULL_ACKNOWLEDGEMENT =
@@ -695,13 +697,16 @@ export class HomeActions {
       ...(context.abortSignal ? [context.abortSignal] : []),
     ]);
     try {
-      const existing = (
-        await api.snapshot(Proposals, api.conversationId, context)
-      )?.items[id];
+      const earlier =
+        (await api.snapshot(Proposals, api.conversationId, context))?.items ??
+        {};
+      const existing = earlier[id];
       if (existing) return existing;
       // Live discovery can be slow; never hold the permission/revocation gate here.
-      // List actions get the controller-read item text (hashed, re-checked).
-      action = await this.ha.prepareAction(action, signal);
+      // List actions get the controller-read item text (hashed, re-checked);
+      // config flow steps get their handler and step from Home Assistant or
+      // this conversation's own flow receipts.
+      action = await this.ha.prepareAction(action, signal, knownFlows(earlier));
       await this.ha.validateLive(action, signal);
       const facts = await this.ha.riskContext(action, signal);
       const base = classifyAction(action, facts);
@@ -1258,7 +1263,8 @@ export class HomeActions {
     await this.gate.run(() =>
       runtime.harness.commit(async (tx) => {
         insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
-        const item = (await tx.doc(Proposals, sessionId)).items[proposal.id]!;
+        const items = (await tx.doc(Proposals, sessionId)).items;
+        const item = items[proposal.id]!;
         insist(item.status === "pending", "proposal_already_decided", 409);
         insist(
           item.hash === proposal.hash &&
@@ -1267,6 +1273,7 @@ export class HomeActions {
           "proposal_changed",
           409,
         );
+        assertFlowCurrent(items, item);
         const binding = await this.authorize(
           tx,
           owner,
@@ -1308,16 +1315,19 @@ export class HomeActions {
       send = (async () => {
         let status: "accepted" | "unknown" | "failed" = "unknown";
         let failure = "";
+        // Config flows: Home Assistant's bounded, redacted reply.
+        let flowResult: FlowResultSummary | undefined;
         try {
-          await post;
+          flowResult = (await post) ?? undefined;
           if (!signal.aborted) status = "accepted";
         } catch (error) {
           // A DispatchFailed proposal was definitely refused before it could
-          // have any side effect (Supervisor only, today): it is done, not a
-          // barrier, and never retried either way.
+          // have any side effect (Supervisor and config flows): it is done,
+          // not a barrier, and never retried either way.
           if (error instanceof DispatchFailed) {
             status = "failed";
             failure = error.message;
+            flowResult = error.flowResult;
           }
           /* Otherwise: never retry. */
         }
@@ -1329,6 +1339,8 @@ export class HomeActions {
               item.undo.until = Date.now() + UNDO_WINDOW_MS;
             if (status === "failed")
               item.resolution = runtime.redact(failure.slice(0, 300));
+            if (flowResult && status !== "unknown")
+              item.flowResult = flowResult;
             (await tx.doc(HomePermissions)).actionRevision++;
           }
           return item.status;

@@ -9,6 +9,7 @@
 // Home Assistant 2026.9 / current Supervisor install).
 import type { AdminAction, JsonObject, ServiceTarget } from "./documents.js";
 import { entityPattern, insist, object, text } from "./safety.js";
+import { flowAction } from "./flow-setup.js";
 
 export const ADMIN_LIMITS = Object.freeze({
   serviceDataBytes: 8192,
@@ -335,6 +336,8 @@ export function adminAction(value: unknown): AdminAction {
       return wsAction(v);
     case "supervisor":
       return supervisorAction(v);
+    case "flow":
+      return flowAction(v);
     default:
       throw insistFail();
   }
