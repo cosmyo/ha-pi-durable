@@ -422,8 +422,65 @@ test("message delivery says Sending before admission and Acknowledged only after
       }),
     );
     assert.equal(app.el("feedback").textContent, "Working…");
+    app.emit(baseSnapshot({ lastInput: { status: "done" } }));
+    assert.equal(app.el("feedback").textContent, "Done.");
+    app.emit(
+      baseSnapshot({
+        view: {
+          entries: [],
+          docs: {
+            "pi.live": { run: { inputs: [2] } },
+            "pi.usage": { models: {} },
+          },
+        },
+      }),
+    );
+    assert.equal(app.el("feedback").textContent, "Working…");
+    app.emit(
+      baseSnapshot({
+        lastInput: { status: "unanswered", reason: "model_error" },
+      }),
+    );
+    assert.match(app.el("feedback").textContent!, /Stopped before an answer/);
+    assert.doesNotMatch(app.el("feedback").textContent!, /Done|Working/);
   } finally {
     app.restore();
+  }
+});
+
+test("late input acknowledgment cannot overwrite an SSE-settled submission with Queued", async () => {
+  for (const status of ["done", "unanswered"]) {
+    let accept!: (response: Response) => void;
+    const admitted = new Promise<Response>((resolve) => (accept = resolve));
+    const app = await loadApp({
+      models: MODELS.slice(0, 1),
+      snapshot: () => baseSnapshot(),
+      post: () => admitted,
+    });
+    try {
+      app.type("Synthetic message");
+      await app.send();
+      app.emit(
+        baseSnapshot({
+          view: {
+            entries: [],
+            docs: {
+              "pi.live": { run: { inputs: [2] } },
+              "pi.usage": { models: {} },
+            },
+          },
+        }),
+      );
+      app.emit(baseSnapshot({ lastInput: { id: 2, status } }));
+      const terminal = app.el("feedback").textContent;
+      assert.match(terminal!, status === "done" ? /^Done/ : /^Stopped/);
+      accept(Response.json({ submissionId: 2 }, { status: 202 }));
+      await tick();
+      assert.equal(app.el("feedback").textContent, terminal);
+      assert.doesNotMatch(app.el("feedback").textContent!, /Queued|Working/);
+    } finally {
+      app.restore();
+    }
   }
 });
 

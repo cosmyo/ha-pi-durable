@@ -3,7 +3,7 @@
 ## 0.8.1 — explicit alternative Home Assistant origins and send feedback
 
 - Security: optional `public_origins` adds exact HTTP/HTTPS browser origins to `public_origin`; values are bounded and reject duplicates, wildcards, `null`, credentials, paths, queries and fragments. Mutation requests still require the trusted ingress peer/principal plus the browser cookie and bound CSRF token; forwarded headers never grant access. CSP `frame-ancestors` uses only the validated explicit list.
-- Chat: phone-visible delivery feedback now distinguishes Sending (not acknowledged), Acknowledged/Queued, Working and definitely not sent. An `origin_rejected` refusal explains that the address is not allowed and safely offers Discard; network and server failures remain Retry-only with the same idempotency key. The active provider/model is shown together; no routing or fallback changed.
+- Chat: phone-visible delivery feedback now distinguishes Sending (not acknowledged), Acknowledged/Queued, Working, Done, stopped without an answer and definitely not sent. A late acknowledgment never overwrites the completed state of that exact input. An `origin_rejected` refusal explains that the address is not allowed and safely offers Discard; network and server failures remain Retry-only with the same idempotency key. The active provider/model is shown together; no routing or fallback changed.
 
 ## 0.8.0 — follow-ups while Hearth answers, clearer model changes, device setup
 

@@ -687,6 +687,12 @@ function fitComposer() {
   if (box.scrollHeight)
     box.style.height = `${Math.min(box.scrollHeight, 160)}px`;
 }
+function settledInputFeedback(input) {
+  if (input?.status === "done") return "Done.";
+  if (input?.status === "unanswered")
+    return "Stopped before an answer was completed. Check this chat for details.";
+  return null;
+}
 function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
@@ -787,6 +793,11 @@ function snapshot(value) {
   const wasBusy = busy;
   busy = !!value.view.docs["pi.live"]?.run;
   if (busy && !wasBusy) feedback("Working…");
+  else if (!busy && wasBusy)
+    feedback(
+      settledInputFeedback(value.lastInput) ??
+        "Waiting for Hearth to start the next message.",
+    );
   imageInput = value.imageInput === true;
   worldSnapshot = value;
   $("task-status").textContent = busy
@@ -1086,17 +1097,27 @@ async function sendSaved() {
   controls();
   feedback("Sending… not acknowledged yet.");
   try {
-    await api(`sessions/${id}/inputs`, body);
+    const admitted = await api(`sessions/${id}/inputs`, body);
     sessionStorage.removeItem(`hearth:pending:${id}`);
     pendingImages.delete(value.requestId);
     if (selected === id) {
       $("message").value = "";
       clearAttachments();
       fitComposer();
+      // SSE may settle this exact submission before its POST response arrives.
+      // Never replace that newer terminal status with a stale Queued message.
+      const settled =
+        admitted.submissionId != null &&
+        worldSnapshot?.lastInput?.id === admitted.submissionId
+          ? settledInputFeedback(worldSnapshot.lastInput)
+          : null;
       feedback(
-        queued
-          ? "Acknowledged · Queued — Hearth will start it after the active turn."
-          : "Acknowledged · Queued for Hearth to start.",
+        settled ??
+          (queued
+            ? "Acknowledged · Queued — Hearth will start it after the active turn."
+            : busy
+              ? "Working…"
+              : "Acknowledged · Queued for Hearth to start."),
       );
     }
   } catch (error) {
