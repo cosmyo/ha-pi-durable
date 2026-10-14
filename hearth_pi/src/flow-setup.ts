@@ -45,6 +45,23 @@ export const FLOW_LIMITS = Object.freeze({
 export const FLOW_HANDLER = /^[a-z0-9][a-z0-9_]{0,63}$/;
 // Home Assistant flow ids are ULIDs; accept plain alphanumerics only.
 export const FLOW_ID = /^[A-Za-z0-9]{8,64}$/;
+// config_entries/flow/progress lists every flow whose source is not
+// "user", which also includes flows that are not discoveries: re-entering
+// credentials (reauth), changing an existing entry (reconfigure), YAML
+// import and internal (system) flows. ha_integrations_read still lists them
+// with their source, but Hearth never steps or cancels them (nor a flow
+// whose source Home Assistant did not report): the owner continues them in
+// Home Assistant's own UI.
+export const NOT_DISCOVERED_SOURCES: ReadonlySet<string> = new Set([
+  "reauth",
+  "reconfigure",
+  "import",
+  "system",
+  "user",
+]);
+export function discoveredSource(source: string | null): boolean {
+  return source !== null && !NOT_DISCOVERED_SOURCES.has(source);
+}
 const FIELD_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const TOKEN = /^[A-Za-z0-9_.:-]{1,64}$/;
 // Field names that look like they carry a secret. Such a field is never
@@ -325,9 +342,14 @@ export function flowSummary(
 // its own accepted receipts (Home Assistant's replies, never a model's
 // claims): the handler, the current step, the secret fields Home Assistant
 // asked for and whether the flow ended. Home Assistant does not list
-// user-started flows anywhere read-only, so this is the only record.
+// user-started flows anywhere read-only, so this is the only record for
+// them. A discovered flow is adopted from Hearth's own accepted step on it
+// (its handler was checked against Home Assistant's list then), so the
+// password fields of its next step are known too; it is still only ever
+// stepped while Home Assistant lists it.
 export type KnownFlow = {
   handler: string;
+  source: FlowSource;
   stepId?: string;
   secretFields: string[];
   finished: boolean;
@@ -352,11 +374,20 @@ export function knownFlows(
     if (!flowId) continue;
     const previous = flows.get(flowId);
     // A flow id is only ever adopted from Home Assistant's reply to Hearth's
-    // own start; a later step must agree on the handler.
-    if (action.op !== "init" && !previous) continue;
+    // own start, or from Hearth's own accepted action on a flow the
+    // controller found in Home Assistant's discovered list; a later step
+    // must agree on the handler.
+    if (action.op !== "init" && !previous && action.source !== "discovered")
+      continue;
     const handler = previous?.handler ?? result.handler ?? action.handler;
+    const source: FlowSource =
+      previous?.source ??
+      (action.op !== "init" && action.source === "discovered"
+        ? "discovered"
+        : "hearth");
     flows.set(flowId, {
       handler,
+      source,
       ...(result.stepId ? { stepId: result.stepId } : {}),
       secretFields: (result.fields ?? [])
         .filter((f) => f.secret)
@@ -368,6 +399,46 @@ export function knownFlows(
     });
   }
   return flows;
+}
+
+// The dispatch re-check, inside the commit that marks a flow step or cancel
+// as dispatching: no other action on the same flow is being sent, and a
+// flow Hearth started is still open at the step the proposal was made for
+// in Hearth's own receipts (Home Assistant lists user-started flows nowhere
+// read-only; a discovered flow is re-read from Home Assistant instead). An
+// earlier approved step or cancel moves the flow on, so a stale pending one
+// is refused rather than sent to whatever step is current.
+export function assertFlowCurrent(
+  items: Readonly<Record<string, Proposal>>,
+  item: Proposal,
+) {
+  const action = item.action;
+  if (!("kind" in action) || action.kind !== "flow" || action.op === "init")
+    return;
+  insist(
+    !Object.values(items).some(
+      (p) =>
+        p.id !== item.id &&
+        p.status === "dispatching" &&
+        "kind" in p.action &&
+        p.action.kind === "flow" &&
+        p.action.op !== "init" &&
+        p.action.flowId === action.flowId,
+    ),
+    "flow_changed",
+    409,
+  );
+  if (action.source !== "hearth") return;
+  const known = knownFlows(items).get(action.flowId);
+  insist(
+    known &&
+      known.source === "hearth" &&
+      !known.finished &&
+      known.handler === action.handler &&
+      (action.op === "abort" || known.stepId === action.stepId),
+    "flow_changed",
+    409,
+  );
 }
 
 // Read projections for ha_integrations_read.

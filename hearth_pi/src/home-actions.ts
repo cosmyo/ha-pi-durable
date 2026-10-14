@@ -52,7 +52,7 @@ import {
   writeScope,
 } from "./reconcile.js";
 import type { RiskContext } from "./risk.js";
-import { knownFlows } from "./flow-setup.js";
+import { assertFlowCurrent, knownFlows } from "./flow-setup.js";
 import type { FlowResultSummary } from "./documents.js";
 
 export const ACTION_SCHEMA = 1;
@@ -1263,7 +1263,8 @@ export class HomeActions {
     await this.gate.run(() =>
       runtime.harness.commit(async (tx) => {
         insist(!signal.aborted && !this.stopping, "action_cancelled", 409);
-        const item = (await tx.doc(Proposals, sessionId)).items[proposal.id]!;
+        const items = (await tx.doc(Proposals, sessionId)).items;
+        const item = items[proposal.id]!;
         insist(item.status === "pending", "proposal_already_decided", 409);
         insist(
           item.hash === proposal.hash &&
@@ -1272,6 +1273,7 @@ export class HomeActions {
           "proposal_changed",
           409,
         );
+        assertFlowCurrent(items, item);
         const binding = await this.authorize(
           tx,
           owner,

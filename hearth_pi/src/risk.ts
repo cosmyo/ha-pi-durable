@@ -552,7 +552,7 @@ function classifyFlow(
   return assess(
     "high",
     "integration_setup_abort",
-    `Cancels a ${action.handler} setup${action.source === "discovered" ? " that Home Assistant discovered; it leaves the Discovered list until it is found again" : ""}.`,
+    `Cancels a ${action.handler} setup${action.source === "discovered" ? " that Home Assistant discovered; Home Assistant may offer it again when it finds the device again" : ""}.`,
   );
 }
 

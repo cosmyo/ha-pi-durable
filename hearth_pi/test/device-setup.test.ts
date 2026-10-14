@@ -19,6 +19,7 @@ import {
   FLOW_LINK,
   SECRET_FIELD,
   flowAction,
+  assertFlowCurrent,
   flowSummary,
   knownFlows,
 } from "../src/flow-setup.js";
@@ -264,6 +265,19 @@ test("flow risk: every setup step is high; Hearth's own handler and remote-acces
     assert.equal(risk.level, "high", action.op);
     assert.match(risk.rule, /^integration_setup/);
   }
+  // Cancelling a discovered flow does not promise when it comes back.
+  const cancel = level({
+    kind: "flow",
+    op: "abort",
+    handler: "example_hub",
+    flowId: "01ABCDEF",
+    source: "discovered",
+  });
+  assert.match(
+    cancel.reasons.join(" "),
+    /that Home Assistant discovered; Home Assistant may offer it again/,
+  );
+  assert.ok(!/leaves the Discovered list/.test(cancel.reasons.join(" ")));
   assert.deepEqual([...REMOTE_ACCESS_HANDLERS].sort(), [
     "cloud",
     "homekit",
@@ -488,7 +502,47 @@ test("knownFlows: only flows Hearth started (from Home Assistant's own reply), t
   assert.deepEqual([...flows.keys()], [HEARTH_FLOW_ID]);
   assert.deepEqual(flows.get(HEARTH_FLOW_ID), {
     handler: "example_printer",
+    source: "hearth",
     stepId: "user",
+    secretFields: ["account"],
+    finished: false,
+  });
+  // Hearth's own accepted step on a flow the controller found in Home
+  // Assistant's discovered list is adopted (source "discovered"), so the
+  // password fields of its next step are known.
+  const discovered = knownFlows({
+    ...items,
+    "5": receipt(
+      "5",
+      {
+        kind: "flow",
+        op: "step",
+        handler: "example_hub",
+        flowId: DISCOVERED_FLOW.flow_id,
+        stepId: "confirm",
+        source: "discovered",
+        userInput: {},
+      },
+      {
+        type: "form",
+        flowId: DISCOVERED_FLOW.flow_id,
+        handler: "example_hub",
+        stepId: "auth",
+        fields: [
+          {
+            name: "account",
+            type: "selector:text",
+            required: false,
+            secret: true,
+          },
+        ],
+      },
+    ),
+  });
+  assert.deepEqual(discovered.get(DISCOVERED_FLOW.flow_id), {
+    handler: "example_hub",
+    source: "discovered",
+    stepId: "auth",
     secretFields: ["account"],
     finished: false,
   });
@@ -676,6 +730,273 @@ test("discovered flows: read with ha_integrations_read, stepped with the control
     for (const canary of ["ENTRY_DATA_CANARY", "ENTRY_OPTIONS_CANARY"])
       assert.ok(!entries.includes(canary), canary);
     assert.ok(CONFIG_ENTRIES.length > 0);
+  } finally {
+    await f.close();
+  }
+});
+
+test("assertFlowCurrent: a Hearth-started flow step is sent only at the step it was made for, and never while another action on the flow is being sent", () => {
+  const step = (
+    id: string,
+    stepId: string,
+    status: Proposal["status"] = "pending",
+  ) =>
+    ({
+      id,
+      status,
+      action: {
+        kind: "flow",
+        op: "step",
+        handler: "example_printer",
+        flowId: HEARTH_FLOW_ID,
+        stepId,
+        source: "hearth",
+        userInput: { host: "printer.example" },
+      },
+    }) as unknown as Proposal;
+  const start = {
+    id: "1",
+    status: "accepted",
+    attemptedAt: 1,
+    action: { kind: "flow", op: "init", handler: "example_printer" },
+    flowResult: {
+      type: "form",
+      flowId: HEARTH_FLOW_ID,
+      handler: "example_printer",
+      stepId: "user",
+    },
+  } as Proposal;
+  const current = step("2", "user");
+  assert.doesNotThrow(() =>
+    assertFlowCurrent({ "1": start, "2": current }, current),
+  );
+  // The flow moved on to another step: refused.
+  const moved = {
+    ...start,
+    flowResult: { ...start.flowResult!, stepId: "details" },
+  } as Proposal;
+  assert.throws(
+    () => assertFlowCurrent({ "1": moved, "2": current }, current),
+    /flow_changed/,
+  );
+  // Another action on the same flow is being sent: refused.
+  const sending = step("3", "user", "dispatching");
+  assert.throws(
+    () =>
+      assertFlowCurrent({ "1": start, "2": current, "3": sending }, current),
+    /flow_changed/,
+  );
+  // No receipt of Hearth's own start: refused.
+  assert.throws(
+    () => assertFlowCurrent({ "2": current }, current),
+    /flow_changed/,
+  );
+});
+
+test("discovered flows: Home Assistant's password selector on the next step is refused; a flow Home Assistant no longer lists is not found", async () => {
+  const progress = [DISCOVERED_FLOW];
+  const f = await adminHarness({
+    progress,
+    flow: (method, path) =>
+      method === "POST" &&
+      path === `config/config_entries/flow/${DISCOVERED_FLOW.flow_id}`
+        ? Response.json({
+            type: "form",
+            flow_id: DISCOVERED_FLOW.flow_id,
+            handler: "example_hub",
+            step_id: "auth",
+            data_schema: [
+              { name: "host", type: "string", required: true },
+              { name: "account", selector: { text: { type: "password" } } },
+            ],
+          })
+        : undefined,
+  });
+  const discoveredStep = (userInput: Record<string, unknown>) => ({
+    op: "step",
+    handler: "example_hub",
+    flowId: DISCOVERED_FLOW.flow_id,
+    userInput,
+  });
+  try {
+    await f.mode("ask");
+    const r = await f.run("ha_flow_propose", discoveredStep({}));
+    assert.equal(
+      (r?.action as FlowAction & { op: "step" }).source,
+      "discovered",
+    );
+    await f.ha.actions.decide("owner", f.id, r!.id, r!.hash, "approve");
+    const first = (await f.receipts()).at(-1)!;
+    assert.equal(first.status, "accepted");
+    assert.equal(first.flowResult?.stepId, "auth");
+    assert.deepEqual(
+      first.flowResult?.fields?.filter((x) => x.secret).map((x) => x.name),
+      ["account"],
+    );
+    // Home Assistant now lists the flow at its next step.
+    progress[0] = { ...DISCOVERED_FLOW, step_id: "auth" };
+    const writes = f.writes.length;
+    const count = (await f.receipts()).length;
+    const refusals = async (code: string) =>
+      (await f.toolResults()).split(code).length;
+    const secret = await refusals("flow_secret_field");
+    await f.run(
+      "ha_flow_propose",
+      discoveredStep({ account: "SECRET_CANARY" }),
+    );
+    assert.ok((await refusals("flow_secret_field")) > secret);
+    assert.equal((await f.receipts()).length, count, "nothing stored");
+    assert.equal(f.writes.length, writes, "nothing was sent");
+    assert.ok(!JSON.stringify(await f.receipts()).includes("SECRET_CANARY"));
+    // A non-secret value for the same step is a normal proposal.
+    const host = await f.run(
+      "ha_flow_propose",
+      discoveredStep({ host: "hub.example" }),
+    );
+    assert.equal(host?.status, "pending");
+    assert.equal((host?.action as FlowAction & { op: "step" }).stepId, "auth");
+    // The flow vanished from Home Assistant's list: Hearth's own receipt
+    // for it does not make it a flow Hearth started.
+    progress.length = 0;
+    const missing = await refusals("flow_not_found");
+    await f.run("ha_flow_propose", discoveredStep({ host: "hub.example" }));
+    assert.ok((await refusals("flow_not_found")) > missing);
+    assert.equal(f.writes.length, writes);
+  } finally {
+    await f.close();
+  }
+});
+
+test("discovered list: reauth, reconfigure, import, system and user flows are listed but never stepped or cancelled", async () => {
+  const progress: Record<string, unknown>[] = [];
+  const f = await adminHarness({ progress });
+  try {
+    await f.mode("ask");
+    for (const source of [
+      "reauth",
+      "reconfigure",
+      "import",
+      "system",
+      "user",
+    ]) {
+      progress[0] = {
+        ...DISCOVERED_FLOW,
+        context: { ...DISCOVERED_FLOW.context, source },
+      };
+      await f.run("ha_integrations_read", { source: "discovered" });
+      assert.match(
+        await f.toolResults(),
+        new RegExp(`\\\\"source\\\\":\\\\"${source}\\\\"`),
+      );
+      for (const action of [
+        {
+          op: "step",
+          handler: "example_hub",
+          flowId: DISCOVERED_FLOW.flow_id,
+          userInput: {},
+        },
+        {
+          op: "abort",
+          handler: "example_hub",
+          flowId: DISCOVERED_FLOW.flow_id,
+        },
+      ]) {
+        const before = (await f.toolResults()).split(
+          "flow_source_not_supported",
+        ).length;
+        await f.run("ha_flow_propose", action);
+        assert.ok(
+          (await f.toolResults()).split("flow_source_not_supported").length >
+            before,
+          `${source} ${action.op}`,
+        );
+      }
+    }
+    assert.equal((await f.receipts()).length, 0);
+    // A discovery flow whose source turns into one of these before the
+    // approval is refused at dispatch, and nothing is sent.
+    progress[0] = DISCOVERED_FLOW;
+    const r = await f.run("ha_flow_propose", {
+      op: "step",
+      handler: "example_hub",
+      flowId: DISCOVERED_FLOW.flow_id,
+      userInput: {},
+    });
+    assert.equal(r?.status, "pending");
+    progress[0] = {
+      ...DISCOVERED_FLOW,
+      context: { ...DISCOVERED_FLOW.context, source: "reauth" },
+    };
+    const writes = f.writes.length;
+    await assert.rejects(
+      f.ha.actions.decide("owner", f.id, r!.id, r!.hash, "approve"),
+      /flow_source_not_supported/,
+    );
+    assert.equal(f.writes.length, writes);
+    assert.equal((await f.receipts()).at(-1)?.status, "pending");
+  } finally {
+    await f.close();
+  }
+});
+
+test("Hearth-started flows: a stale pending step is refused at dispatch once an earlier one moved the flow on; the next step proposed from the receipt runs", async () => {
+  const f = await started({
+    flow: (method, path) =>
+      method === "POST" &&
+      path === `config/config_entries/flow/${HEARTH_FLOW_ID}`
+        ? Response.json({
+            type: "form",
+            flow_id: HEARTH_FLOW_ID,
+            handler: "example_printer",
+            step_id: "details",
+            data_schema: [{ name: "room", type: "string" }],
+          })
+        : undefined,
+  });
+  try {
+    const a = await f.run(
+      "ha_flow_propose",
+      hearthStep({ host: "a.example", mode: "local" }),
+    );
+    const b = await f.run(
+      "ha_flow_propose",
+      hearthStep({ host: "b.example", mode: "local" }),
+    );
+    assert.deepEqual([a?.status, b?.status], ["pending", "pending"]);
+    await f.ha.actions.decide("owner", f.id, a!.id, a!.hash, "approve");
+    const moved = (await f.receipts()).find((p) => p.id === a!.id)!;
+    assert.equal(moved.status, "accepted");
+    assert.equal(moved.flowResult?.stepId, "details");
+    // b was made for step "user"; the flow is now at "details".
+    const writes = f.writes.length;
+    await assert.rejects(
+      f.ha.actions.decide("owner", f.id, b!.id, b!.hash, "approve"),
+      /flow_changed/,
+    );
+    assert.equal(f.writes.length, writes, "nothing was sent");
+    assert.equal(
+      (await f.receipts()).find((p) => p.id === b!.id)?.status,
+      "pending",
+    );
+    const c = await f.run("ha_flow_propose", hearthStep({ room: "Study" }));
+    assert.equal((c?.action as FlowAction & { op: "step" }).stepId, "details");
+    await f.ha.actions.decide("owner", f.id, c!.id, c!.hash, "approve");
+    assert.equal(
+      (await f.receipts()).find((p) => p.id === c!.id)?.status,
+      "accepted",
+    );
+    // A step still pending when the flow was cancelled is refused.
+    const stale = await f.run("ha_flow_propose", hearthStep({ room: "Study" }));
+    const abort = await f.run("ha_flow_propose", {
+      op: "abort",
+      handler: "example_printer",
+      flowId: HEARTH_FLOW_ID,
+    });
+    await f.ha.actions.decide("owner", f.id, abort!.id, abort!.hash, "approve");
+    await assert.rejects(
+      f.ha.actions.decide("owner", f.id, stale!.id, stale!.hash, "approve"),
+      /flow_changed/,
+    );
   } finally {
     await f.close();
   }
@@ -875,6 +1196,13 @@ test("abort: cancels the flow Hearth started; tools, prompt and skill are presen
     assert.ok(HA_ADMIN_WEBSOCKET_TYPES.includes(type), type);
     assert.ok(!(HA_WEBSOCKET_TYPES as readonly string[]).includes(type), type);
   }
+  // True with trusted people too: high and critical wait unless a trusted
+  // owner's own direct turn on Full access (not a guard-flagged one).
+  assert.ok(!ADMIN_PROMPT.includes("always wait"));
+  assert.match(
+    ADMIN_PROMPT,
+    /high and critical wait for that approval, and critical also needs a typed confirmation, except that a trusted owner's own direct turn on Full access runs at every level with a trusted receipt \(not when the injection guard flagged that turn's tool output\)/,
+  );
   assert.match(ADMIN_PROMPT, /ha_flow_propose/);
   assert.match(ADMIN_PROMPT, /add-a-device/);
   assert.match(ADMIN_PROMPT, /Never ask for, accept or repeat passwords/);

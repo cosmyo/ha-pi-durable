@@ -43,6 +43,9 @@ Assistant's own UI and never in chat.
    confirm the brand or model. Do not guess between two integrations.
 3. **Choose the path.**
    - Discovered flow: use its `flowId` and `handler`.
+   - A listed flow whose `source` is `reauth`, `reconfigure`, `import` or
+     `system` is not a new device: Hearth cannot step or cancel it; the
+     owner continues it in Home Assistant (Settings > Devices & services).
    - Not discovered: start one with `op: "init"` and the handler.
    - Pairing-heavy devices (Matter, Thread, HomeKit devices, Zigbee or
      Z-Wave devices joining an existing network, anything with a QR code or
