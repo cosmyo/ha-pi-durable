@@ -593,9 +593,14 @@ test("model dropdown is text-only, drafts do not apply, failures refresh authori
     fail = true;
     apply.dispatchEvent(new window.Event("click"));
     await new Promise((resolve) => setTimeout(resolve, 10));
+    // A plain sentence with what to do, also inside the model sheet.
     assert.match(
       document.getElementById("feedback")!.textContent!,
-      /not confirmed/,
+      /changed somewhere else.*pick again/,
+    );
+    assert.equal(
+      document.getElementById("model-hint")!.textContent,
+      document.getElementById("feedback")!.textContent,
     );
     assert.equal(picker.value, "second");
     assert.equal(apply.disabled, true);

@@ -176,8 +176,14 @@
             ></textarea
             ><button id="send" type="submit" disabled aria-label="Send">
               <span aria-hidden="true">↑</span></button
-            ><button id="stop" type="button" disabled>Stop</button
-            ><button id="retry" type="button" hidden>Retry saved input</button>
+            ><button id="stop" type="button" disabled>Stop</button>
+            <div id="saved-actions" hidden>
+              <button id="retry" type="button" hidden>Retry saved input</button
+              ><button id="discard-saved" type="button" hidden>Discard</button
+              ><button id="saved-new-chat" type="button" hidden>
+                Start a new chat
+              </button>
+            </div>
           </form>
           <div class="composer-chips">
             <button
@@ -578,6 +584,7 @@
     <dialog id="model-dialog" aria-label="Session model">
       <h2>Model</h2>
       <div class="model-picker" aria-label="Session model">
+        <p id="model-hint" role="status"></p>
         <label for="model-choice">Model for next input</label>
         <select id="model-choice" disabled></select>
         <label for="thinking-choice">Thinking</label>

@@ -1320,8 +1320,19 @@ const SCENES = [
           run: { id: 1 },
           tools: [{ name: "ha_read_state", status: "running" }],
         },
+        "pi.inbox": {
+          items: [
+            {
+              id: 2,
+              mode: "followUp",
+              content: [{ type: "text", text: "Also check the hallway" }],
+            },
+          ],
+        },
       };
     },
+    // A follow-up typed while Hearth answers: Stop and Send side by side.
+    run: (f) => f.locator("#message").fill("And the porch"),
   },
   {
     name: "chat-retry-saved",
@@ -1329,7 +1340,12 @@ const SCENES = [
       page.addInitScript(() => {
         sessionStorage.setItem(
           "hearth:pending:1",
-          JSON.stringify({ requestId: "r1", content: "Unsent message" }),
+          // A definite refusal: Retry, Discard and Start a new chat.
+          JSON.stringify({
+            requestId: "r1",
+            content: "Unsent message",
+            refused: "input_limit_create_session",
+          }),
         );
       }),
   },

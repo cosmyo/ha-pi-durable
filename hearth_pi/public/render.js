@@ -781,6 +781,30 @@ export function renderMessages(
   }
   const liveTools = buildLiveActivity(live.tools ?? []);
   if (liveTools) fragment.append(liveTools);
+  // Messages typed while Hearth answers wait in the chat's inbox (Pi
+  // Durable follow-ups) and are sent, one at a time, when the turn finishes.
+  for (const item of snapshot.view.docs["pi.inbox"]?.items ?? []) {
+    if (item.mode === "write") continue;
+    const article = node("article", "", "message user queued");
+    article.append(node("h3", "You"));
+    const value = messageText({ content: item.content });
+    if (value) article.append(node("pre", value));
+    const images = Array.isArray(item.content)
+      ? item.content.filter((block) => block?.type === "image").length
+      : 0;
+    if (images)
+      article.append(
+        node(
+          "p",
+          images === 1 ? "1 image attached" : `${images} images attached`,
+          "queued-note",
+        ),
+      );
+    article.append(
+      node("p", "Queued \u2014 sends when Hearth finishes", "queued-note"),
+    );
+    fragment.append(article);
+  }
   container.replaceChildren(fragment);
 }
 export function renderCanvas(container, canvas, ask) {

@@ -50,6 +50,56 @@ const THINKING_LABEL = {
   xhigh: "Extra high",
   max: "Max",
 };
+// Refusals of a saved message that the server makes before admitting
+// anything (4xx with one of these codes): the message was certainly not
+// accepted, so besides Retry it may be discarded. Every other failure keeps
+// Retry only.
+const INPUT_REFUSALS = {
+  session_busy:
+    "This chat can't take another message right now (a few are already waiting). Retry when Hearth finishes, or discard this one.",
+  capacity:
+    "Hearth is busy with other chats right now. Retry in a moment, or discard this message.",
+  transcript_limit_create_session:
+    "This chat is full. Start a new chat to keep going; your message comes along.",
+  input_limit_create_session:
+    "This chat has reached its message limit. Start a new chat to keep going; your message comes along.",
+  image_limit_create_session:
+    "This chat already holds many images. Start a new chat to send more; your message comes along.",
+  subscription_login_required:
+    "This chat's model needs you to sign in first (Settings \u203a Account). Then retry, or discard the message.",
+  local_endpoint_required:
+    "This chat's local model server isn't set up yet (Settings \u203a Account). Then retry, or discard the message.",
+};
+// Refusals a fresh chat solves: offer "Start a new chat".
+const NEW_CHAT_REFUSALS = new Set([
+  "transcript_limit_create_session",
+  "input_limit_create_session",
+  "image_limit_create_session",
+]);
+// Plain sentences for a refused model change, with what to do.
+const MODEL_REFUSALS = {
+  action_unresolved:
+    "An action in this chat is still waiting for you. Answer or dismiss the waiting approval first (or settle an uncertain result), then change the model.",
+  session_busy:
+    "Hearth is still answering in this chat. Change the model when it finishes.",
+  unsupported_thinking:
+    "This model doesn't offer that thinking level. Pick one of the levels listed for it.",
+  stale_model_selection:
+    "The model was just changed somewhere else. The current choice is shown; pick again if you still want to change it.",
+  unsupported_model: "That model isn't available any more. Pick another one.",
+  provider_unavailable:
+    "That account isn't available on this installation. Pick another model.",
+  subscription_login_required:
+    "Sign in to that account first (Settings \u203a Account), then pick the model again.",
+  workspace_continuation_blocked:
+    "This Code chat is paused after an uncertain operation. Send it a new message first, then change the model.",
+};
+function modelRefusal(error) {
+  if (MODEL_REFUSALS[error.code]) return MODEL_REFUSALS[error.code];
+  if (error.status >= 400 && error.status < 500)
+    return `The model was not changed (${error.code || error.message}).`;
+  return "Couldn't confirm the model change. The current model is shown; check it before trying again.";
+}
 // Hearth Assist is on (bootstrap); its status loads when About opens.
 let assistEnabled = false;
 let csrf = "",
@@ -76,6 +126,12 @@ let csrf = "",
   modelSelection = null,
   modelDraftDirty = false,
   applyingModel = false,
+  // The last model refusal, shown inside the model sheet until the next choice.
+  modelNotice = "",
+  // From the snapshot: messages queued behind the running turn, and whether an
+  // action waits for a person (the server refuses model changes then).
+  queuedInputs = 0,
+  actionWaiting = false,
   authProviders = [],
   accountStatuses = new Map(),
   activeAuthProvider = "",
@@ -160,7 +216,12 @@ async function api(path, payload) {
         "Browser protection refreshed. Retry your saved request explicitly.",
       );
     }
-    throw new Error(value.error ?? "Request failed");
+    // `status` and `code` let callers tell a definite refusal (a 4xx with a
+    // known code) from an outcome they cannot know.
+    const error = new Error(value.error ?? "Request failed");
+    error.status = response.status;
+    error.code = typeof value.error === "string" ? value.error : "";
+    throw error;
   }
   return value;
 }
@@ -393,14 +454,46 @@ function pending() {
     return null;
   }
 }
+// Why the model sheet's choices are disabled, in plain words; "" when they
+// are not.
+function modelBlockedReason(saved) {
+  if (!selected) return "Open a chat to choose its model.";
+  if (!modelSelection) return "Loading this chat's model…";
+  if (!modelChoices.length)
+    return "No models are available right now. Check Settings › Account.";
+  if (applyingModel) return "Applying…";
+  if (busy || queuedInputs)
+    return "Hearth is answering in this chat. You can change the model when it finishes.";
+  if (sending || saved)
+    return "Your last message isn't confirmed yet. Retry or discard it first, then change the model.";
+  if (actionWaiting)
+    return "An action in this chat is waiting for you. Answer or dismiss the approval first, then change the model.";
+  return "";
+}
 function controls() {
   const saved = pending();
+  $("saved-actions").hidden = !saved;
   $("retry").hidden = !saved;
+  $("retry").disabled = sending;
+  // Discard only after a definite refusal: the server certainly did not
+  // admit the message. After an unknown outcome only Retry (same request
+  // ID, never run twice) is offered.
+  $("discard-saved").hidden = !INPUT_REFUSALS[saved?.refused];
+  $("discard-saved").disabled = sending;
+  $("saved-new-chat").hidden = !NEW_CHAT_REFUSALS.has(saved?.refused);
+  $("saved-new-chat").disabled = sending;
   $("safety").textContent =
     selectedKind === "workspace"
       ? "Isolated coding workspace · no HA or network access"
       : homeSafety;
-  $("message").disabled = busy || !!saved || sending;
+  // While Hearth answers a Home chat the person can type a follow-up; it
+  // waits and is sent when the turn finishes. Code chats wait.
+  const followUp = busy && selectedKind !== "workspace";
+  $("message").disabled =
+    (busy && selectedKind === "workspace") || !!saved || sending;
+  $("message").placeholder = followUp
+    ? "Add a follow-up…"
+    : "What would you like to understand?";
   // Images: Home chats only; the model's image support is explained on tap.
   $("attach").hidden = !!selected && selectedKind !== "home";
   $("attach").disabled = !selected || $("message").disabled;
@@ -409,21 +502,22 @@ function controls() {
   const loginCommand = /^\/login(?:\s|$)/.test($("message").value.trim());
   $("send").disabled =
     $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
+  // Stop stays reachable during a run; Send appears next to it once there
+  // is a follow-up to send.
+  const draft = !!$("message").value.trim() || attachments.length > 0;
   $("stop").hidden = !busy;
   $("stop").disabled = !selected || !busy;
-  $("send").hidden = busy;
-  $("model-choice").disabled =
-    !selected ||
-    !modelSelection ||
-    busy ||
-    applyingModel ||
-    !!saved ||
-    sending ||
-    !modelChoices.length;
+  $("send").hidden = busy && !(followUp && draft);
+  const blocked = modelBlockedReason(saved);
+  $("model-choice").disabled = !!blocked;
   $("thinking-choice").disabled = $("model-choice").disabled;
+  $("model-hint").textContent = blocked || modelNotice;
+  const chosen = $("model-choice").value;
   $("apply-model").disabled =
     $("model-choice").disabled ||
-    ($("model-choice").value === modelSelection?.model?.modelId &&
+    !chosen ||
+    !thinkingLevelsFor(chosen).includes($("thinking-choice").value) ||
+    (chosen === modelValue(modelSelection?.model) &&
       $("thinking-choice").value === modelSelection?.thinkingLevel);
   $("canvas-toggle").hidden = selectedKind === "workspace";
   // Collapsed means fully hidden, not an empty bordered box: there is
@@ -604,15 +698,20 @@ function snapshot(value) {
     $("model-chip").textContent = active
       ? `${active.modelId} · ${THINKING_LABEL[modelSelection.thinkingLevel] ?? modelSelection.thinkingLevel}`
       : "Model unavailable";
-    if (
-      !modelDraftDirty ||
-      !modelChoices.some((m) => m.id === $("model-choice").value)
-    ) {
-      $("model-choice").value = active?.modelId ?? "";
-      $("thinking-choice").value = modelSelection.thinkingLevel ?? "off";
+    if (!modelDraftDirty || !choiceFor($("model-choice").value)) {
+      $("model-choice").value = modelValue(active);
+      paintThinking(
+        $("model-choice").value,
+        modelSelection.thinkingLevel ?? "off",
+        true,
+      );
       modelDraftDirty = false;
     }
   }
+  queuedInputs = (value.view.docs?.["pi.inbox"]?.items ?? []).length;
+  actionWaiting = Object.values(value.proposals ?? {}).some((p) =>
+    ["pending", "dispatching", "unknown"].includes(p.status),
+  );
   // Re-render the transcript only when it changed: a long conversation on a
   // phone otherwise rebuilds on every live event (jank, lost scroll/selection).
   const entries = value.view.entries ?? [];
@@ -621,6 +720,7 @@ function snapshot(value) {
     entries.length,
     entries[entries.length - 1] ?? null,
     value.view.docs["pi.live"] ?? null,
+    value.view.docs["pi.inbox"] ?? null,
   ]);
   const transcriptChanged = nextMessageSignature !== messageSignature;
   if (transcriptChanged) {
@@ -847,6 +947,9 @@ async function select(session) {
   clearAttachments();
   modelSelection = null;
   modelDraftDirty = false;
+  modelNotice = "";
+  queuedInputs = 0;
+  actionWaiting = false;
   $("active-model").textContent = "Loading session model…";
   $("model-chip").textContent = "Loading…";
   $("model-choice").value = "";
@@ -894,10 +997,61 @@ async function select(session) {
     feedback(error.message);
   }
 }
+// Record (or clear) a definite refusal on the saved input. Cleared before
+// every attempt, so a page that dies mid-request never offers Discard for
+// an input whose outcome is unknown.
+function markSaved(id, refused) {
+  const key = `hearth:pending:${id}`;
+  try {
+    const value = JSON.parse(sessionStorage.getItem(key) ?? "null");
+    if (!value) return false;
+    if (refused) value.refused = refused;
+    else delete value.refused;
+    sessionStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+// Remove a definitely refused saved input and hand back its text and images.
+function takeRefused() {
+  const value = pending();
+  if (!value || !INPUT_REFUSALS[value.refused] || sending) return null;
+  const images = value.images ?? pendingImages.get(value.requestId);
+  sessionStorage.removeItem(`hearth:pending:${selected}`);
+  pendingImages.delete(value.requestId);
+  return { content: value.content, images };
+}
+function imageFromData(image) {
+  const bytes = Uint8Array.from(atob(image.data), (c) => c.charCodeAt(0));
+  return {
+    mimeType: image.mimeType,
+    data: image.data,
+    url: URL.createObjectURL(new Blob([bytes], { type: image.mimeType })),
+  };
+}
+function restoreDraft(draft) {
+  $("message").value = draft.content;
+  if (draft.images?.length && !attachments.length) {
+    try {
+      attachments = draft.images.map(imageFromData);
+    } catch {
+      attachments = [];
+    }
+    renderAttachments();
+  }
+  fitComposer();
+  controls();
+}
 async function sendSaved() {
   const value = pending();
   if (!value || sending) return;
   const id = selected;
+  if (!markSaved(id, "")) {
+    feedback("Browser session storage unavailable; input was not sent.");
+    return;
+  }
+  const queued = busy;
   const body = { requestId: value.requestId, content: value.content };
   if (value.imageCount) {
     const images = value.images ?? pendingImages.get(value.requestId);
@@ -923,9 +1077,23 @@ async function sendSaved() {
       $("message").value = "";
       clearAttachments();
       fitComposer();
-      feedback("Input durably admitted.");
+      feedback(
+        queued
+          ? "Queued \u2014 sends when Hearth finishes."
+          : "Input durably admitted.",
+      );
     }
   } catch (error) {
+    if (
+      error.status >= 400 &&
+      error.status < 500 &&
+      INPUT_REFUSALS[error.code]
+    ) {
+      // Refused before admission: kept for Retry, and now also Discard.
+      markSaved(id, error.code);
+      if (selected === id) feedback(INPUT_REFUSALS[error.code]);
+      return;
+    }
     if (IMAGE_ERRORS[error.message]) {
       // Refused before admission: nothing to retry; keep the draft.
       sessionStorage.removeItem(`hearth:pending:${id}`);
@@ -934,8 +1102,10 @@ async function sendSaved() {
       feedback(IMAGE_ERRORS[error.message]);
       return;
     }
+    // Network error, timeout, 5xx or an unknown code: the message may have
+    // arrived. Retry reuses its request ID, so it never runs twice.
     feedback(
-      `Not acknowledged: ${error.message}. Your original request ID is saved for retry.`,
+      `Hearth couldn't confirm your message arrived${error.code ? ` (${error.code})` : ""}. Retry sends it again safely; the same message never runs twice.`,
     );
   } finally {
     sending = false;
@@ -947,7 +1117,7 @@ async function sendSaved() {
 }
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (busy || sending || pending()) return;
+  if (sending || pending() || (busy && selectedKind === "workspace")) return;
   const content = $("message").value.trim();
   if (!content) return;
   if (/^\/login\b/.test(content)) {
@@ -1157,6 +1327,19 @@ $("message").addEventListener("input", () => {
 $("retry").addEventListener("click", () => {
   void sendSaved();
 });
+$("discard-saved").addEventListener("click", () => {
+  const draft = takeRefused();
+  if (!draft) return;
+  restoreDraft(draft);
+  feedback("Not sent. Your message is back in the box to edit or send later.");
+});
+$("saved-new-chat").addEventListener("click", async () => {
+  const draft = takeRefused();
+  if (!draft) return;
+  const started = await newSession("home");
+  restoreDraft(draft);
+  if (started) feedback("New chat started. Your message is ready; press Send.");
+});
 // Matches the server's own session-title bound (runtime.ts: text(title, 80)).
 // Without this, an ordinary long title silently fails new-chat with a raw
 // "invalid_request" error instead of creating a session.
@@ -1182,8 +1365,10 @@ async function newSession(kind) {
     await listSessions();
     if (compact()) closeDrawer();
     $("message").focus();
+    return true;
   } catch (error) {
     feedback(error.message);
+    return false;
   }
 }
 $("new-session").addEventListener("click", () => {
@@ -1196,10 +1381,13 @@ $("new-chat-icon").addEventListener("click", () => {
   void newSession("home");
 });
 $("stop").addEventListener("click", async () => {
+  const waiting = queuedInputs;
   try {
     await api(`sessions/${selected}/abort`, {});
     feedback(
-      "Task stopped. Already dispatched external actions are not undone.",
+      waiting
+        ? "Task stopped. Messages waiting behind it were not sent. Already dispatched external actions are not undone."
+        : "Task stopped. Already dispatched external actions are not undone.",
     );
   } catch (error) {
     feedback(error.message);
@@ -1222,6 +1410,9 @@ function showWelcome() {
   selectedKind = "home";
   modelSelection = null;
   modelDraftDirty = false;
+  modelNotice = "";
+  queuedInputs = 0;
+  actionWaiting = false;
   actionSignature = "";
   canvasSignature = "";
   messageSignature = "";
@@ -1645,26 +1836,30 @@ $("login-logout").addEventListener("click", async () => {
 });
 $("model-choice").addEventListener("change", () => {
   modelDraftDirty = true;
-  // A newly chosen model starts at the configured thinking default. The server
-  // checks its actual registry support; choosing does not apply either field.
-  $("thinking-choice").value = defaultThinkingLevel;
+  modelNotice = "";
+  // A newly chosen model starts at the configured thinking default when it
+  // has it, else at a level it does have; only its levels are offered. The
+  // server checks again; choosing does not apply either field.
+  paintThinking($("model-choice").value, defaultThinkingLevel);
   controls();
 });
 $("thinking-choice").addEventListener("change", () => {
   modelDraftDirty = true;
+  modelNotice = "";
   controls();
 });
 $("apply-model").addEventListener("click", async () => {
   if (!selected || !modelSelection || $("apply-model").disabled) return;
   const id = selected;
   const revision = modelSelection.revision;
-  const raw = $("model-choice").value;
   // Multi-provider catalogs encode "provider\u0000modelId" to disambiguate
   // ids that collide across providers; the configured inference provider's
-  // own models keep a plain modelId value and omit the field (= default).
-  const [maybeProvider, maybeModelId] = raw.split("\u0000");
-  const modelId = maybeModelId ?? raw;
-  const modelProvider = maybeModelId ? maybeProvider : undefined;
+  // own models omit the field (= default).
+  const raw = $("model-choice").value;
+  const chosen = modelFromValue(raw);
+  if (!chosen) return;
+  const modelId = chosen.modelId;
+  const modelProvider = raw.includes("\u0000") ? chosen.provider : undefined;
   const thinkingLevel = $("thinking-choice").value;
   applyingModel = true;
   controls();
@@ -1682,13 +1877,13 @@ $("apply-model").addEventListener("click", async () => {
       if (selected !== id) return;
       modelDraftDirty = false;
       snapshot(updated);
+      modelNotice = "Applied. Your next message uses it.";
       feedback("Model and thinking applied to this session's next input.");
     }
   } catch (error) {
     if (selected === id) {
-      feedback(
-        `Model not confirmed: ${error.message}. Review the active model before applying again.`,
-      );
+      modelNotice = modelRefusal(error);
+      feedback(modelNotice);
       try {
         const updated = await api(`sessions/${id}/snapshot`);
         if (selected === id) {
@@ -2044,8 +2239,20 @@ function modelOptions(leadingLabel) {
   return choices;
 }
 async function loadModels() {
+  const draft = modelDraftDirty ? $("model-choice").value : "";
   modelChoices = (await api("models")).items;
   $("model-choice").replaceChildren(modelOptions());
+  if (draft && choiceFor(draft)) $("model-choice").value = draft;
+  else if (modelSelection) {
+    // The rebuilt list shows the chat's committed model again.
+    modelDraftDirty = false;
+    $("model-choice").value = modelValue(modelSelection.model);
+    paintThinking(
+      $("model-choice").value,
+      modelSelection.thinkingLevel ?? "off",
+      true,
+    );
+  }
   // Settings \u2192 You's default-model select is only (re)built when the
   // sheet opens (paintYou \u2192 paintYouModelOptions): it writes .value,
   // which only a handful of tests stub on this third select, so it must
@@ -2319,21 +2526,60 @@ function setYouTone(tone) {
   for (const button of $("you-dialog").querySelectorAll("[data-tone]"))
     button.setAttribute("aria-pressed", String(button.dataset.tone === tone));
 }
-// Same "provider\u0000modelId" encoding as the session model-choice select;
-// a plain modelId when only one provider's models are listed.
-function encodeYouModel(model) {
+// One select value per model, shared by the session model-choice select and
+// Settings \u2192 You: "provider\u0000modelId" when more than one provider's
+// models are listed, else the plain modelId.
+function modelValue(model) {
   if (!model) return "";
   const providers = new Set(modelChoices.map((m) => m.provider));
   return providers.size > 1
     ? `${model.provider}\u0000${model.modelId}`
     : model.modelId;
 }
-function decodeYouModel(raw) {
+function modelFromValue(raw) {
   if (!raw) return null;
   const [a, b] = raw.split("\u0000");
   if (b) return { provider: a, modelId: b };
   const found = modelChoices.find((m) => m.id === raw);
   return found ? { provider: found.provider, modelId: raw } : null;
+}
+function choiceFor(raw) {
+  const model = modelFromValue(raw);
+  return model
+    ? modelChoices.find(
+        (m) => m.provider === model.provider && m.id === model.modelId,
+      )
+    : undefined;
+}
+// The thinking levels the server accepts for a model (from /api/models);
+// every level when an older server does not say.
+function thinkingLevelsFor(raw) {
+  const levels = choiceFor(raw)?.thinkingLevels;
+  return Array.isArray(levels) ? levels : Object.keys(THINKING_LABEL);
+}
+// Offer only the chosen model's levels, so an unsupported pair cannot be
+// applied. Keeps `preferred` when the model has it; else the installation
+// default; else the model's first level. `committed`: the chat's current
+// level stays listed even if the catalog no longer offers it.
+function paintThinking(raw, preferred, committed = false) {
+  const levels = thinkingLevelsFor(raw);
+  const shown =
+    committed && preferred && !levels.includes(preferred)
+      ? [...levels, preferred]
+      : levels;
+  $("thinking-choice").replaceChildren(
+    ...shown.map((level) => {
+      const option = document.createElement("option");
+      option.value = level;
+      option.textContent = THINKING_LABEL[level] ?? level;
+      return option;
+    }),
+  );
+  $("thinking-choice").value = shown.includes(preferred)
+    ? preferred
+    : levels.includes(defaultThinkingLevel)
+      ? defaultThinkingLevel
+      : (levels[0] ?? "off");
 }
 function paintYouModelOptions() {
   const select = $("you-model-choice");
@@ -2351,7 +2597,7 @@ function paintYou() {
   setYouTone(youData.tone ?? "");
   $("you-language").value = youData.language ?? "";
   paintYouModelOptions();
-  $("you-model-choice").value = encodeYouModel(youData.defaultModel);
+  $("you-model-choice").value = modelValue(youData.defaultModel);
   $("you-thinking-choice").disabled = !youData.defaultModel;
   $("you-thinking-choice").value = youData.defaultThinking ?? "";
 }
@@ -2392,7 +2638,7 @@ $("you-model-choice").addEventListener("change", () => {
 });
 $("you-save").addEventListener("click", async () => {
   if (!youData) return;
-  const model = decodeYouModel($("you-model-choice").value);
+  const model = modelFromValue($("you-model-choice").value);
   try {
     youData = await api("profile", {
       displayName: $("you-name").value,

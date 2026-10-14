@@ -421,6 +421,16 @@ button.primary {
 .message.user h3 {
   color: var(--warm);
 }
+/* A follow-up typed while Hearth answers: shown quietly until it is sent. */
+.message.user.queued {
+  border-style: dashed;
+  opacity: 0.8;
+}
+.queued-note {
+  margin: 6px 0 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
 pre {
   font: inherit;
   font-size: 0.93rem;
@@ -797,8 +807,18 @@ textarea::placeholder {
   color: #2a1510;
   border-color: #e08b7a;
 }
-#retry {
+/* Retry / Discard / Start a new chat for a saved, unconfirmed message. */
+#saved-actions {
   flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#saved-actions[hidden] {
+  display: none;
+}
+#saved-actions button {
+  flex: 1 1 auto;
 }
 #attach {
   flex-shrink: 0;
@@ -1027,6 +1047,9 @@ dialog .actions {
 .model-picker p {
   margin: 4px 0;
   color: var(--muted);
+}
+#model-hint:empty {
+  display: none;
 }
 /* Settings \u2192 You: a short personal form, same control sizing as the
    model picker. The tone group is a row of toggle buttons (44px minimum
