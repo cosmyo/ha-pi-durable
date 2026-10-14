@@ -17,7 +17,7 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { supportsThinking } from "./models.js";
 import { LOCAL_PROVIDER } from "./local.js";
 import { ownerKey } from "./memory.js";
-import { OwnerProfile } from "./profile.js";
+import { OwnerProfile, THINKING_LEVELS } from "./profile.js";
 import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import {
@@ -50,6 +50,10 @@ import {
   withoutImageData,
   type ImageAttachment,
 } from "./images.js";
+
+// Messages a person may queue behind a running Home turn; more are refused
+// as session_busy until the queue drains.
+export const FOLLOW_UP_QUEUE_LIMIT = 3;
 
 export type ExtensionGroups = {
   home: Extension[];
@@ -424,6 +428,8 @@ export class Runtime {
   // The configured provider's in-process chat registry plus that of every
   // signed-in OAuth provider. These fields are projected explicitly: never
   // serialize a provider/model object. (provider, id) is the key.
+  // `thinkingLevels` are the levels selectModel accepts for that model, so
+  // the picker never offers a pair the server refuses.
   modelChoices() {
     const providers = [
       this.model.provider,
@@ -441,7 +447,14 @@ export class Runtime {
             !/^(sk-|bearer|eyJ)/i.test(m.id),
         )
         .slice(0, 200)
-        .map((m) => ({ id: m.id, name: m.name.slice(0, 120), provider })),
+        .map((m) => ({
+          id: m.id,
+          name: m.name.slice(0, 120),
+          provider,
+          thinkingLevels: THINKING_LEVELS.filter((level) =>
+            supportsThinking(this.models, provider, m.id, level),
+          ),
+        })),
     );
   }
   /** Providers a session may be committed to: configured and available OAuth. */
@@ -486,9 +499,7 @@ export class Runtime {
     );
     insist(
       typeof thinkingLevel === "string" &&
-        ["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(
-          thinkingLevel,
-        ),
+        (THINKING_LEVELS as readonly string[]).includes(thinkingLevel),
       "invalid_thinking_level",
     );
     insist(
@@ -589,14 +600,22 @@ export class Runtime {
   // `options` (set by the server, never from a browser body): the input's
   // channel and its Ask ceiling (Hearth Assist), and `direct` when it is the
   // person's own turn (the composer, or the Assist button under their own
-  // user), committed with the input itself.
+  // user), committed with the input itself. `followUp` (the composer only)
+  // lets a message typed while Hearth works on a Home chat wait as a Pi
+  // Durable follow-up instead of being refused; everything else still
+  // refuses a busy chat.
   async submit(
     owner: string,
     id: number,
     requestId: unknown,
     content: unknown,
     attachments?: unknown,
-    options: { channel?: InputChannel; ceiling?: "ask"; direct?: boolean } = {},
+    options: {
+      channel?: InputChannel;
+      ceiling?: "ask";
+      direct?: boolean;
+      followUp?: boolean;
+    } = {},
   ): Promise<number> {
     const key = text(requestId, 80);
     insist(requestPattern.test(key));
@@ -608,7 +627,11 @@ export class Runtime {
         (options.channel !== "satellite" || options.ceiling === "ask") &&
         (options.direct === undefined || typeof options.direct === "boolean") &&
         // A ceiled input (anyone in the room can speak) is never direct.
-        !(options.direct && options.ceiling),
+        !(options.direct && options.ceiling) &&
+        (options.followUp === undefined ||
+          typeof options.followUp === "boolean") &&
+        // Only the person's own typed message may wait behind a run.
+        !(options.followUp && (options.channel || !options.direct)),
     );
     const direct = options.direct === true;
     const images = parseImages(attachments);
@@ -651,16 +674,30 @@ export class Runtime {
         );
       }
       const inspection = await this.harness.inspect(ctx);
-      insist(
-        !inspection.tasks.some((t) => t.record.conversationId === id),
-        "session_busy",
-        409,
+      const active = new Set(
+        inspection.tasks.map((t) => t.record.conversationId as number),
       );
-      insist(
-        new Set(inspection.tasks.map((t) => t.record.conversationId)).size < 4,
-        "capacity",
-        429,
-      );
+      if (active.has(id)) {
+        // A follow-up is queued in the chat's Pi Durable inbox and starts
+        // its own run when this one answers (one at a time), with its own
+        // input record and permission binding below. Code sessions keep
+        // refusing: their uncertain-operation pause counts human inputs.
+        const live = await this.harness.snapshot(LiveDoc, conversation.id, ctx);
+        const inbox = await this.harness.snapshot(
+          InboxDoc,
+          conversation.id,
+          ctx,
+        );
+        insist(
+          options.followUp === true &&
+            !!live?.run &&
+            (inbox?.items.length ?? 0) < FOLLOW_UP_QUEUE_LIMIT &&
+            (await this.list(owner)).find((s) => s.id === id)?.kind !==
+              "workspace",
+          "session_busy",
+          409,
+        );
+      } else insist(active.size < 4, "capacity", 429);
       const entries = (await conversation.context(ctx)).entries;
       insist(
         transcriptBytes(entries) < 524288,
@@ -679,6 +716,16 @@ export class Runtime {
           "input_limit_create_session",
           429,
         );
+        // A follow-up typed while a run whose tool output the injection
+        // guard flagged is still working carries that run's mark too, so
+        // its proposals also wait for a person (fail safe).
+        const run = new Set(
+          (await tx.doc(LiveDoc, conversation.id)).run?.inputs,
+        );
+        const guard = Object.values(inputs.requests).find(
+          (i) =>
+            run.has(i.submissionId as never) && i.guard?.result === "flagged",
+        )?.guard;
         inputs.requests[key] = {
           hash,
           content: message,
@@ -688,6 +735,7 @@ export class Runtime {
           ...(options.channel ? { channel: options.channel } : {}),
           ...(options.ceiling ? { ceiling: options.ceiling } : {}),
           ...(direct ? { direct: true as const } : {}),
+          ...(guard ? { guard: { ...guard } } : {}),
           ...((await tx.doc(Catalog)).items.find((s) => s.id === id)?.kind !==
             "workspace" && this.homeActions
             ? { homePermission: await this.homeActions.bind(tx, owner) }

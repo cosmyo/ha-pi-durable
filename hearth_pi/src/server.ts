@@ -912,14 +912,15 @@ export function appServer(
           const blocked = await inputReady(owner, id);
           insist(!blocked, blocked, 403);
           return json(res, 202, {
-            // Typed by the signed-in person: their own direct turn.
+            // Typed by the signed-in person: their own direct turn. While
+            // Hearth works on a Home chat it waits as a follow-up.
             submissionId: await runtime.submit(
               owner,
               id,
               v.requestId,
               v.content,
               v.images,
-              { direct: true },
+              { direct: true, followUp: true },
             ),
           });
         }

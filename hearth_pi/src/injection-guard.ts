@@ -11,6 +11,7 @@
 // A guard that is off, unreachable, slow or broken never blocks chat: the
 // output passes through unmarked and only a counter (never content) is kept.
 import {
+  InboxDoc,
   LiveDoc,
   type ConversationId,
   type Tx,
@@ -265,21 +266,32 @@ export class InjectionGuard {
 }
 
 // The marker on the run: committed on every input of the conversation's
-// current run, so this run's Home proposals never auto-run. Inputs of later
-// turns do not carry it. No content: the tool name and the score only.
+// current run, so this run's Home proposals never auto-run. Follow-ups
+// typed while this run works (queued in the inbox, or admitted but not yet
+// queued) carry it too, fail safe; Runtime.submit copies it onto follow-ups
+// admitted later in the same run. Inputs of later turns do not carry it.
+// No content: the tool name and the score only.
 export async function markRunFlagged(
   tx: Tx,
   conversationId: ConversationId,
   marker: GuardMarker,
 ) {
   const ids = new Set((await tx.doc(LiveDoc, conversationId)).run?.inputs);
+  const queued = new Set(
+    (await tx.doc(InboxDoc, conversationId)).items.map((item) => item.id),
+  );
   const inputs = await tx.doc(Inputs, conversationId);
   let marked = 0;
-  for (const input of Object.values(inputs.requests))
-    if (ids.has(input.submissionId as never)) {
+  for (const input of Object.values(inputs.requests)) {
+    const inRun = ids.has(input.submissionId as never);
+    if (
+      inRun ||
+      input.submissionId === 0 ||
+      queued.has(input.submissionId as never)
+    )
       input.guard = { ...marker };
-      marked += 1;
-    }
+    if (inRun) marked += 1;
+  }
   // Nothing to mark means the flagged text would reach an unmarked run.
   insist(marked > 0, "guard_mark_failed", 500);
 }

@@ -174,6 +174,15 @@ test("medium thinking is committed for new and switched turns, survives reopen, 
       "medium",
     );
     assert.deepEqual(observed, [["gpt-6.1-sol", "medium"]]);
+    // The picker's choices list exactly the levels selectModel accepts.
+    assert.deepEqual(
+      runtime.modelChoices().map((m) => [m.id, m.thinkingLevels]),
+      [
+        ["gpt-6.1-sol", ["minimal", "low", "medium", "high"]],
+        ["other", ["minimal", "low", "medium", "high"]],
+        ["plain", ["off"]],
+      ],
+    );
     await assert.rejects(
       runtime.selectModel("owner", id, "plain", "medium", 0),
       /unsupported_thinking/,
@@ -352,7 +361,10 @@ test("model API is owner-bound, CSRF-protected and CAS guarded; busy and unresol
       "id",
       "name",
       "provider",
+      "thinkingLevels",
     ]);
+    // A plain faux model: no reasoning, so only "off" can be chosen.
+    assert.deepEqual(choices.items[0].thinkingLevels, ["off"]);
     assert.equal(
       (
         await post(id, {
