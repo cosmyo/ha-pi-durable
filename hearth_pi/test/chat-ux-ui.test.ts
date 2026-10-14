@@ -288,6 +288,9 @@ test("model sheet: says in plain words why it is disabled, and maps refusals to 
       ["unsupported_thinking", 400, /doesn't offer that thinking level/],
       ["stale_model_selection", 409, /changed somewhere else.*pick again/],
       ["something_new", 400, /^The model was not changed \(something_new\)\.$/],
+      // Codes naming Object.prototype members are unknown codes too.
+      ["toString", 400, /^The model was not changed \(toString\)\.$/],
+      ["constructor", 409, /^The model was not changed \(constructor\)\.$/],
       ["request_failed", 500, /Couldn't confirm the model change/],
     ];
     for (const [error, status, text] of expected) {
@@ -387,6 +390,10 @@ test("saved message refused for the other known codes offers Discard with a plai
     ["subscription_login_required", 403, /sign in first/],
     ["local_endpoint_required", 403, /local model server isn't set up/],
     ["idempotency_conflict", 409, null],
+    // Codes naming Object.prototype members are unknown codes too.
+    ["constructor", 409, null],
+    ["toString", 400, null],
+    ["__proto__", 409, null],
   ];
   let code = codes[0]!;
   const app = await loadApp({
@@ -481,6 +488,77 @@ test("while Hearth answers a Home chat the composer stays open: a follow-up is s
     assert.equal(code.posts.length, 0);
   } finally {
     code.restore();
+  }
+});
+
+test("after a failed run its waiting follow-ups keep Stop reachable with nothing running: Stop withdraws them; the note and model sheet say so", async () => {
+  const idle = (inbox: unknown[]) =>
+    baseSnapshot({
+      view: {
+        entries: [],
+        docs: {
+          "pi.live": {},
+          "pi.inbox": { items: inbox },
+          "pi.usage": { models: {} },
+        },
+      },
+      lastInput: { status: "unanswered", reason: "model_error" },
+    });
+  let snapshot = idle([
+    {
+      id: 2,
+      mode: "followUp",
+      content: [{ type: "text", text: "Also check the hallway" }],
+    },
+  ]);
+  const app = await loadApp({
+    models: MODELS.slice(0, 1),
+    snapshot: () => snapshot,
+    post: (path) =>
+      path.endsWith("/abort")
+        ? Response.json({ stopped: true })
+        : new Error("no"),
+  });
+  try {
+    assert.equal(app.el("stop").hidden, false);
+    assert.equal(app.el<HTMLButtonElement>("stop").disabled, false);
+    // Not answering: the composer is the ordinary one, and Send stays.
+    assert.equal(app.el("send").hidden, false);
+    assert.equal(
+      app.el<HTMLTextAreaElement>("message").placeholder,
+      "What would you like to understand?",
+    );
+    const queued = app.document.querySelector(".message.user.queued");
+    assert.ok(queued);
+    assert.match(
+      queued!.textContent!,
+      /Waiting — Stop to withdraw, or send a message to continue/,
+    );
+    assert.doesNotMatch(queued!.textContent!, /sends when Hearth finishes/);
+    assert.equal(app.el<HTMLSelectElement>("model-choice").disabled, true);
+    assert.match(
+      app.el("model-hint").textContent!,
+      /Messages are waiting in this chat\. Stop to withdraw them/,
+    );
+    assert.doesNotMatch(app.el("model-hint").textContent!, /answering/);
+    await app.click("stop");
+    assert.deepEqual(
+      app.posts.map((p) => p.path),
+      ["/app/api/sessions/1/abort"],
+    );
+    assert.equal(
+      app.el("feedback").textContent,
+      "Waiting messages withdrawn; they were not sent.",
+    );
+    // The inbox is empty again: Stop hides and the model can change.
+    snapshot = idle([]);
+    app.emit(snapshot);
+    assert.equal(app.el("stop").hidden, true);
+    assert.equal(app.el<HTMLButtonElement>("stop").disabled, true);
+    assert.equal(app.document.querySelector(".message.user.queued"), null);
+    assert.equal(app.el<HTMLSelectElement>("model-choice").disabled, false);
+  } finally {
+    app.restore();
   }
 });
 

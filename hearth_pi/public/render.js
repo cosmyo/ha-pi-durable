@@ -783,6 +783,9 @@ export function renderMessages(
   if (liveTools) fragment.append(liveTools);
   // Messages typed while Hearth answers wait in the chat's inbox (Pi
   // Durable follow-ups) and are sent, one at a time, when the turn finishes.
+  // After a failed run they stay there, with nothing running, until Stop
+  // withdraws them or the next message sends them first.
+  const running = !!snapshot.view.docs["pi.live"]?.run;
   for (const item of snapshot.view.docs["pi.inbox"]?.items ?? []) {
     if (item.mode === "write") continue;
     const article = node("article", "", "message user queued");
@@ -801,7 +804,13 @@ export function renderMessages(
         ),
       );
     article.append(
-      node("p", "Queued \u2014 sends when Hearth finishes", "queued-note"),
+      node(
+        "p",
+        running
+          ? "Queued \u2014 sends when Hearth finishes"
+          : "Waiting \u2014 Stop to withdraw, or send a message to continue",
+        "queued-note",
+      ),
     );
     fragment.append(article);
   }

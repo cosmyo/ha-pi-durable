@@ -54,7 +54,7 @@ const THINKING_LABEL = {
 // anything (4xx with one of these codes): the message was certainly not
 // accepted, so besides Retry it may be discarded. Every other failure keeps
 // Retry only.
-const INPUT_REFUSALS = {
+const INPUT_REFUSALS = Object.assign(Object.create(null), {
   session_busy:
     "This chat can't take another message right now (a few are already waiting). Retry when Hearth finishes, or discard this one.",
   capacity:
@@ -69,15 +69,16 @@ const INPUT_REFUSALS = {
     "This chat's model needs you to sign in first (Settings \u203a Account). Then retry, or discard the message.",
   local_endpoint_required:
     "This chat's local model server isn't set up yet (Settings \u203a Account). Then retry, or discard the message.",
-};
+});
 // Refusals a fresh chat solves: offer "Start a new chat".
 const NEW_CHAT_REFUSALS = new Set([
   "transcript_limit_create_session",
   "input_limit_create_session",
   "image_limit_create_session",
 ]);
-// Plain sentences for a refused model change, with what to do.
-const MODEL_REFUSALS = {
+// Plain sentences for a refused model change, with what to do. Both refusal
+// maps are looked up by a server-supplied code, so they have no prototype.
+const MODEL_REFUSALS = Object.assign(Object.create(null), {
   action_unresolved:
     "An action in this chat is still waiting for you. Answer or dismiss the waiting approval first (or settle an uncertain result), then change the model.",
   session_busy:
@@ -93,7 +94,7 @@ const MODEL_REFUSALS = {
     "Sign in to that account first (Settings \u203a Account), then pick the model again.",
   workspace_continuation_blocked:
     "This Code chat is paused after an uncertain operation. Send it a new message first, then change the model.",
-};
+});
 function modelRefusal(error) {
   if (MODEL_REFUSALS[error.code]) return MODEL_REFUSALS[error.code];
   if (error.status >= 400 && error.status < 500)
@@ -128,8 +129,9 @@ let csrf = "",
   applyingModel = false,
   // The last model refusal, shown inside the model sheet until the next choice.
   modelNotice = "",
-  // From the snapshot: messages queued behind the running turn, and whether an
-  // action waits for a person (the server refuses model changes then).
+  // From the snapshot: messages waiting in the chat's inbox (behind the
+  // running turn, or left behind by a failed one), and whether an action
+  // waits for a person (the server refuses model changes then).
   queuedInputs = 0,
   actionWaiting = false,
   authProviders = [],
@@ -462,8 +464,10 @@ function modelBlockedReason(saved) {
   if (!modelChoices.length)
     return "No models are available right now. Check Settings › Account.";
   if (applyingModel) return "Applying…";
-  if (busy || queuedInputs)
+  if (busy)
     return "Hearth is answering in this chat. You can change the model when it finishes.";
+  if (queuedInputs)
+    return "Messages are waiting in this chat. Stop to withdraw them, or send a message to continue; then change the model.";
   if (sending || saved)
     return "Your last message isn't confirmed yet. Retry or discard it first, then change the model.";
   if (actionWaiting)
@@ -502,11 +506,14 @@ function controls() {
   const loginCommand = /^\/login(?:\s|$)/.test($("message").value.trim());
   $("send").disabled =
     $("message").disabled || ((!selected || !inferenceReady) && !loginCommand);
-  // Stop stays reachable during a run; Send appears next to it once there
+  // Stop stays reachable during a run, and while messages wait in the inbox
+  // after a failed run (Pi Durable keeps them until the next message), since
+  // it is the only way to withdraw them. Send appears next to it once there
   // is a follow-up to send.
   const draft = !!$("message").value.trim() || attachments.length > 0;
-  $("stop").hidden = !busy;
-  $("stop").disabled = !selected || !busy;
+  const stoppable = busy || queuedInputs > 0;
+  $("stop").hidden = !stoppable;
+  $("stop").disabled = !selected || !stoppable;
   $("send").hidden = busy && !(followUp && draft);
   const blocked = modelBlockedReason(saved);
   $("model-choice").disabled = !!blocked;
@@ -1176,7 +1183,8 @@ $("composer").addEventListener("submit", (event) => {
 const ATTACH_MAX = 4;
 const ATTACH_SIDE = 2048;
 const ATTACH_BYTES = 4 * 1024 * 1024;
-const IMAGE_ERRORS = {
+// Looked up by a server-supplied code too, so without a prototype.
+const IMAGE_ERRORS = Object.assign(Object.create(null), {
   model_no_image_input:
     "This chat's model can't read images. Choose a model with image input from the model chip, or describe it in words.",
   image_heic_unsupported:
@@ -1191,7 +1199,7 @@ const IMAGE_ERRORS = {
   image_limit_create_session:
     "This chat already holds many images. Start a new chat to attach more.",
   images_home_only: "Images can only be attached in Home chats.",
-};
+});
 function clearAttachments() {
   for (const a of attachments) URL.revokeObjectURL?.(a.url);
   attachments = [];
@@ -1381,13 +1389,16 @@ $("new-chat-icon").addEventListener("click", () => {
   void newSession("home");
 });
 $("stop").addEventListener("click", async () => {
+  const running = busy;
   const waiting = queuedInputs;
   try {
     await api(`sessions/${selected}/abort`, {});
     feedback(
-      waiting
-        ? "Task stopped. Messages waiting behind it were not sent. Already dispatched external actions are not undone."
-        : "Task stopped. Already dispatched external actions are not undone.",
+      !running
+        ? "Waiting messages withdrawn; they were not sent."
+        : waiting
+          ? "Task stopped. Messages waiting behind it were not sent. Already dispatched external actions are not undone."
+          : "Task stopped. Already dispatched external actions are not undone.",
     );
   } catch (error) {
     feedback(error.message);

@@ -390,8 +390,8 @@ test("follow-ups typed while a run's tool output is guard-flagged carry the run'
   }
 });
 
-test("HTTP: the composer's input route queues a message typed while a Home turn runs (202), once per request id", async () => {
-  const f = await adminHarness({ submit: DIRECT });
+// The app server over a fixture's runtime, signed in as the local admin.
+async function httpApp(f: Fixture) {
   const cfg: Config = {
     mode: "local",
     host: "127.0.0.1",
@@ -414,25 +414,40 @@ test("HTTP: the composer's input route queues a message typed while a Home turn 
   assert(address && typeof address !== "string");
   cfg.origin = `http://127.0.0.1:${address.port}`;
   const authorization = `Basic ${Buffer.from(`hearth:${cfg.password}`).toString("base64")}`;
+  const boot = await fetch(`${cfg.origin}/api/bootstrap`, {
+    headers: { authorization },
+  });
+  const csrf = (await boot.json()).csrf;
+  const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
+  const post = (path: string, body: unknown) =>
+    fetch(`${cfg.origin}/api/${path}`, {
+      method: "POST",
+      headers: {
+        authorization,
+        cookie,
+        origin: cfg.origin,
+        "x-hearth-csrf": csrf,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+  return {
+    post,
+    // Closes the actions and the runtime too.
+    close: async () => {
+      await app.close();
+      await rm(f.dir, { recursive: true, force: true });
+    },
+  };
+}
+
+test("HTTP: the composer's input route queues a message typed while a Home turn runs (202), once per request id", async () => {
+  const f = await adminHarness({ submit: DIRECT });
+  const http = await httpApp(f);
   try {
     const id = await f.runtime.create("local-admin", "Home", "http-create");
-    const boot = await fetch(`${cfg.origin}/api/bootstrap`, {
-      headers: { authorization },
-    });
-    const csrf = (await boot.json()).csrf;
-    const cookie = boot.headers.get("set-cookie")!.split(";")[0]!;
     const send = (requestId: string, content: string) =>
-      fetch(`${cfg.origin}/api/sessions/${id}/inputs`, {
-        method: "POST",
-        headers: {
-          authorization,
-          cookie,
-          origin: cfg.origin,
-          "x-hearth-csrf": csrf,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ requestId, content }),
-      });
+      http.post(`sessions/${id}/inputs`, { requestId, content });
     const hold = gate();
     f.provider.faux.setResponses([
       async () => {
@@ -460,8 +475,87 @@ test("HTTP: the composer's input route queues a message typed while a Home turn 
       inputs["http-two"]!.submissionId > inputs["http-one"]!.submissionId,
     );
   } finally {
-    // Closes the actions and the runtime too.
-    await app.close();
-    await rm(f.dir, { recursive: true, force: true });
+    await http.close();
+  }
+});
+
+test("HTTP: after a failed run its queued follow-ups stay in the inbox with nothing running, and Stop (/abort) withdraws them unanswered", async () => {
+  const f = await adminHarness({ submit: DIRECT });
+  const http = await httpApp(f);
+  try {
+    const id = await f.runtime.create("local-admin", "Home", "failed-create");
+    const send = (requestId: string, content: string) =>
+      http.post(`sessions/${id}/inputs`, { requestId, content });
+    const hold = gate();
+    f.provider.faux.setResponses([
+      async () => {
+        await hold.opened;
+        return fauxAssistantMessage("", {
+          stopReason: "error",
+          errorMessage: "synthetic model failure",
+        });
+      },
+    ]);
+    const first = await send("failed-one", "Hello");
+    assert.equal(first.status, 202);
+    const { submissionId: running } = await first.json();
+    const queued: number[] = [];
+    for (const [requestId, content] of [
+      ["failed-two", "Also this"],
+      ["failed-three", "And this"],
+    ]) {
+      const response = await send(requestId!, content!);
+      assert.equal(response.status, 202);
+      queued.push((await response.json()).submissionId);
+    }
+    hold.open();
+    const failed = await done(f, running);
+    assert.deepEqual(
+      [failed.status, failed.reason],
+      ["unanswered", "model_error"],
+    );
+    await f.runtime.harness.waitForIdle(ctx);
+    // Nothing runs, yet the follow-ups still wait in the inbox.
+    const stranded = await f.runtime.snapshot("local-admin", id);
+    const docs = stranded.view.docs as Record<string, { run?: unknown }>;
+    assert.equal(docs["pi.live"]?.run, undefined);
+    assert.deepEqual(
+      (
+        await f.runtime.harness.snapshot(InboxDoc, id as ConversationId, ctx)
+      )?.items.map((item) => item.id),
+      queued,
+    );
+    for (const submission of queued)
+      assert.equal(
+        (
+          await (await f.runtime.harness.submission(
+            submission as SubmissionId,
+            ctx,
+          ))!.status(ctx)
+        ).status,
+        "queued",
+      );
+    const stop = await http.post(`sessions/${id}/abort`, {});
+    assert.equal(stop.status, 200);
+    assert.deepEqual(
+      (await f.runtime.harness.snapshot(InboxDoc, id as ConversationId, ctx))
+        ?.items ?? [],
+      [],
+    );
+    for (const submission of queued) {
+      const settled = await done(f, submission);
+      assert.deepEqual(
+        [settled.status, settled.reason],
+        ["unanswered", "aborted"],
+      );
+    }
+    // Withdrawn, never sent to the model: no user entry carries their text.
+    const transcript = JSON.stringify(
+      (await f.runtime.snapshot("local-admin", id)).view.entries,
+    );
+    assert.ok(!transcript.includes("Also this"));
+    assert.ok(!transcript.includes("And this"));
+  } finally {
+    await http.close();
   }
 });
