@@ -638,7 +638,7 @@ test("bundled skills: listed in the Home prompt, loaded by name, fixed set, stri
     );
     assert.equal(unknown.isError, true);
     assert.equal(unknown.error, "unknown_skill");
-    assert.deepEqual(unknown.available, ["home-world-setup"]);
+    assert.deepEqual(unknown.available, ["add-a-device", "home-world-setup"]);
     for (const [i, name] of [
       "../../etc/passwd",
       "home-world-setup/../x",

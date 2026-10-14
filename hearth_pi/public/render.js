@@ -864,6 +864,7 @@ export function renderProposals(
     const card = node("article", "", "action-card");
     renderActionSummary(card, proposal);
     renderRisk(card, proposal);
+    renderFlowResult(card, proposal.flowResult);
     if (proposal.origin?.kind === "list")
       card.append(
         node(
@@ -1061,6 +1062,72 @@ export function todoActionTitle(action) {
       return `Remove ${q(action.label)}`;
   }
 }
+// Config flows (adding a device or integration) in words.
+export function flowActionTitle(action) {
+  if (action.op === "init") return `Set up ${action.handler}`;
+  if (action.op === "abort") return `Cancel ${action.handler} setup`;
+  return `${action.handler} setup: ${action.stepId ? `step ${action.stepId}` : "next step"}`;
+}
+// Home Assistant's reply to a flow action, as short lines. Never values:
+// the controller keeps only names, types, codes and an entry title.
+export function flowResultLines(result) {
+  const lines = [];
+  if (!result) return lines;
+  const field = (f) =>
+    f.secret
+      ? `${f.name} (secret: enter it in Home Assistant)`
+      : `${f.name} (${f.type}${f.required ? ", required" : ""})`;
+  switch (result.type) {
+    case "form":
+      lines.push(
+        `Home Assistant asks next: step ${result.stepId ?? "(unnamed)"}`,
+      );
+      if (result.fields?.length)
+        lines.push(`Fields: ${result.fields.map(field).join(", ")}`);
+      break;
+    case "menu":
+      lines.push(`Choose one: ${(result.menuOptions ?? []).join(", ")}`);
+      break;
+    case "create_entry":
+      lines.push(`Added: ${result.title ?? result.handler ?? "integration"}`);
+      break;
+    case "abort":
+      lines.push(`Setup ended: ${result.reason ?? "aborted"}`);
+      break;
+    case "external":
+      lines.push("Sign-in continues in Home Assistant");
+      break;
+    case "progress":
+      lines.push("Home Assistant is working on this step");
+      break;
+    default:
+      lines.push(`Home Assistant replied: ${result.type}`);
+  }
+  if (result.errors)
+    lines.push(
+      `Errors: ${Object.entries(result.errors)
+        .map(([key, code]) => `${key}: ${code}`)
+        .join(", ")}`,
+    );
+  return lines;
+}
+// Only these fixed Home Assistant paths become a link.
+export const FLOW_LINK =
+  /^\/config\/integrations\/(dashboard|dashboard\/add\?domain=[a-z0-9][a-z0-9_]{0,63}|integration\/[a-z0-9][a-z0-9_]{0,63})$/;
+function renderFlowResult(card, result) {
+  if (!result) return;
+  for (const line of flowResultLines(result)) card.append(node("p", line));
+  if (
+    typeof result.continueIn === "string" &&
+    FLOW_LINK.test(result.continueIn)
+  ) {
+    const link = node("a", "Open in Home Assistant", "ha-link");
+    link.href = result.continueIn;
+    link.target = "_top";
+    link.rel = "noopener";
+    card.append(link);
+  }
+}
 function renderActionSummary(card, proposal) {
   const action = proposal.action;
   const status = ` · ${proposal.status}`;
@@ -1113,6 +1180,18 @@ function renderActionSummary(card, proposal) {
       node("h3", `${action.type}${status}`),
       node("pre", JSON.stringify(action.payload, null, 2)),
     );
+    return;
+  }
+  if (action.kind === "flow") {
+    card.append(node("h3", `${flowActionTitle(action)}${status}`));
+    if (action.source === "discovered")
+      card.append(node("p", "Found by Home Assistant", "muted"));
+    if (action.op === "step")
+      card.append(
+        Object.keys(action.userInput ?? {}).length
+          ? node("pre", JSON.stringify(action.userInput, null, 2))
+          : node("p", "No values; continues the step", "muted"),
+      );
     return;
   }
   card.append(

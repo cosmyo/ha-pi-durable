@@ -115,7 +115,70 @@ export type AdminAction =
       method: "DELETE" | "POST";
       path: string;
       body?: JsonObject;
+    }
+  | FlowAction;
+// One step of a Home Assistant config flow (adding a device or integration)
+// over /api/config/config_entries/flow. `init` starts a new flow for a
+// handler; `step` submits flat, non-secret values to the flow's current step;
+// `abort` cancels a flow. For step/abort, `handler`, `stepId` and `source`
+// are filled in by the controller from Home Assistant's flow list or Hearth's
+// own earlier receipts, never taken from a model (flow-setup.ts).
+export type FlowScalar = string | number | boolean | null;
+export type FlowAction =
+  | { kind: "flow"; op: "init"; handler: string }
+  | {
+      kind: "flow";
+      op: "step";
+      handler: string;
+      flowId: string;
+      stepId?: string;
+      source?: FlowSource;
+      userInput: Record<string, FlowScalar>;
+    }
+  | {
+      kind: "flow";
+      op: "abort";
+      handler: string;
+      flowId: string;
+      source?: FlowSource;
     };
+// "discovered": Home Assistant found it (flow/progress lists it); "hearth":
+// a flow Hearth itself started in this conversation.
+export type FlowSource = "discovered" | "hearth";
+// Home Assistant's reply to a flow action, bounded and redacted
+// (flow-setup.ts flowSummary): never values, defaults, descriptions,
+// placeholders or URLs. Secret-looking fields are named and marked so the
+// owner enters them in Home Assistant's own UI.
+export type FlowField = {
+  name: string;
+  type: string;
+  required: boolean;
+  secret?: true;
+  options?: string[];
+};
+export type FlowResultSummary = {
+  type:
+    | "form"
+    | "create_entry"
+    | "abort"
+    | "external"
+    | "external_done"
+    | "progress"
+    | "progress_done"
+    | "menu"
+    | "unknown";
+  flowId?: string;
+  handler?: string;
+  stepId?: string;
+  fields?: FlowField[];
+  menuOptions?: string[];
+  errors?: Record<string, string>;
+  reason?: string;
+  entryId?: string;
+  title?: string;
+  // Where the owner continues in Home Assistant's own UI (a fixed path).
+  continueIn?: string;
+};
 // One change to a Home Assistant to-do list (shared with every household
 // member and the HA app). Validated in lists.ts. `label` is the item's current
 // text as read by the controller (never supplied by a model or a person): it
@@ -202,6 +265,9 @@ export type Proposal = {
   // Unknown outcomes: read-only checks of Home Assistant state after the
   // attempt (src/reconcile.ts). Never a service call.
   reconcile?: ReconcileRecord;
+  // Config flow actions: Home Assistant's bounded, redacted reply, so the
+  // next step can be proposed (flow-setup.ts).
+  flowResult?: FlowResultSummary;
   // Set when a person pressed an app ToggleAction or a Home World device
   // instead of a model tool call.
   origin?:

@@ -15,6 +15,7 @@ export type { HouseholdRole } from "./config.js";
 const OWNER_READ_TOOLS = [
   "ha_admin_read",
   "ha_config_get",
+  "ha_integrations_read",
   "supervisor_read",
   "ha_automation_config",
   "ha_automation_traces",
@@ -27,6 +28,7 @@ const WRITE_TOOLS = [
   "ha_call_service",
   "ha_config_propose",
   "ha_registry_propose",
+  "ha_flow_propose",
   "supervisor_propose",
   "list_propose",
   "app_create",

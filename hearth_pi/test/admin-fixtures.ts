@@ -122,6 +122,73 @@ export type SupervisorReply =
   | { status: number; body?: string; redirect?: boolean }
   | { networkError: true };
 
+// Synthetic config flows (device/integration setup). A discovered flow Home
+// Assistant started itself, the handlers that can be set up and the config
+// entries (whose data/options must never reach a model).
+export const DISCOVERED_FLOW = {
+  flow_id: "01DISCOVEREDFLOW000000001",
+  handler: "example_hub",
+  step_id: "confirm",
+  context: {
+    source: "zeroconf",
+    unique_id: "UNIQUE_ID_CANARY",
+    title_placeholders: { name: "Example Hub" },
+  },
+};
+export const FLOW_HANDLERS = [
+  "example_hub",
+  "example_printer",
+  "homekit",
+  "cloud",
+  "mcp_server",
+  "hearth_pi",
+  "17track",
+];
+export const CONFIG_ENTRIES = [
+  {
+    entry_id: "entry_example_1",
+    domain: "example_hub",
+    title: "Example Hub",
+    state: "loaded",
+    source: "zeroconf",
+    disabled_by: null,
+    data: { password: "ENTRY_DATA_CANARY" },
+    options: { token: "ENTRY_OPTIONS_CANARY" },
+  },
+];
+// A user-started flow's first form: one plain field and two secret ones
+// (by name and by Home Assistant's password selector), with placeholders
+// and a default Hearth must never keep.
+export const HEARTH_FLOW_ID = "01HEARTHFLOW00000000000001";
+export function flowForm(handler: string) {
+  return {
+    type: "form",
+    flow_id: HEARTH_FLOW_ID,
+    handler,
+    step_id: "user",
+    data_schema: [
+      { name: "host", type: "string", required: true },
+      { name: "password", type: "string", default: "DEFAULT_CANARY" },
+      { name: "account", selector: { text: { type: "password" } } },
+      {
+        name: "mode",
+        selector: { select: { options: ["local", "cloud"] } },
+        required: true,
+      },
+    ],
+    description_placeholders: { code: "PLACEHOLDER_CANARY" },
+    errors: {},
+    last_step: false,
+  };
+}
+// One config flow request: return a Response, "network" to make the
+// transport throw, or nothing for the default reply.
+export type FlowReply = (
+  method: string,
+  path: string,
+  body: unknown,
+) => Response | "network" | void;
+
 export function fakeAdminHA(
   options: {
     access?: "admin" | "scoped";
@@ -129,6 +196,8 @@ export function fakeAdminHA(
     supervisor?: (endpoint: string, method: string) => SupervisorReply | void;
     policy?: Policy;
     selfSlug?: string;
+    flow?: FlowReply;
+    progress?: unknown[];
   } = {},
 ) {
   const writes: Write[] = [];
@@ -194,13 +263,33 @@ export function fakeAdminHA(
     if (full.startsWith("http://supervisor/core/api/")) {
       const path = full.replace("http://supervisor/core/api/", "");
       if (method !== "GET") {
-        writes.push({
-          method,
-          url: path,
-          body: init?.body ? JSON.parse(String(init.body)) : undefined,
-        });
+        const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+        writes.push({ method, url: path, body });
+        if (path.startsWith("config/config_entries/flow")) {
+          const reply = options.flow?.(method, path, body);
+          if (reply === "network") throw new Error("ECONNRESET");
+          if (reply) return reply;
+          if (path === "config/config_entries/flow")
+            return Response.json(flowForm(String(body?.handler)));
+          if (method === "DELETE")
+            return Response.json({ message: "Flow aborted" });
+          const flowId = path.slice("config/config_entries/flow/".length);
+          return Response.json({
+            type: "create_entry",
+            flow_id: flowId,
+            handler:
+              flowId === DISCOVERED_FLOW.flow_id
+                ? DISCOVERED_FLOW.handler
+                : "example_printer",
+            title: `Example Printer ${TOKEN}`,
+            description: "DESCRIPTION_CANARY",
+            result: { entry_id: "entry_new_1", domain: "example_printer" },
+          });
+        }
         return new Response("[]", { status: options.writeStatus ?? 200 });
       }
+      if (path === "config/config_entries/flow_handlers")
+        return Response.json(FLOW_HANDLERS);
       if (path === "states") return Response.json(STATES);
       if (path.startsWith("states/")) {
         const id = decodeURIComponent(path.slice(7));
@@ -265,7 +354,11 @@ export function fakeAdminHA(
                 ? [{ area_id: "kitchen", name: "Kitchen" }]
                 : m.type === "config/device_registry/list"
                   ? [{ id: "dev1", name: "Bulb", area_id: "kitchen" }]
-                  : { ok: true };
+                  : m.type === "config_entries/flow/progress"
+                    ? (options.progress ?? [DISCOVERED_FLOW])
+                    : m.type === "config_entries/get"
+                      ? CONFIG_ENTRIES
+                      : { ok: true };
           emit({ id: m.id, type: "result", success: true, result });
         });
       },
