@@ -239,6 +239,48 @@ test("live turn: the card appears right after its tool result while Hearth is st
   assert.deepEqual(kinds(), ["user", "activity", "card:41", "live"]);
 });
 
+test("running proposal tool: the card is inline right after its call while the tool still runs (Full access dispatch), linked only by the live slot's task id; other slots fall back", () => {
+  const proposals = {
+    "41": proposal("41", "dispatching"),
+    "52": proposal("52", "pending"),
+    "53": proposal("53", "pending"),
+  };
+  const slots = [
+    { callId: "c1", name: "ha_flow_propose", taskId: 41, status: "running" },
+    // A non-proposal tool whose task id happens to equal a proposal id.
+    { callId: "c2", name: "ha_admin_read", taskId: 52, status: "running" },
+    // A slot whose name does not match the transcript call.
+    { callId: "c3", name: "ha_admin_read", taskId: 53, status: "running" },
+  ];
+  paint(
+    snapshot(
+      [
+        [user("Set up the TV")],
+        [
+          call("c1", "ha_flow_propose"),
+          call("c2", "ha_admin_read"),
+          call("c3", "ha_flow_propose"),
+        ],
+      ],
+      { run: { taskId: "t", inputs: ["s"] }, tools: slots },
+    ),
+    proposals,
+  );
+  assert.deepEqual(kinds().slice(0, 3), ["user", "activity", "card:41"]);
+  assert.equal(chat().querySelectorAll(".proposal-inline").length, 1);
+  assert.equal(approvals().querySelectorAll(".action-card").length, 2);
+  // Once the result lands, the same proposal stays inline exactly once.
+  paint(
+    snapshot([
+      [user("Set up the TV")],
+      [call("c1", "ha_flow_propose")],
+      [result("c1", "ha_flow_propose", { proposalId: "41" })],
+    ]),
+    { "41": proposal("41", "accepted") },
+  );
+  assert.deepEqual(kinds(), ["user", "activity", "card:41"]);
+});
+
 test("pending inline card: Approve and Reject are wired to decide; a critical card needs the typed word; read-only blocks Approve", () => {
   const decisions: unknown[][] = [];
   const decide = (...args: unknown[]) => decisions.push(args);

@@ -883,6 +883,40 @@ test("inline approval card: shown after its tool call, approved in place, and an
       ).value,
       "example_tv",
     );
+    // A proposal-only change swaps just that card: an expanded tool step
+    // stays expanded and the activity row is the same node.
+    const activity = messages.querySelector(".activity details")!;
+    activity.setAttribute("open", "");
+    // The phone notification marks the critical card: it is rebuilt, but the
+    // word typed so far is kept and Approve stays enabled for it.
+    proposals = {
+      ...proposals,
+      "44": { ...critical, notified: { at: NOW, tag: "t", count: 1 } },
+    };
+    app.emit(baseSnapshot({ view: view(), proposals }));
+    const rebuilt = messages.querySelector(
+      "[data-proposal-id='44'] .confirm-input",
+    ) as HTMLInputElement;
+    assert.notEqual(rebuilt, input, "the notified card was rebuilt");
+    assert.equal(rebuilt.value, "example_tv");
+    assert.equal(
+      (
+        messages.querySelector(
+          "[data-proposal-id='44'] .actions button.approve",
+        ) as HTMLButtonElement
+      ).disabled,
+      false,
+    );
+    assert.equal(messages.querySelector(".activity details"), activity);
+    assert.equal(activity.hasAttribute("open"), true);
+    assert.deepEqual(order(), [
+      "user",
+      "activity",
+      "card:41",
+      "card:44",
+      "assistant",
+    ]);
+    assert.equal(app.el("approvals").children.length, 0);
   } finally {
     app.restore();
   }

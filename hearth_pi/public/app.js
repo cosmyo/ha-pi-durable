@@ -713,20 +713,84 @@ function resetInlineProposals() {
 // The transcript, with inline proposal cards. An unchanged card is reused
 // as it is, so an open pending card keeps typed confirmation text and,
 // below, focus when unrelated live updates rebuild the transcript.
+function inlineCardKey(proposal, proposals, canApprove) {
+  const reverse = proposal.undo?.reverse
+    ? (proposals[proposal.undo.reverse] ?? null)
+    : null;
+  return JSON.stringify([proposal, reverse, canApprove]);
+}
+// Rebuild one inline card. A field change on a still-pending proposal (for
+// example "Sent to your phone") keeps the critical word already typed: the
+// value is copied and the card's own input listener recomputes Approve.
+function rebuildInlineCard(proposal, proposals, canApprove, choices, cached) {
+  const element = buildInlineProposal(
+    proposal,
+    proposals,
+    decide,
+    canApprove,
+    choices,
+  );
+  const typed = cached?.element.querySelector?.(".confirm-input")?.value;
+  const fresh = element.querySelector?.(".confirm-input");
+  if (typed && fresh && !fresh.value) {
+    fresh.value = typed;
+    const EventType = fresh.ownerDocument?.defaultView?.Event ?? Event;
+    fresh.dispatchEvent(new EventType("input"));
+  }
+  return element;
+}
+// A proposal-only change swaps just the affected inline cards in place, so
+// expanded tool steps, "Show more" and the reading position stay as they
+// are. Focus inside a replaced card moves to its successor.
+function repaintInlineCards(value, canApprove) {
+  const proposals = value.proposals ?? {};
+  const choices = inlineChoicesFor(selected);
+  const next = new Map();
+  for (const [id, cached] of inlineCards) {
+    const proposal = proposals[id];
+    if (!proposal || !cached.element.isConnected) return false;
+    next.set(id, cached);
+  }
+  for (const [id, cached] of next) {
+    const proposal = proposals[id];
+    const key = inlineCardKey(proposal, proposals, canApprove);
+    if (key === cached.key) continue;
+    const element = rebuildInlineCard(
+      proposal,
+      proposals,
+      canApprove,
+      choices,
+      cached,
+    );
+    const active = document.activeElement;
+    const hadFocus = !!active && cached.element.contains?.(active);
+    const range =
+      hadFocus && typeof active.selectionStart === "number"
+        ? [active.selectionStart, active.selectionEnd]
+        : null;
+    cached.element.replaceWith(element);
+    next.set(id, { key, element });
+    if (hadFocus) {
+      const same = range && element.querySelector?.(".confirm-input");
+      const target = same ?? element.querySelector?.("summary");
+      target?.focus?.({ preventScroll: true });
+      if (same) same.setSelectionRange?.(range[0], range[1]);
+    }
+  }
+  inlineCards = next;
+  return true;
+}
 function paintMessages(value, canApprove) {
   const proposals = value.proposals ?? {};
   const choices = inlineChoicesFor(selected);
   const used = new Map();
   const card = (proposal) => {
-    const reverse = proposal.undo?.reverse
-      ? (proposals[proposal.undo.reverse] ?? null)
-      : null;
-    const key = JSON.stringify([proposal, reverse, canApprove]);
+    const key = inlineCardKey(proposal, proposals, canApprove);
     const cached = inlineCards.get(proposal.id);
     const element =
       cached?.key === key
         ? cached.element
-        : buildInlineProposal(proposal, proposals, decide, canApprove, choices);
+        : rebuildInlineCard(proposal, proposals, canApprove, choices, cached);
     used.set(proposal.id, { key, element });
     return element;
   };
@@ -748,6 +812,14 @@ function paintMessages(value, canApprove) {
   if (keep?.isConnected && document.activeElement !== keep) {
     keep.focus({ preventScroll: true });
     if (range) keep.setSelectionRange?.(range[0], range[1]);
+  } else if (keep) {
+    // The card was rebuilt: keep keyboard users on the same card.
+    const id = keep
+      .closest?.(".proposal-inline")
+      ?.getAttribute("data-proposal-id");
+    used.get(id)?.element.querySelector?.("summary")?.focus?.({
+      preventScroll: true,
+    });
   }
   return shown;
 }
@@ -844,7 +916,8 @@ function snapshot(value) {
     actionSignature = signature;
     // Decisions and status changes re-render the inline cards too (the
     // unchanged ones are reused as they are).
-    if (!transcriptChanged) inlineShown = paintMessages(value, canApprove);
+    if (!transcriptChanged && !repaintInlineCards(value, canApprove))
+      inlineShown = paintMessages(value, canApprove);
     renderProposals(
       $("approvals"),
       value.proposals ?? {},

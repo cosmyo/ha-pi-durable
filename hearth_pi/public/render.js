@@ -695,6 +695,20 @@ export function linkedProposalId(message, proposals) {
     ? id
     : null;
 }
+// While a proposal tool call is still running (for example a setup step
+// Full access dispatches), its result is not in the transcript yet. The
+// harness's live tool slot for that call carries the tool task id, which is
+// the proposal id. Linked only through that harness-set slot, for a known
+// proposal tool whose name matches the call, never by model or tool text.
+export function liveProposalId(call, slots, proposals) {
+  if (!call?.id || !PROPOSAL_TOOLS.has(call.name)) return null;
+  const slot = (Array.isArray(slots) ? slots : []).find(
+    (s) => s?.callId === call.id,
+  );
+  if (!slot || slot.name !== call.name || slot.taskId == null) return null;
+  const id = String(slot.taskId);
+  return Object.prototype.hasOwnProperty.call(proposals ?? {}, id) ? id : null;
+}
 const proposalExpired = (proposal, now) =>
   proposal.status === "pending" && proposal.expires <= now;
 // Whether an inline card needs a person: open by default.
@@ -788,11 +802,20 @@ export function renderMessages(
   const fragment = document.createDocumentFragment();
   const proposals = inline?.card ? (inline.proposals ?? {}) : {};
   const shown = new Set();
+  const liveSlots = snapshot.view.docs?.["pi.live"]?.tools ?? [];
   // Open tool-call group for the turn in progress: filled by assistant
   // toolCall blocks, then matched with their toolResult by call id.
   let pending = null;
   const flushPending = () => {
     if (pending && pending.calls.length) {
+      for (const call of pending.calls) {
+        if (call.result) continue;
+        const id = liveProposalId(call, liveSlots, proposals);
+        if (id && !shown.has(id)) {
+          shown.add(id);
+          pending.proposals.push(id);
+        }
+      }
       fragment.append(buildActivity(pending.calls));
       for (const id of pending.proposals) {
         const card = inline.card(proposals[id]);
