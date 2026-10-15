@@ -718,6 +718,83 @@ test("a full chat's refused message moves to a new chat with its text and images
 // An exact action card filed by a model tool call sits in the transcript
 // right after that call, not at the end of the chat; approving it there
 // sends the same exact decision, and its new status re-renders it in place.
+test("inline card while its action still runs: the live slot arrives first, then a proposals-only update places the card inline, not in the approvals section", async () => {
+  const NOW = Date.now();
+  const entries = [
+    { id: 1, model: [{ role: "user", content: "Set up the TV" }] },
+    {
+      id: 2,
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "c1",
+              name: "ha_flow_propose",
+              arguments: {},
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  const live = {
+    run: { taskId: "t", inputs: ["s"] },
+    tools: [
+      { callId: "c1", name: "ha_flow_propose", taskId: 41, status: "running" },
+    ],
+  };
+  const view = {
+    entries,
+    docs: { "pi.live": live, "pi.usage": { models: {} } },
+  };
+  const app = await loadApp({
+    models: MODELS.slice(0, 1),
+    snapshot: () => baseSnapshot({ view, proposals: {} }),
+  });
+  try {
+    await tick(50);
+    const messages = app.el("messages");
+    assert.equal(messages.querySelectorAll(".proposal-inline").length, 0);
+    // Same transcript and live doc; only the Proposals document changed.
+    const running = {
+      id: "41",
+      hash: "hash-41",
+      status: "dispatching",
+      created: NOW,
+      expires: NOW + 600000,
+      action: { kind: "flow", op: "init", handler: "example_tv" },
+      risk: { level: "high", rule: "integration_setup", reasons: [] },
+      authorization: { source: "trusted", revision: 1 },
+    };
+    app.emit(baseSnapshot({ view, proposals: { "41": running } }));
+    const card = messages.querySelector("[data-proposal-id='41']");
+    assert.ok(card, "the running action's card is inline");
+    assert.equal(
+      card!.previousElementSibling?.classList.contains("activity"),
+      true,
+    );
+    assert.equal(app.el("approvals").children.length, 0);
+    // Its receipt then updates in place, still inline, still exactly once.
+    app.emit(
+      baseSnapshot({
+        view,
+        proposals: { "41": { ...running, status: "accepted" } },
+      }),
+    );
+    assert.equal(messages.querySelectorAll(".proposal-inline").length, 1);
+    assert.match(
+      messages.querySelector("[data-proposal-id='41'] summary")!.textContent!,
+      /Accepted/,
+    );
+    assert.equal(app.el("approvals").children.length, 0);
+  } finally {
+    app.restore();
+  }
+});
+
 test("inline approval card: shown after its tool call, approved in place, and an unrelated live update keeps typed confirmation text", async () => {
   const NOW = Date.now();
   const flow = (id: string, extra: Record<string, unknown> = {}) => ({

@@ -1,6 +1,7 @@
 import {
   node,
   buildInlineProposal,
+  PROPOSAL_TOOLS,
   renderMessages,
   renderProposals,
   renderCanvas,
@@ -744,6 +745,20 @@ function rebuildInlineCard(proposal, proposals, canApprove, choices, cached) {
 // are. Focus inside a replaced card moves to its successor.
 function repaintInlineCards(value, canApprove) {
   const proposals = value.proposals ?? {};
+  // A running proposal tool's slot appears before its proposal is committed;
+  // when the proposal arrives (a proposals-only update) it becomes linkable,
+  // so the transcript is painted again to place it inline.
+  const slots = value.view.docs?.["pi.live"]?.tools ?? [];
+  if (
+    slots.some(
+      (s) =>
+        s?.taskId != null &&
+        PROPOSAL_TOOLS.has(s.name) &&
+        Object.prototype.hasOwnProperty.call(proposals, String(s.taskId)) &&
+        !inlineCards.has(String(s.taskId)),
+    )
+  )
+    return false;
   const choices = inlineChoicesFor(selected);
   const next = new Map();
   for (const [id, cached] of inlineCards) {
