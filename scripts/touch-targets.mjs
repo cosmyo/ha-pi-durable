@@ -1275,6 +1275,56 @@ const SCENES = [
     },
   },
   {
+    // Exact action cards inline after the tool call that filed them: open
+    // pending/unknown cards, a collapsed receipt opened by a tap.
+    name: "chat-inline-proposals",
+    core: true,
+    data: (d) => {
+      const inline = Object.fromEntries(
+        Object.entries(PROPOSALS).map(([id, p]) => [id, { ...p, id }]),
+      );
+      d.snapshot.view.entries = [
+        ...d.snapshot.view.entries.slice(0, 1),
+        {
+          id: 2,
+          model: [
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: Object.keys(inline).map((id) => ({
+                type: "toolCall",
+                id: `call-${id}`,
+                name: "ha_call_service",
+                arguments: {},
+              })),
+            },
+          ],
+        },
+        ...Object.keys(inline).map((id, i) => ({
+          id: 3 + i,
+          model: [
+            {
+              role: "toolResult",
+              toolCallId: `call-${id}`,
+              toolName: "ha_call_service",
+              isError: false,
+              content: text("{}"),
+              details: { proposalId: id },
+            },
+          ],
+        })),
+        {
+          id: 20,
+          model: [
+            { role: "assistant", content: text("Done."), stopReason: "stop" },
+          ],
+        },
+      ];
+      proposalsSnapshot(d, inline);
+    },
+    run: (f) => tap(f, "[data-proposal-id='p3'] .proposal-inline-summary"),
+  },
+  {
     name: "chat-canvas-open",
     data: (d) => {
       d.snapshot.homeCanvas = CANVAS;

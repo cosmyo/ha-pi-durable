@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Chat: an exact action card a model tool call files (pending approval with Approve/Reject and the typed word for critical actions, or the accepted/rejected/failed/unknown receipt with Undo or Resolve) now appears in the transcript right after that tool call, live while Hearth is still answering and in history, instead of at the end of the chat after the reply. Each card is linked only by a controller-set `details.proposalId` on the proposal tool's result (never by model or tool text) to a proposal the server's Proposals document has, and is shown exactly once; cards a person's own press filed (apps, Home World, lists, Undo) and older history without the link stay in the action reviews section below the chat. Card content and actions are unchanged and always come from the server; approval semantics, permissions, risk, dispatch and server authorization are unchanged, and the turn does not wait for an approval.
+- Chat: inline action cards are collapsible (native details/summary). The one-line summary (at least 44 px) gives the title, status, risk level and, when a person is needed, **Approval needed** or **Needs resolution**; pending and unknown cards start open, settled, running and expired ones collapsed, and your own open/closed choice is kept per card while the page is open. Typed confirmation text in an open card survives live updates of the chat.
+
 ## 0.8.1 — explicit alternative Home Assistant origins and send feedback
 
 - Security: optional `public_origins` adds exact HTTP/HTTPS browser origins to `public_origin`; values are bounded and reject duplicates, wildcards, `null`, credentials, paths, queries and fragments. Mutation requests still require the trusted ingress peer/principal plus the browser cookie and bound CSRF token; forwarded headers never grant access. CSP `frame-ancestors` uses only the validated explicit list.
