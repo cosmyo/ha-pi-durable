@@ -658,6 +658,80 @@ pre {
   overflow: auto;
   white-space: pre-wrap;
 }
+/* Exact action cards inline in the transcript, right after the tool call
+   that filed them: one collapsible summary line (title, status, risk and
+   whether a person is needed), the full card below when open. */
+.message.proposal-inline {
+  padding: 0;
+  background: none;
+  border: none;
+  max-width: 100%;
+}
+.proposal-inline-details {
+  margin: 0;
+  font-size: inherit;
+  border: 1px solid #ad855f;
+  border-radius: 14px;
+  background: #2a3029;
+}
+.proposal-inline-summary {
+  list-style: none;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--touch-target);
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.proposal-inline-summary::-webkit-details-marker {
+  display: none;
+}
+.proposal-inline-summary::before {
+  content: "\203A";
+  flex: none;
+  color: var(--muted);
+}
+.proposal-inline-details[open] > .proposal-inline-summary::before {
+  transform: rotate(90deg);
+}
+.proposal-inline-title {
+  flex: 1 1 auto;
+  min-width: 3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--warm);
+  font-weight: 600;
+}
+.proposal-inline-status {
+  flex: none;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.proposal-inline-summary .risk-badge {
+  flex: none;
+  white-space: nowrap;
+}
+/* Shown as text and colour, never colour alone. */
+.proposal-inline-needs {
+  flex: none;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  background: var(--warm);
+  color: #1d0f0c;
+}
+.proposal-inline-details > .action-card {
+  margin: 0;
+  border: none;
+  border-top: 1px solid #ad855f66;
+  border-radius: 0 0 14px 14px;
+  background: none;
+}
 /* Config flow receipts: a link into Home Assistant's own UI. */
 .action-card .ha-link {
   display: inline-flex;
@@ -1488,6 +1562,28 @@ dialog .actions {
   }
   .action-card .actions button {
     flex: 1 1 auto;
+  }
+  /* One summary line on a phone: the marker already says a person is
+     needed, so the status word is left to screen readers. */
+  .proposal-inline-summary {
+    gap: 6px;
+    padding: 8px 10px;
+  }
+  .proposal-inline-summary .risk-badge,
+  .proposal-inline-needs {
+    padding: 2px 8px;
+    font-size: 0.72rem;
+  }
+  .proposal-inline-status-quiet {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
   #composer {
     padding: 6px 6px 6px 14px;

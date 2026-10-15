@@ -1,5 +1,6 @@
 import {
   node,
+  buildInlineProposal,
   renderMessages,
   renderProposals,
   renderCanvas,
@@ -108,6 +109,13 @@ function modelRefusal(error) {
 }
 // Hearth Assist is on (bootstrap); its status loads when About opens.
 let assistEnabled = false;
+// Proposal cards shown inline in the transcript, after the tool call that
+// filed them (render.js); the approvals section shows the rest.
+let inlineShown = new Set(),
+  approvalsInlineKey = "",
+  inlineCards = new Map();
+// The person's open/closed choice per inline card, per chat, for this page.
+const inlineChoices = new Map();
 let csrf = "",
   messageSignature = "",
   selected = null,
@@ -693,6 +701,56 @@ function settledInputFeedback(input) {
     return "Stopped before an answer was completed. Check this chat for details.";
   return null;
 }
+function inlineChoicesFor(session) {
+  if (!inlineChoices.has(session)) inlineChoices.set(session, new Map());
+  return inlineChoices.get(session);
+}
+function resetInlineProposals() {
+  inlineShown = new Set();
+  approvalsInlineKey = "";
+  inlineCards = new Map();
+}
+// The transcript, with inline proposal cards. An unchanged card is reused
+// as it is, so an open pending card keeps typed confirmation text and,
+// below, focus when unrelated live updates rebuild the transcript.
+function paintMessages(value, canApprove) {
+  const proposals = value.proposals ?? {};
+  const choices = inlineChoicesFor(selected);
+  const used = new Map();
+  const card = (proposal) => {
+    const reverse = proposal.undo?.reverse
+      ? (proposals[proposal.undo.reverse] ?? null)
+      : null;
+    const key = JSON.stringify([proposal, reverse, canApprove]);
+    const cached = inlineCards.get(proposal.id);
+    const element =
+      cached?.key === key
+        ? cached.element
+        : buildInlineProposal(proposal, proposals, decide, canApprove, choices);
+    used.set(proposal.id, { key, element });
+    return element;
+  };
+  const active = document.activeElement;
+  const keep = active?.closest?.(".proposal-inline") ? active : null;
+  const range =
+    keep && typeof keep.selectionStart === "number"
+      ? [keep.selectionStart, keep.selectionEnd]
+      : null;
+  feedbackRows = new Map();
+  const shown = renderMessages(
+    $("messages"),
+    value,
+    appResultCard,
+    feedbackFor,
+    { proposals, card },
+  );
+  inlineCards = used;
+  if (keep?.isConnected && document.activeElement !== keep) {
+    keep.focus({ preventScroll: true });
+    if (range) keep.setSelectionRange?.(range[0], range[1]);
+  }
+  return shown;
+}
 function snapshot(value) {
   const area = $("scroll-area"),
     atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 100;
@@ -742,16 +800,23 @@ function snapshot(value) {
     value.view.docs["pi.inbox"] ?? null,
   ]);
   const transcriptChanged = nextMessageSignature !== messageSignature;
+  const canApprove =
+    permissions?.effectiveMode !== "read-only" && !writesPausedAll(permissions);
+  const signature = JSON.stringify([
+    value.proposals,
+    permissions?.effectiveMode,
+    writesPausedAll(permissions),
+  ]);
+  const proposalsChanged = signature !== actionSignature;
   if (transcriptChanged) {
     messageSignature = nextMessageSignature;
-    feedbackRows = new Map();
     const toolResults = entries
       .flatMap((e) => e.model ?? [])
       .filter((m) => m.role === "toolResult");
     // A chat that built or changed an app gets the 👎 "may suggest a fix" hint.
     const results = toolResults.filter((m) => APP_TOOL.test(m.toolName)).length;
     sessionUsesApp = results > 0;
-    renderMessages($("messages"), value, appResultCard, feedbackFor);
+    inlineShown = paintMessages(value, canApprove);
     transcriptEmpty = entries.length === 0;
     renderPinned();
     // A new app_create/app_update result refreshes the Apps list and pins.
@@ -775,21 +840,30 @@ function snapshot(value) {
     canvasSignature = nextCanvasSignature;
     renderCanvas($("home-canvas"), canvas, draftQuestion);
   }
-  const signature = JSON.stringify([
-    value.proposals,
-    permissions?.effectiveMode,
-    writesPausedAll(permissions),
-  ]);
-  if (signature !== actionSignature) {
+  if (proposalsChanged) {
     actionSignature = signature;
+    // Decisions and status changes re-render the inline cards too (the
+    // unchanged ones are reused as they are).
+    if (!transcriptChanged) inlineShown = paintMessages(value, canApprove);
     renderProposals(
       $("approvals"),
-      value.proposals,
+      value.proposals ?? {},
       decide,
-      permissions?.effectiveMode !== "read-only" &&
-        !writesPausedAll(permissions),
+      canApprove,
+      inlineShown,
     );
+  } else if (transcriptChanged) {
+    const shownKey = [...inlineShown].join();
+    if (shownKey !== approvalsInlineKey)
+      renderProposals(
+        $("approvals"),
+        value.proposals ?? {},
+        decide,
+        canApprove,
+        inlineShown,
+      );
   }
+  approvalsInlineKey = [...inlineShown].join();
   const wasBusy = busy;
   busy = !!value.view.docs["pi.live"]?.run;
   if (busy && !wasBusy) feedback("Working…");
@@ -983,6 +1057,7 @@ async function select(session) {
   actionSignature = "";
   canvasSignature = "";
   messageSignature = "";
+  resetInlineProposals();
   worldSnapshot = null;
   renderCanvas($("home-canvas"), null, draftQuestion);
   $("title").textContent = session.title;
@@ -1457,6 +1532,7 @@ function showWelcome() {
   actionSignature = "";
   canvasSignature = "";
   messageSignature = "";
+  resetInlineProposals();
   busy = false;
   worldSnapshot = null;
   $("title").textContent = "A little warmth. A little more certainty.";

@@ -671,22 +671,138 @@ export function renderWorldProposal(message, openPreview) {
   card.append(actions);
   return card;
 }
+// Model tools that file a Home permissions proposal; their results carry
+// the controller-set details.proposalId (src/proposal-tools.ts, kept equal
+// by a test).
+export const PROPOSAL_TOOLS = new Set([
+  "ha_propose_service",
+  "ha_call_service",
+  "ha_config_propose",
+  "ha_registry_propose",
+  "supervisor_propose",
+  "ha_flow_propose",
+  "list_propose",
+]);
+// The proposal a transcript tool result filed, or null. Linked only by the
+// controller-set details of a known proposal tool's result, and only to a
+// proposal the server's Proposals document has; never by model or tool text.
+export function linkedProposalId(message, proposals) {
+  if (message?.role !== "toolResult" || !PROPOSAL_TOOLS.has(message.toolName))
+    return null;
+  const id = message.details?.proposalId;
+  return typeof id === "string" &&
+    Object.prototype.hasOwnProperty.call(proposals ?? {}, id)
+    ? id
+    : null;
+}
+const proposalExpired = (proposal, now) =>
+  proposal.status === "pending" && proposal.expires <= now;
+// Whether an inline card needs a person: open by default.
+function proposalNeeds(proposal, now) {
+  if (proposal.status === "pending" && !proposalExpired(proposal, now))
+    return "Approval needed";
+  if (proposal.status === "unknown") return "Needs resolution";
+  return "";
+}
+const PROPOSAL_STATUS = {
+  pending: "Pending",
+  dispatching: "Running",
+  accepted: "Accepted",
+  rejected: "Rejected",
+  failed: "Failed",
+  unknown: "Outcome unknown",
+  resolved: "Resolved",
+};
+export function proposalStatusText(proposal, now = Date.now()) {
+  if (proposalExpired(proposal, now)) return "Expired";
+  return PROPOSAL_STATUS[proposal.status] ?? String(proposal.status);
+}
+// Open unless the person chose otherwise for this proposal (`choices`, a
+// Map kept by the page for its session): pending and unknown cards open,
+// settled, running and expired ones collapsed.
+export function inlineProposalOpen(proposal, choices, now = Date.now()) {
+  const chosen = choices?.get(proposal.id);
+  return typeof chosen === "boolean" ? chosen : !!proposalNeeds(proposal, now);
+}
+// A proposal card in the transcript: a native <details> whose one-line
+// summary says what, its status, risk and whether a person is needed, and
+// whose body is the exact same card as in the approvals section.
+export function buildInlineProposal(
+  proposal,
+  proposals,
+  decide,
+  canApprove = true,
+  choices = null,
+) {
+  const now = Date.now();
+  const article = node("article", "", "message proposal-inline");
+  article.setAttribute("data-proposal-id", proposal.id);
+  const details = node("details", "", "proposal-inline-details");
+  if (inlineProposalOpen(proposal, choices, now))
+    details.setAttribute("open", "");
+  const summary = node("summary", "", "proposal-inline-summary");
+  const needs = proposalNeeds(proposal, now);
+  const parts = [
+    node("span", proposalTitle(proposal.action), "proposal-inline-title"),
+    // On a phone the marker below stands in for the status word.
+    node(
+      "span",
+      proposalStatusText(proposal, now),
+      `proposal-inline-status${needs ? " proposal-inline-status-quiet" : ""}`,
+    ),
+  ];
+  const level = proposal.risk?.level;
+  if (level)
+    parts.push(
+      node("span", RISK_LABEL[level] ?? level, `risk-badge risk-${level}`),
+    );
+  if (needs) parts.push(node("span", needs, "proposal-inline-needs"));
+  // Screen readers hear "title, status, risk, approval needed".
+  parts.forEach((part, i) => {
+    if (i) summary.append(node("span", ", ", "sr-only"));
+    summary.append(part);
+  });
+  // The person's own open/closed choice (a click or Enter/Space on the
+  // summary) is remembered per proposal; re-renders apply it.
+  summary.addEventListener("click", () =>
+    choices?.set(proposal.id, !details.hasAttribute("open")),
+  );
+  details.append(
+    summary,
+    buildProposalCard(proposal, proposals, decide, canApprove),
+  );
+  article.append(details);
+  return article;
+}
+// `inline` ({ proposals, card }): when given, each proposal a tool result
+// filed (linkedProposalId) is shown once, by card(proposal), right after the
+// activity group of that tool call. Returns the ids shown inline; the
+// approvals section shows the rest.
 export function renderMessages(
   container,
   snapshot,
   special = () => null,
   decorate = () => null,
+  inline = null,
 ) {
   const fragment = document.createDocumentFragment();
+  const proposals = inline?.card ? (inline.proposals ?? {}) : {};
+  const shown = new Set();
   // Open tool-call group for the turn in progress: filled by assistant
   // toolCall blocks, then matched with their toolResult by call id.
   let pending = null;
   const flushPending = () => {
-    if (pending && pending.calls.length)
+    if (pending && pending.calls.length) {
       fragment.append(buildActivity(pending.calls));
+      for (const id of pending.proposals) {
+        const card = inline.card(proposals[id]);
+        if (card) fragment.append(card);
+        else shown.delete(id);
+      }
+    }
     pending = null;
   };
-  const openPending = () => (pending ??= { calls: [] });
+  const openPending = () => (pending ??= { calls: [], proposals: [] });
   for (const entry of snapshot.view.entries) {
     for (const message of entry.model ?? []) {
       if (message.role === "system") continue;
@@ -708,6 +824,11 @@ export function renderMessages(
             arguments: undefined,
             result: message,
           });
+        const id = linkedProposalId(message, proposals);
+        if (id && !shown.has(id)) {
+          shown.add(id);
+          pending.proposals.push(id);
+        }
         continue;
       }
       if (message.role === "assistant") {
@@ -815,6 +936,7 @@ export function renderMessages(
     fragment.append(article);
   }
   container.replaceChildren(fragment);
+  return shown;
 }
 export function renderCanvas(container, canvas, ask) {
   const fragment = document.createDocumentFragment();
@@ -884,165 +1006,179 @@ export function renderCanvas(container, canvas, ask) {
   }
   container.replaceChildren(fragment);
 }
+// The approvals section: every proposal not already shown inline in the
+// transcript (`inline`: the ids renderMessages placed), newest first.
 export function renderProposals(
   container,
   proposals,
   decide,
   canApprove = true,
+  inline = new Set(),
 ) {
   const fragment = document.createDocumentFragment();
-  for (const proposal of Object.values(proposals).sort(
-    (a, b) => b.created - a.created,
-  )) {
-    const card = node("article", "", "action-card");
-    renderActionSummary(card, proposal);
-    renderRisk(card, proposal);
-    renderFlowResult(card, proposal.flowResult);
-    if (proposal.origin?.kind === "list")
-      card.append(
-        node(
-          "p",
-          `Requested by you from Today → Lists (${proposal.origin.entityId})`,
-        ),
-      );
-    if (proposal.origin?.kind === "undo")
-      card.append(node("p", "Undo of an earlier change, requested by you"));
-    if (proposal.origin?.kind === "app")
-      card.append(
-        node(
-          "p",
-          `Requested by you from app ${proposal.origin.appId} (control ${proposal.origin.elementId}, v${proposal.origin.version})`,
-        ),
-      );
-    if (proposal.authorization)
-      card.append(
-        node(
-          "p",
-          `${proposal.authorization.source === "trusted" ? `Trusted / ran without asking (${proposal.risk?.level ?? "unrated"} risk)` : proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
-        ),
-      );
-    // The injection guard flagged tool output in this turn: it asked.
-    if (proposal.authorization?.guard === "flagged")
-      card.append(node("p", "Ask: outside content looked like instructions"));
-    // Phone approvals: whether this went to the owner's phones and whether
-    // the decision was a tap on one.
-    if (proposal.decidedVia === "push")
-      card.append(
-        node(
-          "p",
-          proposal.status === "rejected"
-            ? "Rejected from your phone"
-            : "Approved from your phone",
-          "muted",
-        ),
-      );
-    else if (proposal.notified && proposal.status === "pending")
-      card.append(node("p", "Sent to your phone", "muted"));
-    const fingerprint = node("details");
-    fingerprint.append(
-      node("summary", "Exact immutable fingerprint"),
-      node("code", proposal.hash),
-    );
-    card.append(fingerprint);
+  for (const proposal of Object.values(proposals)
+    .filter((p) => !inline.has(p.id))
+    .sort((a, b) => b.created - a.created))
+    fragment.append(buildProposalCard(proposal, proposals, decide, canApprove));
+  container.replaceChildren(fragment);
+}
+// One exact action card, the same wherever it is shown (approvals section,
+// inline in the transcript, app/world approval dialog). Content and actions
+// come only from the server's Proposals document; `proposals` is the whole
+// document (Undo looks up its reverse proposal there).
+export function buildProposalCard(
+  proposal,
+  proposals,
+  decide,
+  canApprove = true,
+) {
+  const card = node("article", "", "action-card");
+  renderActionSummary(card, proposal);
+  renderRisk(card, proposal);
+  renderFlowResult(card, proposal.flowResult);
+  if (proposal.origin?.kind === "list")
     card.append(
       node(
         "p",
-        "HA acceptance is a service receipt, not physical-device verification.",
+        `Requested by you from Today → Lists (${proposal.origin.entityId})`,
+      ),
+    );
+  if (proposal.origin?.kind === "undo")
+    card.append(node("p", "Undo of an earlier change, requested by you"));
+  if (proposal.origin?.kind === "app")
+    card.append(
+      node(
+        "p",
+        `Requested by you from app ${proposal.origin.appId} (control ${proposal.origin.elementId}, v${proposal.origin.version})`,
+      ),
+    );
+  if (proposal.authorization)
+    card.append(
+      node(
+        "p",
+        `${proposal.authorization.source === "trusted" ? `Trusted / ran without asking (${proposal.risk?.level ?? "unrated"} risk)` : proposal.authorization.source === "automatic" ? "Full access / automatic" : "Human review"} · Home permission revision ${proposal.authorization.revision}`,
+      ),
+    );
+  // The injection guard flagged tool output in this turn: it asked.
+  if (proposal.authorization?.guard === "flagged")
+    card.append(node("p", "Ask: outside content looked like instructions"));
+  // Phone approvals: whether this went to the owner's phones and whether
+  // the decision was a tap on one.
+  if (proposal.decidedVia === "push")
+    card.append(
+      node(
+        "p",
+        proposal.status === "rejected"
+          ? "Rejected from your phone"
+          : "Approved from your phone",
         "muted",
       ),
     );
-    if (proposal.status === "pending") {
-      card.append(
-        node(
-          "p",
-          `Review expires ${new Date(proposal.expires).toLocaleTimeString()}`,
-        ),
-      );
-      // Critical: a second explicit step — type the exact word shown.
-      const word =
-        proposal.risk?.level === "critical" ? proposal.confirmation : "";
-      let confirmInput = null;
-      if (word) {
-        const label = node("label", "", "confirm-label");
-        const prompt = node("span", "Critical action. To approve, type ");
-        prompt.append(node("code", word));
-        label.append(prompt);
-        confirmInput = node("input", "", "confirm-input");
-        confirmInput.type = "text";
-        confirmInput.autocomplete = "off";
-        confirmInput.spellcheck = false;
-        confirmInput.setAttribute("aria-label", `Type ${word} to confirm`);
-        label.append(confirmInput);
-        card.append(label);
-      }
-      const buttons = node("div", "", "actions");
-      for (const [decision, label] of [
-        ["approve", word ? "Approve critical action" : "Approve exact action"],
-        ["reject", "Reject"],
-      ]) {
-        const button = node(
-          "button",
-          label,
-          decision === "approve" ? "approve" : "",
-        );
-        button.type = "button";
-        const blocked =
-          proposal.expires <= Date.now() ||
-          (decision === "approve" && !canApprove);
-        button.disabled = blocked || (decision === "approve" && !!word);
-        if (decision === "approve" && confirmInput)
-          confirmInput.addEventListener("input", () => {
-            button.disabled = blocked || confirmInput.value !== word;
-          });
-        button.addEventListener("click", () =>
-          decide(
-            proposal,
-            decision,
-            decision === "approve" && confirmInput ? confirmInput.value : "",
-          ),
-        );
-        buttons.append(button);
-      }
-      card.append(buttons);
+  else if (proposal.notified && proposal.status === "pending")
+    card.append(node("p", "Sent to your phone", "muted"));
+  const fingerprint = node("details");
+  fingerprint.append(
+    node("summary", "Exact immutable fingerprint"),
+    node("code", proposal.hash),
+  );
+  card.append(fingerprint);
+  card.append(
+    node(
+      "p",
+      "HA acceptance is a service receipt, not physical-device verification.",
+      "muted",
+    ),
+  );
+  if (proposal.status === "pending") {
+    card.append(
+      node(
+        "p",
+        `Review expires ${new Date(proposal.expires).toLocaleTimeString()}`,
+      ),
+    );
+    // Critical: a second explicit step — type the exact word shown.
+    const word =
+      proposal.risk?.level === "critical" ? proposal.confirmation : "";
+    let confirmInput = null;
+    if (word) {
+      const label = node("label", "", "confirm-label");
+      const prompt = node("span", "Critical action. To approve, type ");
+      prompt.append(node("code", word));
+      label.append(prompt);
+      confirmInput = node("input", "", "confirm-input");
+      confirmInput.type = "text";
+      confirmInput.autocomplete = "off";
+      confirmInput.spellcheck = false;
+      confirmInput.setAttribute("aria-label", `Type ${word} to confirm`);
+      label.append(confirmInput);
+      card.append(label);
     }
-    // Unknown outcomes: Hearth's read-only checks of Home Assistant state.
-    for (const check of proposal.reconcile?.checks ?? [])
-      card.append(
-        node(
-          "p",
-          `${new Date(check.at).toLocaleTimeString()} · ${check.note}`,
-          "muted",
-        ),
+    const buttons = node("div", "", "actions");
+    for (const [decision, label] of [
+      ["approve", word ? "Approve critical action" : "Approve exact action"],
+      ["reject", "Reject"],
+    ]) {
+      const button = node(
+        "button",
+        label,
+        decision === "approve" ? "approve" : "",
       );
-    if (proposal.status === "unknown") {
-      card.append(
-        node(
-          "p",
-          "Outcome unknown. It will not be retried. Hearth reads the device state back a few times; check the device yourself too.",
-          "error",
-        ),
-      );
-      const button = node("button", "Record human reconciliation");
       button.type = "button";
-      button.addEventListener("click", () => decide(proposal, "resolve"));
-      card.append(button);
+      const blocked =
+        proposal.expires <= Date.now() ||
+        (decision === "approve" && !canApprove);
+      button.disabled = blocked || (decision === "approve" && !!word);
+      if (decision === "approve" && confirmInput)
+        confirmInput.addEventListener("input", () => {
+          button.disabled = blocked || confirmInput.value !== word;
+        });
+      button.addEventListener("click", () =>
+        decide(
+          proposal,
+          decision,
+          decision === "approve" && confirmInput ? confirmInput.value : "",
+        ),
+      );
+      buttons.append(button);
     }
-    if (undoOffered(proposal, proposals)) {
-      const until = new Date(proposal.undo.until).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-      const row = node("div", "", "actions undo-row");
-      const button = node("button", "Undo", "undo");
-      button.type = "button";
-      button.addEventListener("click", () => decide(proposal, "undo"));
-      row.append(button, node("span", `Undo until ${until}`, "muted"));
-      card.append(row);
-    }
-    if (proposal.resolution) card.append(node("p", proposal.resolution));
-    fragment.append(card);
+    card.append(buttons);
   }
-  container.replaceChildren(fragment);
+  // Unknown outcomes: Hearth's read-only checks of Home Assistant state.
+  for (const check of proposal.reconcile?.checks ?? [])
+    card.append(
+      node(
+        "p",
+        `${new Date(check.at).toLocaleTimeString()} · ${check.note}`,
+        "muted",
+      ),
+    );
+  if (proposal.status === "unknown") {
+    card.append(
+      node(
+        "p",
+        "Outcome unknown. It will not be retried. Hearth reads the device state back a few times; check the device yourself too.",
+        "error",
+      ),
+    );
+    const button = node("button", "Record human reconciliation");
+    button.type = "button";
+    button.addEventListener("click", () => decide(proposal, "resolve"));
+    card.append(button);
+  }
+  if (undoOffered(proposal, proposals)) {
+    const until = new Date(proposal.undo.until).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const row = node("div", "", "actions undo-row");
+    const button = node("button", "Undo", "undo");
+    button.type = "button";
+    button.addEventListener("click", () => decide(proposal, "undo"));
+    row.append(button, node("span", `Undo until ${until}`, "muted"));
+    card.append(row);
+  }
+  if (proposal.resolution) card.append(node("p", proposal.resolution));
+  return card;
 }
 
 // Undo is offered on an accepted receipt within its window, unless a
@@ -1161,12 +1297,24 @@ function renderFlowResult(card, result) {
     card.append(link);
   }
 }
+// The one-line title of an action, by kind (the card heading and the
+// collapsed inline summary). Untrusted text: textContent only.
+export function proposalTitle(action) {
+  if (!action.kind) return String(action.service);
+  if (action.kind === "todo") return todoActionTitle(action);
+  if (action.kind === "service") return `${action.domain}.${action.service}`;
+  if (action.kind === "config")
+    return `${action.op === "delete" ? "Delete" : "Write"} ${action.resource} ${action.id}`;
+  if (action.kind === "ws") return String(action.type);
+  if (action.kind === "flow") return flowActionTitle(action);
+  return `Supervisor ${action.method} ${action.path}`;
+}
 function renderActionSummary(card, proposal) {
   const action = proposal.action;
   const status = ` · ${proposal.status}`;
   if (!action.kind) {
     card.append(
-      node("h3", `${action.service}${status}`),
+      node("h3", `${proposalTitle(action)}${status}`),
       node("p", action.entityId),
       node("pre", JSON.stringify(action.data, null, 2)),
     );
@@ -1174,13 +1322,13 @@ function renderActionSummary(card, proposal) {
   }
   if (action.kind === "todo") {
     card.append(
-      node("h3", `${todoActionTitle(action)}${status}`),
+      node("h3", `${proposalTitle(action)}${status}`),
       node("p", action.entityId),
     );
     return;
   }
   if (action.kind === "service") {
-    card.append(node("h3", `${action.domain}.${action.service}${status}`));
+    card.append(node("h3", `${proposalTitle(action)}${status}`));
     const target = Object.entries(action.target ?? {})
       .map(([key, ids]) => `${key.replace("_id", "")}: ${ids.join(", ")}`)
       .join(" · ");
@@ -1190,12 +1338,7 @@ function renderActionSummary(card, proposal) {
     return;
   }
   if (action.kind === "config") {
-    card.append(
-      node(
-        "h3",
-        `${action.op === "delete" ? "Delete" : "Write"} ${action.resource} ${action.id}${status}`,
-      ),
-    );
+    card.append(node("h3", `${proposalTitle(action)}${status}`));
     if (action.body) {
       card.append(
         node(
@@ -1210,13 +1353,13 @@ function renderActionSummary(card, proposal) {
   }
   if (action.kind === "ws") {
     card.append(
-      node("h3", `${action.type}${status}`),
+      node("h3", `${proposalTitle(action)}${status}`),
       node("pre", JSON.stringify(action.payload, null, 2)),
     );
     return;
   }
   if (action.kind === "flow") {
-    card.append(node("h3", `${flowActionTitle(action)}${status}`));
+    card.append(node("h3", `${proposalTitle(action)}${status}`));
     if (action.source === "discovered")
       card.append(node("p", "Found by Home Assistant", "muted"));
     if (action.op === "step")
@@ -1227,9 +1370,7 @@ function renderActionSummary(card, proposal) {
       );
     return;
   }
-  card.append(
-    node("h3", `Supervisor ${action.method} ${action.path}${status}`),
-  );
+  card.append(node("h3", `${proposalTitle(action)}${status}`));
   if (action.body)
     card.append(node("pre", JSON.stringify(action.body, null, 2)));
 }

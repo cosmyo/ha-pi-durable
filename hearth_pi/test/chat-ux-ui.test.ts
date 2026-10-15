@@ -714,3 +714,176 @@ test("a full chat's refused message moves to a new chat with its text and images
     app.restore();
   }
 });
+
+// An exact action card filed by a model tool call sits in the transcript
+// right after that call, not at the end of the chat; approving it there
+// sends the same exact decision, and its new status re-renders it in place.
+test("inline approval card: shown after its tool call, approved in place, and an unrelated live update keeps typed confirmation text", async () => {
+  const NOW = Date.now();
+  const flow = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    hash: `hash-${id}`,
+    status: "pending",
+    created: NOW,
+    expires: NOW + 600000,
+    action: { kind: "flow", op: "init", handler: "example_tv" },
+    risk: { level: "high", rule: "integration_setup", reasons: [] },
+    ...extra,
+  });
+  const entries = [
+    { id: 1, model: [{ role: "user", content: "Set up the TV" }] },
+    {
+      id: 2,
+      model: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: "c1",
+              name: "ha_flow_propose",
+              arguments: {},
+            },
+            {
+              type: "toolCall",
+              id: "c2",
+              name: "ha_flow_propose",
+              arguments: {},
+            },
+          ],
+        },
+      ],
+    },
+    {
+      id: 3,
+      model: [
+        {
+          role: "toolResult",
+          toolCallId: "c1",
+          toolName: "ha_flow_propose",
+          isError: false,
+          content: [{ type: "text", text: "{}" }],
+          details: { proposalId: "41" },
+        },
+      ],
+    },
+    {
+      id: 4,
+      model: [
+        {
+          role: "toolResult",
+          toolCallId: "c2",
+          toolName: "ha_flow_propose",
+          isError: false,
+          content: [{ type: "text", text: "{}" }],
+          details: { proposalId: "44" },
+        },
+      ],
+    },
+    {
+      id: 5,
+      model: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Done." }],
+        },
+      ],
+    },
+  ];
+  const critical = flow("44", {
+    risk: { level: "critical", rule: "remote_access", reasons: [] },
+    confirmation: "example_tv",
+  });
+  let proposals: Record<string, unknown> = { "41": flow("41"), "44": critical };
+  const view = (live: Record<string, unknown> = {}) => ({
+    entries,
+    docs: { "pi.live": live, "pi.usage": { models: {} } },
+  });
+  const app = await loadApp({
+    models: MODELS.slice(0, 1),
+    snapshot: () => baseSnapshot({ view: view(), proposals }),
+    post: (path) =>
+      path.endsWith("/actions")
+        ? Response.json({ ok: true })
+        : new Error("unexpected"),
+  });
+  try {
+    await tick(50);
+    const messages = app.el("messages");
+    const order = () =>
+      [...messages.children].map((el) =>
+        el.classList.contains("proposal-inline")
+          ? `card:${el.getAttribute("data-proposal-id")}`
+          : el.classList.contains("activity")
+            ? "activity"
+            : el.classList.contains("user")
+              ? "user"
+              : "assistant",
+      );
+    assert.deepEqual(order(), [
+      "user",
+      "activity",
+      "card:41",
+      "card:44",
+      "assistant",
+    ]);
+    assert.equal(app.el("approvals").children.length, 0);
+    // Typed confirmation text in the critical card survives an unrelated
+    // live update that rebuilds the transcript.
+    const input = messages.querySelector(
+      "[data-proposal-id='44'] .confirm-input",
+    ) as HTMLInputElement;
+    input.value = "example_tv";
+    input.dispatchEvent(new app.window.Event("input"));
+    app.emit(
+      baseSnapshot({
+        view: view({ run: { taskId: "t", inputs: ["s"] } }),
+        proposals,
+      }),
+    );
+    const again = messages.querySelector(
+      "[data-proposal-id='44'] .confirm-input",
+    ) as HTMLInputElement;
+    assert.equal(again, input);
+    assert.equal(again.value, "example_tv");
+    // Approve the pending card in place: the exact decision is posted.
+    const approve = messages.querySelector(
+      "[data-proposal-id='41'] .actions button.approve",
+    )!;
+    proposals = { ...proposals, "41": flow("41", { status: "accepted" }) };
+    approve.dispatchEvent(new app.window.Event("click"));
+    await tick(50);
+    const decision = app.posts.find((p) => p.path.endsWith("/actions"));
+    assert.deepEqual(decision?.body, {
+      id: "41",
+      hash: "hash-41",
+      decision: "approve",
+    });
+    // The receipt re-renders in place, collapsed by default, still inline.
+    const card = messages.querySelector("[data-proposal-id='41']")!;
+    assert.match(card.querySelector("summary")!.textContent!, /Accepted/);
+    assert.equal(card.querySelector("details")!.hasAttribute("open"), false);
+    assert.equal(card.querySelector(".actions button.approve"), null);
+    assert.deepEqual(order(), [
+      "user",
+      "activity",
+      "card:41",
+      "card:44",
+      "assistant",
+    ]);
+    assert.equal(app.el("approvals").children.length, 0);
+    // The other card was not rebuilt: its typed text is still there.
+    assert.equal(
+      (
+        messages.querySelector(
+          "[data-proposal-id='44'] .confirm-input",
+        ) as HTMLInputElement
+      ).value,
+      "example_tv",
+    );
+  } finally {
+    app.restore();
+  }
+});
