@@ -13,6 +13,7 @@ import { memoryFingerprint } from "./memory.js";
 import type { Runtime } from "./runtime.js";
 import { insist, object, text } from "./safety.js";
 import { writesPaused, type WritePause } from "./reconcile.js";
+import { proposalToolResult } from "./proposal-tools.js";
 
 export const LIST_LIMITS = {
   lists: 8,
@@ -252,7 +253,9 @@ export function listTools(ha: HAClient) {
       { additionalProperties: false },
     ),
     execute: async (a, api, context) =>
-      result(await ha.actions.request({ kind: "todo", ...a }, api, context)),
+      proposalToolResult(
+        await ha.actions.request({ kind: "todo", ...a }, api, context),
+      ),
   });
   return [read, propose];
 }

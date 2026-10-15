@@ -44,6 +44,7 @@ import {
   type KnownFlow,
 } from "./flow-setup.js";
 import type { HAClient } from "./ha.js";
+import { proposalToolResult } from "./proposal-tools.js";
 
 // Admin-only WebSocket reads for device setup (flow-setup.ts): Home
 // Assistant's discovered flows in progress and its config entry list.
@@ -1065,7 +1066,7 @@ export function adminTools(ha: HAClient) {
       replay: "unsafe",
       parameters,
       execute: async (a, api, context) =>
-        result(
+        proposalToolResult(
           await ha.actions.request(
             toAction(a as Record<string, unknown>),
             api,

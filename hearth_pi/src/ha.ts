@@ -51,6 +51,7 @@ import {
 import { worldSetupTools } from "./world-setup.js";
 import { voiceSection } from "./assist.js";
 import { withInjectionGuard } from "./injection-guard.js";
+import { proposalToolResult } from "./proposal-tools.js";
 import {
   ROLE_EXTENSION,
   toolAllowed,
@@ -1045,7 +1046,7 @@ export function haExtension(
       { additionalProperties: false },
     ),
     execute: async (a, api, context) =>
-      result(await ha.actions.request(a, api, context)),
+      proposalToolResult(await ha.actions.request(a, api, context)),
   });
   const admin = ha.admin ? adminTools(ha) : [];
   const now = options.now ?? Date.now;
